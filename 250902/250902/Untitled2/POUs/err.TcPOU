@@ -1,0 +1,104 @@
+<?xml version="1.0" encoding="utf-8"?>
+<TcPlcObject Version="1.1.0.1" ProductVersion="3.1.4024.15">
+  <POU Name="err" Id="{c264bb0b-28ae-4266-9c6d-88cfb4405e12}" SpecialFunc="None">
+    <Declaration><![CDATA[FUNCTION_BLOCK err
+VAR_INPUT
+END_VAR
+VAR_OUTPUT
+END_VAR
+VAR
+	i:INT;
+	step:INT:=0;
+	pulse_timer:TON;
+	retry_timer:TON;
+	has_err:BOOL;
+END_VAR
+]]></Declaration>
+    <Implementation>
+      <ST><![CDATA[(*
+FUNCTION_BLOCK: err
+功能说明:
+  故障安全态：停止外部给定(SetPointGenDisable)，并周期性发出 MC_Reset 清错请求。
+  错误清除后跳转到 _clear_err 做一次恢复初始化，再进入 _handle。
+
+实现约束:
+  MC_Reset 功能块实例为 G.axis_Reset[i]，其调用在 MAIN 的 RESETED() 中统一完成；
+  本 FB 仅控制 G.axis_Reset[i].Execute 的上升沿/脉冲，避免每周期重复触发。
+*)
+
+has_err := FALSE;
+FOR i:=1 TO 7 DO
+	IF G.axis[i].Status.Error OR G.power_output[i].Error THEN
+		has_err := TRUE;
+		EXIT;
+	END_IF
+END_FOR
+
+CASE step OF
+0:
+	// 进入故障态：先停外部给定，并清空 Reset.Execute，准备后续脉冲清错
+	FOR i:=1 TO 7 DO
+		G.SetPointGenEnable[i].Execute := FALSE;
+		G.SetPointGenDisable[i].Execute := TRUE;
+		G.axis_Reset[i].Execute := FALSE;
+	END_FOR
+	pulse_timer(IN:=FALSE);
+	retry_timer(IN:=FALSE);
+	step := 1;
+
+1:
+	// 禁用请求只需上升沿，避免每周期重复触发
+	FOR i:=1 TO 7 DO
+		G.SetPointGenDisable[i].Execute := FALSE;
+	END_FOR
+
+	// 错误已清除：进入清错过渡态统一恢复
+	IF NOT has_err THEN
+		step := 0;
+		G.gen_state := _clear_err;
+		RETURN;
+	END_IF
+
+	// 对处于 Error 的轴发出一次清错脉冲
+	FOR i:=1 TO 7 DO
+		IF G.axis[i].Status.Error OR G.power_output[i].Error THEN
+			G.axis_Reset[i].Execute := TRUE;
+		END_IF
+	END_FOR
+	pulse_timer(IN:=TRUE, PT:=T#200MS);
+	step := 2;
+
+2:
+	pulse_timer(IN:=TRUE);
+	IF pulse_timer.Q THEN
+		FOR i:=1 TO 7 DO
+			G.axis_Reset[i].Execute := FALSE;
+		END_FOR
+		pulse_timer(IN:=FALSE);
+		retry_timer(IN:=TRUE, PT:=T#2S);
+		step := 3;
+	END_IF
+
+3:
+	retry_timer(IN:=TRUE);
+
+	IF NOT has_err THEN
+		retry_timer(IN:=FALSE);
+		step := 0;
+		G.gen_state := _clear_err;
+		RETURN;
+	END_IF
+
+	IF retry_timer.Q THEN
+		retry_timer(IN:=FALSE);
+		step := 1;
+	END_IF
+END_CASE]]></ST>
+    </Implementation>
+    <LineIds Name="err">
+      <LineId Id="64" Count="11" />
+      <LineId Id="79" Count="2" />
+      <LineId Id="9" Count="0" />
+    </LineIds>
+  </POU>
+</TcPlcObject>

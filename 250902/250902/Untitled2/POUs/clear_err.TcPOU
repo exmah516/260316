@@ -1,0 +1,101 @@
+<?xml version="1.0" encoding="utf-8"?>
+<TcPlcObject Version="1.1.0.1" ProductVersion="3.1.4024.15">
+  <POU Name="clear_err" Id="{b44b79d2-0ec3-452a-abc9-d2df60552efa}" SpecialFunc="None">
+    <Declaration><![CDATA[FUNCTION_BLOCK clear_err
+VAR_INPUT
+END_VAR
+VAR_OUTPUT
+END_VAR
+VAR
+	i:INT;
+	step:INT:=0;
+	settle_timer:TON;
+	all_powered:BOOL;
+	has_err:BOOL;
+
+	Kp			:	LREAL:=0.14;
+	Ki			:	LREAL:=0.016;
+	Kd			:	LREAL:=0.1;
+
+	err, err_f, value_f,err_sum, v_limit,  refer :	ARRAY[1..7] OF LREAL;
+	v1			:	LREAL:=7.5;
+	v2			:	LREAL:=1.5;
+	act_hh		:	ARRAY[1..7] OF ARRAY [1..30] OF LREAL;
+END_VAR
+
+]]></Declaration>
+    <Implementation>
+      <ST><![CDATA[(*
+FUNCTION_BLOCK: clear_err
+功能说明:
+  清错完成后的过渡态：
+  - 若仍有错误则回到 _err
+  - 若电源未完成则回到 _init 重新上电/自检
+  - 若条件满足，则请求 handle 重新初始化参考缓冲区，并进入 _handle
+
+说明:
+  这里不做自动 Jog/回零动作，避免未知机械位置下误动作；
+  需要机械干预/单轴点动时，可在后续专门实现“手动清障”流程。
+*)
+
+has_err := FALSE;
+FOR i:=1 TO 7 DO
+	IF G.axis[i].Status.Error OR G.power_output[i].Error THEN
+		has_err := TRUE;
+		EXIT;
+	END_IF
+END_FOR
+
+all_powered := TRUE;
+FOR i:=1 TO 7 DO
+	IF NOT G.power_output[i].Done THEN
+		all_powered := FALSE;
+		EXIT;
+	END_IF
+END_FOR
+
+CASE step OF
+0:
+	// 进入过渡态：撤销所有边沿触发命令，给 handle 准备一个稳定的起点
+	FOR i:=1 TO 7 DO
+		G.SetPointGenEnable[i].Execute := FALSE;
+		G.SetPointGenDisable[i].Execute := FALSE;
+		G.axis_Reset[i].Execute := FALSE;
+	END_FOR
+	settle_timer(IN:=TRUE, PT:=T#200MS);
+	step := 1;
+
+1:
+	settle_timer(IN:=TRUE);
+
+	IF has_err THEN
+		settle_timer(IN:=FALSE);
+		step := 0;
+		G.gen_state := _err;
+		RETURN;
+	END_IF
+
+	IF NOT all_powered THEN
+		settle_timer(IN:=FALSE);
+		step := 0;
+		G.gen_state := _init;
+		RETURN;
+	END_IF
+
+	IF settle_timer.Q THEN
+		settle_timer(IN:=FALSE);
+		step := 0;
+		G.handle_reinit_req := TRUE;
+		G.gen_state := _handle;
+	END_IF
+END_CASE]]></ST>
+    </Implementation>
+    <LineIds Name="clear_err">
+      <LineId Id="1643" Count="0" />
+      <LineId Id="1687" Count="16" />
+      <LineId Id="1464" Count="0" />
+      <LineId Id="9" Count="0" />
+      <LineId Id="1705" Count="1" />
+    </LineIds>
+  </POU>
+</TcPlcObject>

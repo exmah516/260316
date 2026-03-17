@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="utf-8"?>
+<TcPlcObject Version="1.1.0.1" ProductVersion="3.1.4024.15">
+  <POU Name="move_edge" Id="{b1f5d3d2-0a8f-4cf4-9e1e-7c9fd3d4b2c1}" SpecialFunc="None">
+    <Declaration><![CDATA[FUNCTION_BLOCK move_edge
+VAR_INPUT
+END_VAR
+VAR_OUTPUT
+END_VAR
+VAR
+    i: INT;
+    epsilon   : LREAL := 0.01; // 参考变化阈值（轴单位）
+    prevRef   : ARRAY[1..7] OF LREAL;
+    rt_cmd    : ARRAY[1..7] OF R_TRIG;
+
+    moveAbs   : ARRAY[1..7] OF MC_MoveAbsolute;
+    moveOut   : ARRAY[1..7] OF ST_McOutputs;
+    vel       : LREAL := 50.0;  // mm/s 或 deg/s（按轴单位）
+    acc       : LREAL := 200.0; // mm/s^2 或 deg/s^2
+    dec       : LREAL := 200.0;
+END_VAR
+]]></Declaration>
+    <Implementation>
+      <ST><![CDATA[
+// 对 7 轴监控参考变化，仅在参考显著变化的上升沿触发绝对定位
+FOR i:=1 TO 7 DO
+    rt_cmd[i](CLK:= (ABS(G.refer[i] - prevRef[i]) > epsilon)
+                    AND (NOT moveOut[i].Busy)
+                    AND (NOT moveOut[i].Active));
+
+    IF rt_cmd[i].Q THEN
+        prevRef[i] := G.refer[i];
+    END_IF
+
+    moveAbs[i](
+        Axis:= G.axis[i],
+        Position:= G.refer[i] + G.init_pos[i], // 绝对目标 = 相对参考 + 初始绝对位置
+        Velocity:= vel,
+        Acceleration:= acc,
+        Deceleration:= dec,
+        Direction:= MC_Direction.ShortestPath,
+        Execute:= rt_cmd[i].Q,
+        Done=> moveOut[i].Done,
+        Busy=> moveOut[i].Busy,
+        Active=> moveOut[i].Active,
+        CommandAborted=> moveOut[i].CommandAborted,
+        Error=> moveOut[i].Error,
+        ErrorID=> moveOut[i].ErrorID);
+END_FOR
+]]></ST>
+    </Implementation>
+    <LineIds Name="move_edge">
+      <LineId Id="1" Count="0" />
+    </LineIds>
+  </POU>
+</TcPlcObject>

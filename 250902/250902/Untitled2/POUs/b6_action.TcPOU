@@ -1,0 +1,126 @@
+<?xml version="1.0" encoding="utf-8"?>
+<TcPlcObject Version="1.1.0.1" ProductVersion="3.1.4024.15">
+  <POU Name="b6_action" Id="{6f1a0d90-7a9a-4e2c-9f58-0b0b5a7f9a10}" SpecialFunc="None">
+    <Declaration><![CDATA[FUNCTION_BLOCK b6_action
+VAR
+	i					: INT;
+	step				: INT := 0;
+	delay_timer			: TON;
+	all_powered			: BOOL;
+	all_done			: BOOL;
+	move1				: MC_MoveAbsolute;
+	move3				: MC_MoveAbsolute;
+	move5				: MC_MoveAbsolute;
+	move6				: MC_MoveAbsolute;
+END_VAR]]></Declaration>
+    <Implementation>
+      <ST><![CDATA[all_powered := TRUE;
+FOR i:=1 TO 7 DO
+	IF NOT G.power_output[i].Done THEN
+		all_powered := FALSE;
+		EXIT;
+	END_IF
+END_FOR
+
+IF (NOT all_powered) THEN
+	G.b6_req := FALSE;
+	RETURN;
+END_IF
+
+IF (NOT G.b6_req) AND (step = 0) THEN
+	G.b6_done := FALSE;
+	RETURN;
+END_IF
+
+IF G.b6_used THEN
+	G.b6_req := FALSE;
+	G.b6_done := FALSE;
+	G.gen_state := _handle;
+	RETURN;
+END_IF
+
+CASE step OF
+0:
+	G.b6_used := TRUE;
+	G.b6_done := FALSE;
+	G.b6_req := FALSE;
+
+	FOR i:=1 TO 7 DO
+		G.SetPointGenDisable[i](Axis:=G.axis[i], Execute:=TRUE);
+	END_FOR
+
+	G.cylinder1_value := 100;
+	G.cylinder3_value := 100;
+	delay_timer(IN:=TRUE, PT:=T#100ms);
+	step := 1;
+
+1:
+	FOR i:=1 TO 7 DO
+		G.SetPointGenDisable[i](Axis:=G.axis[i], Execute:=FALSE);
+	END_FOR
+
+	delay_timer(IN:=TRUE);
+	IF delay_timer.Q THEN
+		delay_timer(IN:=FALSE);
+		step := 2;
+	END_IF
+
+2:
+	move1(
+		Axis:=G.axis[1],
+		Position:=G.rightlimit[1] - 56.0,
+		Velocity:=50.0,
+		Acceleration:=100.0,
+		Deceleration:=100.0,
+		Jerk:=100.0,
+		Execute:=TRUE);
+	move3(
+		Axis:=G.axis[3],
+		Position:=G.rightlimit[3] - 80.0,
+		Velocity:=50.0,
+		Acceleration:=100.0,
+		Deceleration:=100.0,
+		Jerk:=100.0,
+		Execute:=TRUE);
+	move5(
+		Axis:=G.axis[5],
+		Position:=G.rightlimit[5] - 40.0,
+		Velocity:=50.0,
+		Acceleration:=100.0,
+		Deceleration:=100.0,
+		Jerk:=100.0,
+		Execute:=TRUE);
+	move6(
+		Axis:=G.axis[6],
+		Position:=G.rightlimit[6] - 20.0,
+		Velocity:=50.0,
+		Acceleration:=100.0,
+		Deceleration:=100.0,
+		Jerk:=100.0,
+		Execute:=TRUE);
+
+	all_done := move1.Done AND move3.Done AND move5.Done AND move6.Done;
+	IF all_done THEN
+		move1(Axis:=G.axis[1], Execute:=FALSE);
+		move3(Axis:=G.axis[3], Execute:=FALSE);
+		move5(Axis:=G.axis[5], Execute:=FALSE);
+		move6(Axis:=G.axis[6], Execute:=FALSE);
+
+		G.cylinder1_value := 1000;
+		G.cylinder3_value := 1000;
+		G.cylinder2_value := 500;
+		G.cylinder4_value := 500;
+
+		G.handle_reinit_req := TRUE;
+		G.b6_done := TRUE;
+
+		step := 3;
+	END_IF
+
+3:
+	G.gen_state := _handle;
+	step := 0;
+END_CASE]]></ST>
+    </Implementation>
+  </POU>
+</TcPlcObject>
