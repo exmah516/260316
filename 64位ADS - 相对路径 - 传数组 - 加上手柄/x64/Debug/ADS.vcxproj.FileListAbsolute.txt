@@ -1,6 +1,0 @@
-C:\Users\20622\Desktop\ADS\x64\Debug\ADS.exe
-C:\Users\20622\Desktop\ADS - 相对路径\x64\Debug\ADS.exe
-C:\Users\20622\Desktop\64位ADS - 相对路径 - 传数组\x64\Debug\ADS.exe
-C:\Users\20622\Desktop\64位ADS - 相对路径 - 传数组 - 加上手柄\x64\Debug\ADS.exe
-C:\Users\admin1\Desktop\64位ADS - 相对路径 - 传数组 - 加上手柄\x64\Debug\ADS.exe
-C:\Users\admin1\Desktop\251230_nopid\64位ADS - 相对路径 - 传数组 - 加上手柄\x64\Debug\ADS.exe
