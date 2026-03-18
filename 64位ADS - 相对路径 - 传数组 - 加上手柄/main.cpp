@@ -1,140 +1,557 @@
 #include "Handle.h"
-#include <iostream>
-#include <string>
-#include <vector>
-#include <cmath>
-#include <conio.h>
 #include <ADSComm1.h>
 
-// Helper to get average position
-double get_average_pos(Handle& h, int axis, int samples) {
-    double sum = 0;
-    for (int i = 0; i < samples; ++i) {
-        h.showinfo();
-        sum += h.fJoints2[axis];
-        Sleep(10);
-    }
-    return sum / samples;
+#include <cmath>
+#include <conio.h>
+#include <cstdlib>
+#include <cstring>
+#include <iostream>
+#include <string>
+#include <windows.h>
+
+namespace
+{
+double clamp_double(double value, double low, double high)
+{
+    if (value < low) return low;
+    if (value > high) return high;
+    return value;
 }
 
-static double clamp_double(double v, double lo, double hi) {
-    if (v < lo) return lo;
-    if (v > hi) return hi;
-    return v;
+bool is_within_range(double value, double low, double high, double tol = 0.0)
+{
+    return (value >= (low - tol)) && (value <= (high + tol));
+}
+
+double get_average_pos(Handle& handle, int axis, int samples)
+{
+    double sum = 0.0;
+    for (int i = 0; i < samples; ++i)
+    {
+        handle.poll();
+        sum += handle.fJoints2[axis];
+        Sleep(10);
+    }
+    return sum / static_cast<double>(samples);
+}
+
+void get_average_dual_pos(
+    Handle& handle_a,
+    Handle& handle_b,
+    int samples,
+    double& a_axis0,
+    double& a_axis1,
+    double& b_axis0,
+    double& b_axis1)
+{
+    double a0_sum = 0.0;
+    double a1_sum = 0.0;
+    double b0_sum = 0.0;
+    double b1_sum = 0.0;
+
+    for (int i = 0; i < samples; ++i)
+    {
+        handle_a.poll();
+        handle_b.poll();
+        a0_sum += handle_a.fJoints2[0];
+        a1_sum += handle_a.fJoints2[1];
+        b0_sum += handle_b.fJoints2[0];
+        b1_sum += handle_b.fJoints2[1];
+        Sleep(10);
+    }
+
+    const double inv = 1.0 / static_cast<double>(samples);
+    a_axis0 = a0_sum * inv;
+    a_axis1 = a1_sum * inv;
+    b_axis0 = b0_sum * inv;
+    b_axis1 = b1_sum * inv;
+}
+
+int hand_dir_from_delta(double delta_mm, double deadband_mm)
+{
+    if (delta_mm > deadband_mm) return 1;
+    if (delta_mm < -deadband_mm) return -1;
+    return 0;
+}
+
+struct CrawlState
+{
+    enum class Phase
+    {
+        Follow,
+        SwitchWait,
+        FastMove,
+        ClampWait,
+        RestoreWait
+    };
+
+    bool enabled = false;
+    Phase phase = Phase::Follow;
+    bool wait_rearm = false;
+    bool window_active = false;
+    int rearm_dir = 0;
+    double handle_ref = 0.0;
+    double rot_ref = 0.0;
+    double base_rel = 0.0;
+    double rot_base_rel = 0.0;
+    double start_abs = 0.0;
+    double end_abs = 0.0;
+    double target_abs = 0.0;
+    DWORD phase_t0 = 0;
+};
+
+bool phase_is_follow(const CrawlState& state)
+{
+    return state.phase == CrawlState::Phase::Follow;
+}
+
+void copy_positions(const double* src, double* dst, int count)
+{
+    for (int i = 0; i < count; ++i)
+    {
+        dst[i] = src[i];
+    }
+}
 }
 
 int main(int argc, char* argv[])
 {
-    // --- Button Test Mode ---
-    if (argc > 1 && (std::string(argv[1]) == "--buttons" || std::string(argv[1]) == "--btn")) {
-        Handle h;
-        if (!h.init()) {
-            std::cout << "Handle Init Failed." << std::endl;
+    const DWORD serial_axis1_handle = 582;
+    const DWORD serial_axis6_handle = 587;
+    const char* hardcoded_ads_netid = "169.254.119.135.1.1";
+
+    if (argc > 1 && (std::string(argv[1]) == "--buttons" || std::string(argv[1]) == "--btn"))
+    {
+        DWORD test_serial = serial_axis1_handle;
+        if (argc > 2)
+        {
+            test_serial = static_cast<DWORD>(std::strtoul(argv[2], nullptr, 10));
+        }
+
+        Handle test_handle(test_serial);
+        if (!test_handle.init())
+        {
+            std::cout << "Handle Init Failed. Serial: " << test_serial << std::endl;
             return 0;
         }
+
         std::cout << "=== Button Test Mode ===" << std::endl;
+        std::cout << "Serial: " << test_serial << std::endl;
         std::cout << "Press buttons to see their bits." << std::endl;
         std::cout << "Press ESC or 'q' to exit." << std::endl;
-        
-        unsigned char last_btn = 0;
-        while (true) {
-            h.showinfo();
-            unsigned char cur_btn = h.buttons2;
-            
-            if (cur_btn != last_btn) {
-                std::cout << "Btns: 0x" << std::hex << (int)cur_btn << std::dec << " | Bits: ";
-                for(int i=0; i<8; ++i) std::cout << ((cur_btn >> i) & 1);
+
+        unsigned char last_btn = 0xFF;
+        while (true)
+        {
+            test_handle.poll();
+            const unsigned char cur_btn = test_handle.buttons2;
+
+            if (cur_btn != last_btn)
+            {
+                std::cout << "Btns: 0x" << std::hex << static_cast<int>(cur_btn) << std::dec << " | Bits: ";
+                for (int i = 0; i < 8; ++i)
+                {
+                    std::cout << ((cur_btn >> i) & 1);
+                }
                 std::cout << std::endl;
                 last_btn = cur_btn;
             }
-            
-            if (_kbhit()) {
-                int ch = _getch();
-                if (ch == 27 || ch == 'q') break;
+
+            if (_kbhit())
+            {
+                const int ch = _getch();
+                if (ch == 27 || ch == 'q')
+                {
+                    break;
+                }
             }
             Sleep(10);
         }
-        h.close();
+
+        test_handle.close();
+        return 0;
+    }
+
+    if (argc > 1 && (std::string(argv[1]) == "--monitor" || std::string(argv[1]) == "--mon"))
+    {
+        DWORD test_serial = serial_axis1_handle;
+        if (argc > 2)
+        {
+            test_serial = static_cast<DWORD>(std::strtoul(argv[2], nullptr, 10));
+        }
+
+        Handle test_handle(test_serial);
+        if (!test_handle.init())
+        {
+            std::cout << "Handle Init Failed. Serial: " << test_serial << std::endl;
+            return 0;
+        }
+
+        std::cout << "=== Handle Monitor Mode ===" << std::endl;
+        std::cout << "Serial: " << test_serial << std::endl;
+        std::cout << "Press ESC or 'q' to exit." << std::endl;
+
+        while (true)
+        {
+            test_handle.showinfo();
+
+            if (_kbhit())
+            {
+                const int ch = _getch();
+                if (ch == 27 || ch == 'q')
+                {
+                    break;
+                }
+            }
+            Sleep(20);
+        }
+
+        std::cout << std::endl;
+        test_handle.close();
         return 0;
     }
 
     const int axial_force_axis = 1;
     const double axial_force_sign = -1.0;
 
-    Handle handle;
-    CADSComm a;
+    const double k_handle_to_mm = 500.0 * (75.0 / 50.0);
+    const double axis_push_sign = -1.0;
+    const double axis_rot_scale_deg = Rad;
+    const unsigned char axis6_arm_button_mask = 0x40;
 
-    if (!handle.init()) {
-         std::cout << "Handle Init Failed." << std::endl;
-         return 0;
+    const double crawl_window_start_offset_mm = 56.0;
+    const double crawl_window_size_mm = 30.0;
+    const double crawl_trigger_deadband_mm = 0.3;
+    const double crawl_rearm_threshold_mm = 0.3;
+    const double crawl_arrive_tol_mm = 0.2;
+    const DWORD crawl_switch_delay_ms = 250;
+    const DWORD crawl_clamp_delay_ms = 50;
+
+    const unsigned short cyl1_open = 1000;
+    const unsigned short cyl1_clamp = 100;
+    const unsigned short cyl2_open = 0;
+    const unsigned short cyl2_clamp = 1000;
+    const unsigned short cyl3_open = 1000;
+    const unsigned short cyl3_clamp = 100;
+    const unsigned short cyl4_open = 0;
+    const unsigned short cyl4_clamp = 1000;
+    const unsigned short cyl3_follow_release = 150;
+    const unsigned short cyl4_follow_release = 100;
+
+    Handle handle_axis1(serial_axis1_handle);
+    Handle handle_axis6(serial_axis6_handle);
+    CADSComm ads;
+
+    if (!handle_axis1.init())
+    {
+        std::cout << "Handle Init Failed. Serial: " << serial_axis1_handle << std::endl;
+        return 0;
+    }
+
+    if (!handle_axis6.init())
+    {
+        std::cout << "Handle Init Failed. Serial: " << serial_axis6_handle << std::endl;
+        handle_axis1.close();
+        return 0;
     }
 
     Sleep(1000);
-    handle.showinfo();
+    handle_axis1.poll();
+    handle_axis6.poll();
 
-    if (!a.OpenComm_inside())
+    if (ads.OpenComm_inside())
     {
-        std::cout << "ADS Open Failed (Local). Error: " << a.GetLastError() << std::endl;
-        if (!a.OpenComm())
+        std::cout << "ADS connected: local AMS route, port 851." << std::endl;
+    }
+    else
+    {
+        std::cout << "ADS Open Failed (Local). Error: " << ads.GetLastError() << std::endl;
+        if (ads.OpenComm())
         {
-            std::cout << "ADS Open Failed (Hardcoded). Error: " << a.GetLastError() << std::endl;
+            std::cout << "ADS connected: remote AMS NetId " << hardcoded_ads_netid << ", port 851." << std::endl;
+        }
+        else
+        {
+            std::cout << "ADS Open Failed (Hardcoded). Error: " << ads.GetLastError() << std::endl;
+            handle_axis1.close();
+            handle_axis6.close();
             return 0;
         }
     }
 
-    // --- Force helper ---
-    auto apply_cmd_force = [&](double cmd_force) {
-        handle.setforce_axis(cmd_force * axial_force_sign, axial_force_axis, 0.0);
+    auto apply_cmd_force = [&](double cmd_force)
+    {
+        handle_axis1.setforce_axis(cmd_force * axial_force_sign, axial_force_axis, 0.0);
     };
-    
-    // --- Initialization ---
+
     double pos[7] = { 0 };
     double plc_act_pos[7] = { 0 };
-    
-    // Read Initial Motor Position from PLC to avoid jump
-    // We assume index 5 of array corresponds to the controlled axis (based on previous pos[5] usage)
-    // Note: G.Act_pos is 1-based in PLC (1..7). In C++ Read, if we read array:
-    // element 0 -> Axis 1 ... element 4 -> Axis 5 ... element 5 -> Axis 6? 
-    // Previous code used pos[5] to write. pos[5] is the 6th element. 
-    // Let's assume ADS mapping is consistent 0->1. So pos[5] -> Axis 6?.
-    // User said "Value 1 for Axis 5". 
-    // Let's read the WHOLE G.Act_pos array.
-    a.ADSRead((char*)"G.Act_pos", sizeof(plc_act_pos), &plc_act_pos);
-    for (int i = 0; i < 7; ++i) pos[i] = plc_act_pos[i];
-    a.ADSWrite((char*)"G.refer", sizeof(pos), &pos);
-    
-    double handle_ref = get_average_pos(handle, 0, 30);
-    double handle_rot_ref = handle.fJoints2[1];
+    double plc_init_pos[7] = { 0 };
+    double plc_rightlimit[7] = { 0 };
 
-    double axis1_base_rel = plc_act_pos[0];
-    double axis2_base_rel = plc_act_pos[1];
-    double axis3_base_rel = plc_act_pos[2];
-    double axis5_base_rel = plc_act_pos[4];
-    double axis6_base_rel = plc_act_pos[5];
+    auto read_plc_state = [&]() -> bool
+    {
+        bool ok = true;
+        ok = ads.ADSRead((char*)"G.Act_pos", sizeof(plc_act_pos), plc_act_pos) && ok;
+        ok = ads.ADSRead((char*)"G.init_pos", sizeof(plc_init_pos), plc_init_pos) && ok;
+        ok = ads.ADSRead((char*)"G.rightlimit", sizeof(plc_rightlimit), plc_rightlimit) && ok;
+        return ok;
+    };
 
-    // Cylinder Vars
-    unsigned short cylinder1_cmd = 0;
-    unsigned short cylinder2_cmd = 0;
-    unsigned short cylinder3_cmd = 0;
-    unsigned short cylinder4_cmd = 0;
-    a.ADSRead((char*)"G.cylinder1_value", sizeof(cylinder1_cmd), &cylinder1_cmd);
-    a.ADSRead((char*)"G.cylinder2_value", sizeof(cylinder2_cmd), &cylinder2_cmd);
-    a.ADSRead((char*)"G.cylinder3_value", sizeof(cylinder3_cmd), &cylinder3_cmd);
-    a.ADSRead((char*)"G.cylinder4_value", sizeof(cylinder4_cmd), &cylinder4_cmd);
+    auto write_refer = [&]() -> bool
+    {
+        return ads.ADSWrite((char*)"G.refer", sizeof(pos), pos);
+    };
+
+    auto load_pos_from_actual = [&]()
+    {
+        copy_positions(plc_act_pos, pos, 7);
+    };
+
+    double axis3_base_rel = 0.0;
+    double axis5_base_rel = 0.0;
+    double axis6_mirror_base_rel = 0.0;
+
+    CrawlState axis1_crawl;
+    CrawlState axis6_crawl;
+    axis1_crawl.enabled = true;
+
+    auto axis1_start_abs = [&]() -> double
+    {
+        return plc_rightlimit[0] - crawl_window_start_offset_mm;
+    };
+
+    auto axis1_end_abs = [&]() -> double
+    {
+        // 留出修改接口：终点 = 起点 + 运动窗口大小，当前窗口为 30 mm。
+        return axis1_start_abs() + crawl_window_size_mm;
+    };
+
+    auto sync_axis1 = [&](int samples, bool wait_rearm, int rearm_dir) -> bool
+    {
+        if (!read_plc_state())
+        {
+            return false;
+        }
+
+        load_pos_from_actual();
+
+        axis1_crawl.handle_ref = get_average_pos(handle_axis1, 0, samples);
+        axis1_crawl.rot_ref = handle_axis1.fJoints2[1];
+        axis1_crawl.base_rel = plc_act_pos[0];
+        axis1_crawl.rot_base_rel = plc_act_pos[1];
+        axis1_crawl.start_abs = axis1_start_abs();
+        axis1_crawl.end_abs = axis1_end_abs();
+        axis1_crawl.window_active = is_within_range(
+            plc_act_pos[0] + plc_init_pos[0],
+            (axis1_crawl.start_abs < axis1_crawl.end_abs) ? axis1_crawl.start_abs : axis1_crawl.end_abs,
+            (axis1_crawl.start_abs > axis1_crawl.end_abs) ? axis1_crawl.start_abs : axis1_crawl.end_abs,
+            crawl_arrive_tol_mm);
+        axis1_crawl.phase = CrawlState::Phase::Follow;
+        axis1_crawl.phase_t0 = GetTickCount();
+        axis1_crawl.wait_rearm = wait_rearm;
+        axis1_crawl.rearm_dir = rearm_dir;
+
+        axis3_base_rel = plc_act_pos[2];
+        axis5_base_rel = plc_act_pos[4];
+        axis6_mirror_base_rel = plc_act_pos[5];
+
+        return write_refer();
+    };
+
+    auto sync_axis6 = [&](int samples, bool capture_window, bool wait_rearm, int rearm_dir) -> bool
+    {
+        if (!read_plc_state())
+        {
+            return false;
+        }
+
+        load_pos_from_actual();
+
+        axis6_crawl.handle_ref = get_average_pos(handle_axis6, 0, samples);
+        axis6_crawl.rot_ref = handle_axis6.fJoints2[1];
+        axis6_crawl.base_rel = plc_act_pos[5];
+        axis6_crawl.rot_base_rel = plc_act_pos[6];
+        if (capture_window || !axis6_crawl.enabled)
+        {
+            axis6_crawl.start_abs = plc_act_pos[5] + plc_init_pos[5];
+            axis6_crawl.end_abs = axis6_crawl.start_abs + crawl_window_size_mm;
+        }
+        axis6_crawl.window_active = true;
+        axis6_crawl.phase = CrawlState::Phase::Follow;
+        axis6_crawl.phase_t0 = GetTickCount();
+        axis6_crawl.wait_rearm = wait_rearm;
+        axis6_crawl.rearm_dir = rearm_dir;
+        axis6_crawl.enabled = true;
+
+        return write_refer();
+    };
+
+    auto release_axis6_to_follow = [&]() -> bool
+    {
+        if (!read_plc_state())
+        {
+            return false;
+        }
+
+        load_pos_from_actual();
+
+        axis6_crawl.handle_ref = get_average_pos(handle_axis6, 0, 20);
+        axis6_crawl.rot_ref = handle_axis6.fJoints2[1];
+        axis6_crawl.base_rel = plc_act_pos[5];
+        axis6_crawl.rot_base_rel = plc_act_pos[6];
+        axis6_crawl.phase = CrawlState::Phase::Follow;
+        axis6_crawl.phase_t0 = GetTickCount();
+        axis6_crawl.wait_rearm = false;
+        axis6_crawl.rearm_dir = 0;
+        axis6_crawl.enabled = false;
+        axis6_crawl.window_active = false;
+
+        if (axis1_crawl.phase == CrawlState::Phase::Follow)
+        {
+            const double axis1_base_abs = axis1_crawl.base_rel + plc_init_pos[0];
+            const double axis1_min_abs = (axis1_crawl.start_abs < axis1_crawl.end_abs) ? axis1_crawl.start_abs : axis1_crawl.end_abs;
+            const double axis1_max_abs = (axis1_crawl.start_abs > axis1_crawl.end_abs) ? axis1_crawl.start_abs : axis1_crawl.end_abs;
+            const double axis1_hand_delta_mm =
+                (handle_axis1.fJoints2[0] - axis1_crawl.handle_ref) * k_handle_to_mm * axis_push_sign;
+            const double axis1_cmd_abs = clamp_double(axis1_base_abs + axis1_hand_delta_mm, axis1_min_abs, axis1_max_abs);
+            const double axis1_delta_rel = axis1_cmd_abs - plc_init_pos[0] - axis1_crawl.base_rel;
+
+            // 退出独立控制时，把轴6镜像基准校到当前点，避免恢复随动瞬间跳变。
+            axis6_mirror_base_rel = plc_act_pos[5] - axis1_delta_rel;
+        }
+        else
+        {
+            axis6_mirror_base_rel = plc_act_pos[5];
+        }
+
+        pos[5] = plc_act_pos[5];
+        pos[6] = plc_act_pos[6];
+        return write_refer();
+    };
+
+    auto sync_all = [&](int samples) -> bool
+    {
+        if (!read_plc_state())
+        {
+            return false;
+        }
+
+        load_pos_from_actual();
+        if (!write_refer())
+        {
+            return false;
+        }
+
+        // 两个手柄同步取样，避免像之前那样先采 582、再采 587，
+        // 导致 582 的零位比真正进入控制早约 300 ms，首帧产生假位移。
+        get_average_dual_pos(
+            handle_axis1,
+            handle_axis6,
+            samples,
+            axis1_crawl.handle_ref,
+            axis1_crawl.rot_ref,
+            axis6_crawl.handle_ref,
+            axis6_crawl.rot_ref);
+
+        // 取完零位后再读一次 PLC 实际位置，把基准和 refer 一起刷新到最新，
+        // 避免校零窗口内手柄或轴状态变化造成启动瞬间跟随跳变。
+        if (!read_plc_state())
+        {
+            return false;
+        }
+
+        load_pos_from_actual();
+        if (!write_refer())
+        {
+            return false;
+        }
+
+        axis1_crawl.base_rel = plc_act_pos[0];
+        axis1_crawl.rot_base_rel = plc_act_pos[1];
+        axis1_crawl.start_abs = axis1_start_abs();
+        axis1_crawl.end_abs = axis1_end_abs();
+        axis1_crawl.window_active = is_within_range(
+            plc_act_pos[0] + plc_init_pos[0],
+            (axis1_crawl.start_abs < axis1_crawl.end_abs) ? axis1_crawl.start_abs : axis1_crawl.end_abs,
+            (axis1_crawl.start_abs > axis1_crawl.end_abs) ? axis1_crawl.start_abs : axis1_crawl.end_abs,
+            crawl_arrive_tol_mm);
+        axis1_crawl.phase = CrawlState::Phase::Follow;
+        axis1_crawl.phase_t0 = GetTickCount();
+        axis1_crawl.wait_rearm = false;
+        axis1_crawl.rearm_dir = 0;
+        axis1_crawl.enabled = true;
+
+        axis3_base_rel = plc_act_pos[2];
+        axis5_base_rel = plc_act_pos[4];
+        axis6_mirror_base_rel = plc_act_pos[5];
+
+        axis6_crawl.base_rel = plc_act_pos[5];
+        axis6_crawl.rot_base_rel = plc_act_pos[6];
+        axis6_crawl.start_abs = plc_act_pos[5] + plc_init_pos[5];
+        axis6_crawl.end_abs = axis6_crawl.start_abs + crawl_window_size_mm;
+        axis6_crawl.window_active = false;
+        axis6_crawl.phase = CrawlState::Phase::Follow;
+        axis6_crawl.phase_t0 = GetTickCount();
+        axis6_crawl.wait_rearm = false;
+        axis6_crawl.rearm_dir = 0;
+        axis6_crawl.enabled = false;
+
+        return true;
+    };
+
+    auto clear_plc_reinit_req = [&]()
+    {
+        const bool clear_val = false;
+        ads.ADSWrite((char*)"G.handle_reinit_req", sizeof(clear_val), (void*)&clear_val);
+    };
+
+    auto capture_axis1_follow_baseline = [&]()
+    {
+        axis1_crawl.handle_ref = handle_axis1.fJoints2[0];
+        axis1_crawl.rot_ref = handle_axis1.fJoints2[1];
+        axis1_crawl.base_rel = plc_act_pos[0];
+        axis1_crawl.rot_base_rel = plc_act_pos[1];
+        axis3_base_rel = plc_act_pos[2];
+        axis5_base_rel = plc_act_pos[4];
+        if (!axis6_crawl.enabled)
+        {
+            axis6_mirror_base_rel = plc_act_pos[5];
+        }
+    };
+
+    if (!read_plc_state())
+    {
+        std::cout << "Failed to read PLC state." << std::endl;
+        handle_axis1.close();
+        handle_axis6.close();
+        return 0;
+    }
+
+    load_pos_from_actual();
+    write_refer();
 
     bool self_check_done = true;
-    bool has_self_check_flag = a.ADSRead((char*)"G.self_check_done", sizeof(self_check_done), &self_check_done);
-    if (has_self_check_flag) {
-        a.ADSRead((char*)"G.self_check_done", sizeof(self_check_done), &self_check_done);
+    bool has_self_check_flag = ads.ADSRead((char*)"G.self_check_done", sizeof(self_check_done), &self_check_done);
+    if (has_self_check_flag)
+    {
+        ads.ADSRead((char*)"G.self_check_done", sizeof(self_check_done), &self_check_done);
     }
 
     bool control_active = !has_self_check_flag || self_check_done;
-    unsigned char last_btn = 0xFF;
-    int loop_count = 0;
     bool last_self_check_done = self_check_done;
     bool handle_reinit_req = false;
     bool estop_hold_req = false;
     bool estop_hold_active = false;
+    bool freeze_active = false;
+    bool pause_pressed_prev = false;
+    bool axis6_arm_pressed_prev = false;
+    bool axis1_fast_return = false;
+    bool axis6_fast_retract = false;
+    int loop_count = 0;
+
+    unsigned char last_btn_axis1 = 0xFF;
+    unsigned char last_btn_axis6 = 0xFF;
 
     short fn_raw = 0;
     short ft_raw = 0;
@@ -153,225 +570,93 @@ int main(int argc, char* argv[])
     bool force_feedback_enabled = false;
 
     std::cout << "Force feedback: OFF (press Enter to toggle)" << std::endl;
-
     apply_cmd_force(0.0);
 
-    double plc_init_pos[7] = { 0 };
-    double plc_rightlimit[7] = { 0 };
-
-    const double k_handle_to_mm = 500.0 * (75.0 / 50.0);
-    const double axis1_push_sign = -1.0;
-    const double axis1_start_offset_mm = 56.0;
-    const double axis1_end_offset_mm = 36.0;
-    const double axis1_tol_mm = 0.2;
-    const double axis1_trigger_deadband_mm = 0.5;
-    const DWORD axis1_clamp_delay_ms = 50;
-    const DWORD axis1_open_delay_ms = 250;
-
-    const unsigned short cyl1_open = 1000;
-    const unsigned short cyl1_clamp = 100;
-    const unsigned short cyl2_open = 0;
-    const unsigned short cyl2_clamp = 1000;
-    const unsigned short cyl3_open = 1000;
-    const unsigned short cyl3_clamp = 100;
-    const unsigned short cyl4_open = 0;
-    const unsigned short cyl4_clamp = 1000;
-
-    cylinder2_cmd = cyl2_clamp;
-    cylinder4_cmd = cyl4_open;
-    a.ADSWrite((char*)"G.cylinder2_value", sizeof(cylinder2_cmd), &cylinder2_cmd);
-    a.ADSWrite((char*)"G.cylinder4_value", sizeof(cylinder4_cmd), &cylinder4_cmd);
-
-    bool axis1_fast_return = false;
-    bool axis1_pause_mirror = false;
-    enum class Axis1Phase { Follow, Open2Wait, FastMove, Clamp2Wait, Open1Wait };
-    Axis1Phase axis1_phase = Axis1Phase::Follow;
-    DWORD axis1_phase_t0 = GetTickCount();
-    double axis1_target_abs = 0.0;
-
-    bool pause_pressed_prev = false;
-    bool freeze_active = false;
-    int axis1_expected_dir = 1;
-
-    class ControlSync {
-    public:
-        ControlSync(
-            CADSComm& ads,
-            Handle& handle,
-            double* pos,
-            double* act_pos,
-            double* init_pos,
-            double* rightlimit,
-            double& handle_ref,
-            double& handle_rot_ref,
-            double& axis1_base_rel,
-            double& axis2_base_rel,
-            double& axis3_base_rel,
-            double& axis5_base_rel,
-            double& axis6_base_rel,
-            bool& axis1_pause_mirror,
-            Axis1Phase& axis1_phase,
-            DWORD& axis1_phase_t0,
-            double& axis1_target_abs,
-            double axis1_start_offset_mm,
-            double axis1_end_offset_mm,
-            int& axis1_expected_dir)
-            : ads_(ads),
-              handle_(handle),
-              pos_(pos),
-              act_pos_(act_pos),
-              init_pos_(init_pos),
-              rightlimit_(rightlimit),
-              handle_ref_(handle_ref),
-              handle_rot_ref_(handle_rot_ref),
-              axis1_base_rel_(axis1_base_rel),
-              axis2_base_rel_(axis2_base_rel),
-              axis3_base_rel_(axis3_base_rel),
-              axis5_base_rel_(axis5_base_rel),
-              axis6_base_rel_(axis6_base_rel),
-              axis1_pause_mirror_(axis1_pause_mirror),
-              axis1_phase_(axis1_phase),
-              axis1_phase_t0_(axis1_phase_t0),
-              axis1_target_abs_(axis1_target_abs),
-              axis1_start_offset_mm_(axis1_start_offset_mm),
-              axis1_end_offset_mm_(axis1_end_offset_mm),
-              axis1_expected_dir_(axis1_expected_dir) {}
-
-        bool Sync(int handle_samples) {
-            if (!ads_.ADSRead((char*)"G.Act_pos", sizeof(double) * 7, act_pos_)) return false;
-            for (int i = 0; i < 7; ++i) pos_[i] = act_pos_[i];
-            ads_.ADSWrite((char*)"G.refer", sizeof(double) * 7, pos_);
-            ads_.ADSRead((char*)"G.init_pos", sizeof(double) * 7, init_pos_);
-            ads_.ADSRead((char*)"G.rightlimit", sizeof(double) * 7, rightlimit_);
-
-            handle_ref_ = get_average_pos(handle_, 0, handle_samples);
-            handle_rot_ref_ = handle_.fJoints2[1];
-            axis1_base_rel_ = act_pos_[0];
-            axis2_base_rel_ = act_pos_[1];
-            axis3_base_rel_ = act_pos_[2];
-            axis5_base_rel_ = act_pos_[4];
-            axis6_base_rel_ = act_pos_[5];
-
-            axis1_pause_mirror_ = false;
-            axis1_phase_ = Axis1Phase::Follow;
-            axis1_phase_t0_ = GetTickCount();
-            axis1_target_abs_ = rightlimit_[0] - axis1_start_offset_mm_;
-            const double start_abs = rightlimit_[0] - axis1_start_offset_mm_;
-            const double end_abs = rightlimit_[0] - axis1_end_offset_mm_;
-            const double axis1_abs = act_pos_[0] + init_pos_[0];
-            if (std::abs(axis1_abs - start_abs) <= std::abs(axis1_abs - end_abs)) {
-                axis1_expected_dir_ = (end_abs >= start_abs) ? 1 : -1;
-            } else {
-                axis1_expected_dir_ = (start_abs >= end_abs) ? 1 : -1;
-            }
-            return true;
-        }
-
-        bool RequestPlcReinitAndSync(int handle_samples, DWORD timeout_ms) {
-            const bool req = true;
-            ads_.ADSWrite((char*)"G.handle_reinit_req", sizeof(req), (void*)&req);
-            const DWORD t0 = GetTickCount();
-            bool flag = true;
-            bool done = false;
-            const bool can_read_done = ads_.ADSRead((char*)"G.handle_reinit_done", sizeof(done), &done);
-            while ((GetTickCount() - t0) < timeout_ms) {
-                if (can_read_done) {
-                    if (!ads_.ADSRead((char*)"G.handle_reinit_done", sizeof(done), &done)) break;
-                    if (done) break;
-                } else {
-                    if (!ads_.ADSRead((char*)"G.handle_reinit_req", sizeof(flag), &flag)) break;
-                    if (!flag) break;
-                }
-                Sleep(10);
-            }
-            return Sync(handle_samples);
-        }
-
-    private:
-        CADSComm& ads_;
-        Handle& handle_;
-        double* pos_;
-        double* act_pos_;
-        double* init_pos_;
-        double* rightlimit_;
-        double& handle_ref_;
-        double& handle_rot_ref_;
-        double& axis1_base_rel_;
-        double& axis2_base_rel_;
-        double& axis3_base_rel_;
-        double& axis5_base_rel_;
-        double& axis6_base_rel_;
-        bool& axis1_pause_mirror_;
-        Axis1Phase& axis1_phase_;
-        DWORD& axis1_phase_t0_;
-        double& axis1_target_abs_;
-        double axis1_start_offset_mm_;
-        double axis1_end_offset_mm_;
-        int& axis1_expected_dir_;
-    };
-
-    ControlSync sync(
-        a,
-        handle,
-        pos,
-        plc_act_pos,
-        plc_init_pos,
-        plc_rightlimit,
-        handle_ref,
-        handle_rot_ref,
-        axis1_base_rel,
-        axis2_base_rel,
-        axis3_base_rel,
-        axis5_base_rel,
-        axis6_base_rel,
-        axis1_pause_mirror,
-        axis1_phase,
-        axis1_phase_t0,
-        axis1_target_abs,
-        axis1_start_offset_mm, 
-        axis1_end_offset_mm,
-        axis1_expected_dir);
-
-    if (!has_self_check_flag || self_check_done) {
-        if (sync.RequestPlcReinitAndSync(30, 1500)) {
+    if (!has_self_check_flag || self_check_done)
+    {
+        if (sync_all(30))
+        {
             control_active = true;
         }
     }
 
-    while (1)
+    while (true)
     {
-        handle.showinfo();
+        handle_axis1.poll();
+        handle_axis6.poll();
+
         ++loop_count;
         axis1_fast_return = false;
+        axis6_fast_retract = false;
 
-        const bool b0_pressed = (handle.buttons2 & 0x01) != 0;
-        const bool b6_pause_pressed = (handle.buttons2 & 0x40) != 0;
-        const bool pause_pressed = b0_pressed || b6_pause_pressed;
+        const bool pause_pressed = (handle_axis1.buttons2 & 0x01) != 0;
+        const bool axis6_arm_pressed = (handle_axis6.buttons2 & axis6_arm_button_mask) != 0;
 
-        if (pause_pressed && !pause_pressed_prev) {
+        if (axis6_arm_pressed && !axis6_arm_pressed_prev)
+        {
+            if (freeze_active)
+            {
+                std::cout << "Axis6 crawl arm ignored: freeze is active." << std::endl;
+            }
+            else if (estop_hold_active)
+            {
+                std::cout << "Axis6 crawl arm ignored: PLC hold is active." << std::endl;
+            }
+            else if (!control_active)
+            {
+                std::cout << "Axis6 crawl arm ignored: control is not active yet." << std::endl;
+            }
+            else if (sync_axis6(20, true, false, 0))
+            {
+                std::cout << "Axis6 crawl armed at current position." << std::endl;
+            }
+            else
+            {
+                std::cout << "Axis6 crawl arm failed: ADS sync failed." << std::endl;
+            }
+        }
+        else if (!axis6_arm_pressed && axis6_arm_pressed_prev && axis6_crawl.enabled)
+        {
+            if (release_axis6_to_follow())
+            {
+                std::cout << "Axis6 crawl released to follow mode." << std::endl;
+            }
+        }
+        axis6_arm_pressed_prev = axis6_arm_pressed;
+
+        if (pause_pressed && !pause_pressed_prev)
+        {
             freeze_active = true;
             control_active = false;
-        } else if (!pause_pressed && pause_pressed_prev) {
+        }
+        else if (!pause_pressed && pause_pressed_prev)
+        {
             freeze_active = false;
-            if (!estop_hold_active) {
-                if (sync.RequestPlcReinitAndSync(20, 1500)) {
-                    control_active = true;
-                }
+            if (!estop_hold_active && sync_all(20))
+            {
+                control_active = true;
             }
         }
         pause_pressed_prev = pause_pressed;
 
-        if ((loop_count % 10) == 0) {
-            if (a.ADSRead((char*)"G.estop_hold_req", sizeof(estop_hold_req), &estop_hold_req)) {
-                if (estop_hold_req) {
-                    if (!estop_hold_active) {
+        if ((loop_count % 10) == 0)
+        {
+            if (ads.ADSRead((char*)"G.estop_hold_req", sizeof(estop_hold_req), &estop_hold_req))
+            {
+                if (estop_hold_req)
+                {
+                    if (!estop_hold_active)
+                    {
                         std::cout << "PLC hold: ON" << std::endl;
-                        handle.setforce_axis(0.0, axial_force_axis, 0.0);
                     }
                     estop_hold_active = true;
                     control_active = false;
-                } else {
-                    if (estop_hold_active) {
+                    apply_cmd_force(0.0);
+                }
+                else
+                {
+                    if (estop_hold_active)
+                    {
                         std::cout << "PLC hold: OFF" << std::endl;
                     }
                     estop_hold_active = false;
@@ -379,16 +664,19 @@ int main(int argc, char* argv[])
             }
         }
 
-        if (freeze_active) {
+        if (freeze_active)
+        {
             fn_bias_inited = false;
             fn_force_f = 0.0;
             ft_force_f = 0.0;
-            handle.setforce_axis(0.0, axial_force_axis, 0.0);
+            apply_cmd_force(0.0);
         }
 
-        if (_kbhit()) {
+        if (_kbhit())
+        {
             const int ch = _getch();
-            if (ch == '\r') {
+            if (ch == '\r')
+            {
                 force_feedback_enabled = !force_feedback_enabled;
                 fn_bias_inited = false;
                 fn_force_f = 0.0;
@@ -396,259 +684,405 @@ int main(int argc, char* argv[])
                 fn_invalid_streak = 0;
                 ft_invalid_streak = 0;
                 std::cout << "Force feedback: " << (force_feedback_enabled ? "ON" : "OFF") << std::endl;
-                if (!force_feedback_enabled) {
-                    handle.setforce_axis(0.0, axial_force_axis, 0.0);
+                if (!force_feedback_enabled)
+                {
+                    apply_cmd_force(0.0);
                 }
-            } else if (ch == 0 || ch == 224) {
+            }
+            else if (ch == 0 || ch == 224)
+            {
                 _getch();
             }
         }
 
-        if (has_self_check_flag && (loop_count % 50) == 0) {
-            if (a.ADSRead((char*)"G.self_check_done", sizeof(self_check_done), &self_check_done)) {
-                if (!last_self_check_done && self_check_done) {
-                    if (!freeze_active && !estop_hold_active && sync.RequestPlcReinitAndSync(30, 1500)) {
+        if (has_self_check_flag && (loop_count % 50) == 0)
+        {
+            if (ads.ADSRead((char*)"G.self_check_done", sizeof(self_check_done), &self_check_done))
+            {
+                if (!last_self_check_done && self_check_done)
+                {
+                    if (!freeze_active && !estop_hold_active && sync_all(30))
+                    {
                         control_active = true;
                     }
                 }
                 last_self_check_done = self_check_done;
             }
 
-            if (a.ADSRead((char*)"G.handle_reinit_req", sizeof(handle_reinit_req), &handle_reinit_req)) {
-                if (handle_reinit_req) {
-                    if (!freeze_active && !estop_hold_active) {
-                        sync.Sync(30);
+            if (ads.ADSRead((char*)"G.handle_reinit_req", sizeof(handle_reinit_req), &handle_reinit_req))
+            {
+                if (handle_reinit_req)
+                {
+                    if (!freeze_active && !estop_hold_active)
+                    {
+                        sync_all(30);
                     }
-                    const bool clear_val = false;
-                    a.ADSWrite((char*)"G.handle_reinit_req", sizeof(clear_val), (void*)&clear_val);
+                    clear_plc_reinit_req();
                 }
             }
         }
 
+        if (handle_axis1.buttons2 != last_btn_axis1)
         {
-            
-            // 0. Handle State Transition (Re-indexing)
-            if (!control_active && !estop_hold_active) {
-                if (!freeze_active && sync.Sync(20)) {
-                    std::cout << "Re-synced" << std::endl;
-                    control_active = true;
-                }
-            }
+            std::cout << "Handle582 Btns: 0x" << std::hex << static_cast<int>(handle_axis1.buttons2) << std::dec << std::endl;
+            last_btn_axis1 = handle_axis1.buttons2;
+        }
 
-            // 1. Cylinder Actions
-            cylinder1_cmd = cyl1_open;
-            cylinder2_cmd = cyl2_clamp;
-            
-            // 2. Normal haptic force: from PLC sensors (fn/ft)
-            if (!estop_hold_active &&
-                force_feedback_enabled &&
-                a.ADSRead((char*)"G.fn_value", sizeof(fn_raw), &fn_raw) &&
-                a.ADSRead((char*)"G.ft_value", sizeof(ft_raw), &ft_raw))
+        if (handle_axis6.buttons2 != last_btn_axis6)
+        {
+            std::cout << "Handle587 Btns: 0x" << std::hex << static_cast<int>(handle_axis6.buttons2) << std::dec << std::endl;
+            last_btn_axis6 = handle_axis6.buttons2;
+        }
+
+        if ((handle_axis6.buttons2 & 0x01) != 0 && !axis6_arm_pressed)
+        {
+            static bool axis6_wrong_button_notice = false;
+            if (!axis6_wrong_button_notice)
             {
-                const bool fn_valid = (std::abs((int)fn_raw) <= 8000);
-                const bool ft_valid = (std::abs((int)ft_raw) <= 8000);
+                std::cout << "Handle587 note: current press is b0 (0x01). Axis6 arm is configured for b6 (0x40, state 0x46)." << std::endl;
+                axis6_wrong_button_notice = true;
+            }
+        }
 
-                if (fn_valid) {
-                    fn_last_valid = fn_raw;
-                    fn_has_valid = true;
-                    fn_invalid_streak = 0;
-                } else {
-                    fn_invalid_streak++;
-                }
+        if (!estop_hold_active &&
+            force_feedback_enabled &&
+            ads.ADSRead((char*)"G.fn_value", sizeof(fn_raw), &fn_raw) &&
+            ads.ADSRead((char*)"G.ft_value", sizeof(ft_raw), &ft_raw))
+        {
+            const bool fn_valid = (std::abs(static_cast<int>(fn_raw)) <= 8000);
+            const bool ft_valid = (std::abs(static_cast<int>(ft_raw)) <= 8000);
 
-                if (ft_valid) {
-                    ft_last_valid = ft_raw;
-                    ft_has_valid = true;
-                    ft_invalid_streak = 0;
-                } else {
-                    ft_invalid_streak++;
-                }
-
-                if (fn_has_valid) {
-                    fn_raw = fn_last_valid;
-                }
-                if (ft_has_valid) {
-                    ft_raw = ft_last_valid;
-                }
-
-                if (!fn_bias_inited) {
-                    fn_bias = (double)fn_raw;
-                    fn_bias_inited = true;
-                } else {
-                    const double fn_err = ((double)fn_raw) - fn_bias;
-                    const bool fn_near_zero = (std::abs(fn_err) <= 120.0);
-                    if (fn_near_zero) {
-                        fn_bias = fn_bias * 0.995 + ((double)fn_raw) * 0.005;
-                    }
-                }
-
-                double fn_zeroed = (double)fn_raw - fn_bias;
-                if (std::abs(fn_zeroed) < 20.0) {
-                    fn_zeroed = 0.0;
-                }
-
-                const double axial_gain = 1.0 / 1000.0;
-                const double axial_limit = 6.0;
-                const double axial_force = clamp_double(fn_zeroed * axial_gain, -axial_limit, axial_limit);
-
-                double torque_force = 0.0;
-                if (ft_raw >= -870 && ft_raw <= -700) {
-                    torque_force = 0.0;
-                } else if (ft_raw > -700) {
-                    torque_force = ((double)ft_raw + 700.0) * (-1.0 / 600.0);
-                } else {
-                    torque_force = ((double)ft_raw + 870.0) / (-530.0);
-                }
-                torque_force = clamp_double(torque_force, -1.0, 1.0);
-
-                if (control_active) {
-                    fn_force_f = fn_force_f * 0.7 + (axial_force * 0.3);
-                    ft_force_f = ft_force_f * 0.7 + (torque_force * 0.3);
-                    handle.setforce_axis(fn_force_f * axial_force_sign, axial_force_axis, ft_force_f);
-                } else {
-                    apply_cmd_force(0.0);
-                }
-
-                if ((loop_count % 100) == 0 || fn_raw != last_fn_raw || ft_raw != last_ft_raw) {
-                    last_fn_raw = fn_raw;
-                    last_ft_raw = ft_raw;
-                    std::cout
-                        << "fn_raw=" << fn_raw << " fn_bias=" << fn_bias
-                        << " fn_cmd=" << fn_force_f
-                        << " | ft_raw=" << ft_raw << " ft_cmd=" << ft_force_f
-                        << " | axis=" << axial_force_axis << " sign=" << axial_force_sign
-                        << " | fn_inv=" << fn_invalid_streak << " ft_inv=" << ft_invalid_streak
-                        << std::endl;
-                }
+            if (fn_valid)
+            {
+                fn_last_valid = fn_raw;
+                fn_has_valid = true;
+                fn_invalid_streak = 0;
             }
             else
             {
-                fn_force_f = 0.0;
-                ft_force_f = 0.0;
-                if (control_active && !estop_hold_active) {
-                    handle.setforce_axis(0.0, axial_force_axis, 0.0);
-                } else {
-                    apply_cmd_force(0.0);
+                ++fn_invalid_streak;
+            }
+
+            if (ft_valid)
+            {
+                ft_last_valid = ft_raw;
+                ft_has_valid = true;
+                ft_invalid_streak = 0;
+            }
+            else
+            {
+                ++ft_invalid_streak;
+            }
+
+            if (fn_has_valid)
+            {
+                fn_raw = fn_last_valid;
+            }
+            if (ft_has_valid)
+            {
+                ft_raw = ft_last_valid;
+            }
+
+            if (!fn_bias_inited)
+            {
+                fn_bias = static_cast<double>(fn_raw);
+                fn_bias_inited = true;
+            }
+            else
+            {
+                const double fn_err = static_cast<double>(fn_raw) - fn_bias;
+                if (std::abs(fn_err) <= 120.0)
+                {
+                    fn_bias = fn_bias * 0.995 + static_cast<double>(fn_raw) * 0.005;
                 }
+            }
+
+            double fn_zeroed = static_cast<double>(fn_raw) - fn_bias;
+            if (std::abs(fn_zeroed) < 20.0)
+            {
+                fn_zeroed = 0.0;
+            }
+
+            const double axial_gain = 1.0 / 1000.0;
+            const double axial_limit = 6.0;
+            const double axial_force = clamp_double(fn_zeroed * axial_gain, -axial_limit, axial_limit);
+
+            double torque_force = 0.0;
+            if (ft_raw >= -870 && ft_raw <= -700)
+            {
+                torque_force = 0.0;
+            }
+            else if (ft_raw > -700)
+            {
+                torque_force = (static_cast<double>(ft_raw) + 700.0) * (-1.0 / 600.0);
+            }
+            else
+            {
+                torque_force = (static_cast<double>(ft_raw) + 870.0) / (-530.0);
+            }
+            torque_force = clamp_double(torque_force, -1.0, 1.0);
+
+            if (control_active)
+            {
+                fn_force_f = fn_force_f * 0.7 + (axial_force * 0.3);
+                ft_force_f = ft_force_f * 0.7 + (torque_force * 0.3);
+                handle_axis1.setforce_axis(fn_force_f * axial_force_sign, axial_force_axis, ft_force_f);
+            }
+            else
+            {
+                apply_cmd_force(0.0);
+            }
+
+            if ((loop_count % 100) == 0 || fn_raw != last_fn_raw || ft_raw != last_ft_raw)
+            {
+                last_fn_raw = fn_raw;
+                last_ft_raw = ft_raw;
+                std::cout
+                    << "fn_raw=" << fn_raw << " fn_bias=" << fn_bias
+                    << " fn_cmd=" << fn_force_f
+                    << " | ft_raw=" << ft_raw << " ft_cmd=" << ft_force_f
+                    << " | fn_inv=" << fn_invalid_streak << " ft_inv=" << ft_invalid_streak
+                    << std::endl;
+            }
+        }
+        else
+        {
+            fn_force_f = 0.0;
+            ft_force_f = 0.0;
+            if (!freeze_active)
+            {
+                apply_cmd_force(0.0);
             }
         }
 
-        // Debug Buttons
-        if (handle.buttons2 != last_btn) {
-             std::cout << "Btns: 0x" << std::hex << (int)handle.buttons2 << std::dec << std::endl;
-             last_btn = handle.buttons2;
+        if (!control_active && !freeze_active && !estop_hold_active)
+        {
+            if (sync_all(20))
+            {
+                std::cout << "Re-synced" << std::endl;
+                control_active = true;
+            }
         }
 
-        // Motion Control
-        if (freeze_active)
+        unsigned short cylinder1_cmd = cyl1_open;
+        unsigned short cylinder2_cmd = cyl2_clamp;
+        unsigned short cylinder3_cmd = cyl3_follow_release;
+        unsigned short cylinder4_cmd = cyl4_follow_release;
+
+        if (control_active && read_plc_state())
         {
-            control_active = false;
-        }
-        else if (control_active)
-        {
+            load_pos_from_actual();
+
             const DWORD now_ms = GetTickCount();
 
-            a.ADSRead((char*)"G.Act_pos", sizeof(plc_act_pos), &plc_act_pos);
-
             const double axis1_abs = plc_act_pos[0] + plc_init_pos[0];
-            const double axis1_start_abs = plc_rightlimit[0] - axis1_start_offset_mm;
-            const double axis1_end_abs = plc_rightlimit[0] - axis1_end_offset_mm;
-            const double axis1_min_abs = (axis1_start_abs < axis1_end_abs) ? axis1_start_abs : axis1_end_abs;
-            const double axis1_max_abs = (axis1_start_abs > axis1_end_abs) ? axis1_start_abs : axis1_end_abs;
-
-            if (axis1_phase == Axis1Phase::Follow)
+            const double axis1_min_abs = (axis1_crawl.start_abs < axis1_crawl.end_abs) ? axis1_crawl.start_abs : axis1_crawl.end_abs;
+            const double axis1_max_abs = (axis1_crawl.start_abs > axis1_crawl.end_abs) ? axis1_crawl.start_abs : axis1_crawl.end_abs;
+            const bool axis1_now_in_window = is_within_range(axis1_abs, axis1_min_abs, axis1_max_abs, crawl_arrive_tol_mm);
+            if (!axis1_crawl.window_active && axis1_now_in_window)
             {
-                axis1_pause_mirror = false;
+                capture_axis1_follow_baseline();
+                axis1_crawl.window_active = true;
+                std::cout << "Axis1 entered crawl window; crawl logic enabled." << std::endl;
+            }
+            const double axis1_base_abs = axis1_crawl.base_rel + plc_init_pos[0];
+            const double axis1_hand_delta_mm = (handle_axis1.fJoints2[0] - axis1_crawl.handle_ref) * k_handle_to_mm * axis_push_sign;
+            const int axis1_hand_dir = hand_dir_from_delta(axis1_hand_delta_mm, crawl_trigger_deadband_mm);
+            const bool axis6_independent = axis6_crawl.enabled;
 
-                const double hand_delta_mm = (handle.fJoints2[0] - handle_ref) * k_handle_to_mm * axis1_push_sign;
-                int hand_dir = 0;
-                if (hand_delta_mm > axis1_trigger_deadband_mm) hand_dir = 1;
-                else if (hand_delta_mm < -axis1_trigger_deadband_mm) hand_dir = -1;
-
-                const double axis1_base_abs = axis1_base_rel + plc_init_pos[0];
-                double cmd_abs = axis1_base_abs + hand_delta_mm;
-                if (cmd_abs < axis1_min_abs) cmd_abs = axis1_min_abs;
-                if (cmd_abs > axis1_max_abs) cmd_abs = axis1_max_abs;
-                pos[0] = cmd_abs - plc_init_pos[0];
-
-                const double axis2_delta_deg = (handle.fJoints2[1] - handle_rot_ref) * Rad;
-                pos[1] = axis2_base_rel + axis2_delta_deg;
-
-                if (!axis1_pause_mirror) {
-                    pos[2] = axis3_base_rel + (pos[0] - axis1_base_rel);
-                    pos[4] = axis5_base_rel + (pos[2] - axis3_base_rel);
-                    pos[5] = axis6_base_rel + (pos[2] - axis3_base_rel);
-                }
-
-                if ((hand_delta_mm > axis1_trigger_deadband_mm) &&
-                    (std::abs(axis1_abs - axis1_end_abs) <= axis1_tol_mm)) {
-                    axis1_target_abs = axis1_start_abs;
-                    axis1_phase = Axis1Phase::Open2Wait;
-                    axis1_phase_t0 = now_ms;
-                    axis1_pause_mirror = true;
-                } else if ((hand_delta_mm < -axis1_trigger_deadband_mm) &&
-                    (std::abs(axis1_abs - axis1_start_abs) <= axis1_tol_mm)) {
-                    axis1_target_abs = axis1_end_abs;
-                    axis1_phase = Axis1Phase::Open2Wait;
-                    axis1_phase_t0 = now_ms;
-                    axis1_pause_mirror = true;
+            if (axis1_crawl.wait_rearm)
+            {
+                const bool same_dir_push = (axis1_crawl.rearm_dir > 0) && (axis1_hand_delta_mm > crawl_rearm_threshold_mm);
+                const bool same_dir_pull = (axis1_crawl.rearm_dir < 0) && (axis1_hand_delta_mm < -crawl_rearm_threshold_mm);
+                if (same_dir_push || same_dir_pull)
+                {
+                    axis1_crawl.wait_rearm = false;
                 }
             }
 
-            if (axis1_phase == Axis1Phase::Open2Wait) {
-                cylinder1_cmd = cyl1_clamp;
-                cylinder2_cmd = cyl2_open;
-                axis1_pause_mirror = true;
-                if ((now_ms - axis1_phase_t0) >= axis1_open_delay_ms) {
-                    axis1_phase = Axis1Phase::FastMove;
-                    axis1_phase_t0 = now_ms;
+            if (axis1_crawl.phase == CrawlState::Phase::Follow)
+            {
+                const double axis1_raw_cmd_abs = axis1_base_abs + axis1_hand_delta_mm;
+                const double axis1_cmd_abs = axis1_crawl.window_active
+                    ? clamp_double(axis1_raw_cmd_abs, axis1_min_abs, axis1_max_abs)
+                    : axis1_raw_cmd_abs;
+                const double axis1_delta_rel = axis1_cmd_abs - plc_init_pos[0] - axis1_crawl.base_rel;
+                pos[0] = axis1_cmd_abs - plc_init_pos[0];
+                pos[1] = axis1_crawl.rot_base_rel + (handle_axis1.fJoints2[1] - axis1_crawl.rot_ref) * axis_rot_scale_deg;
+                pos[2] = axis3_base_rel + axis1_delta_rel;
+                pos[4] = axis5_base_rel + axis1_delta_rel;
+
+                if (!axis6_independent)
+                {
+                    pos[5] = axis6_mirror_base_rel + axis1_delta_rel;
+                    cylinder3_cmd = cyl3_follow_release;
+                    cylinder4_cmd = cyl4_follow_release;
                 }
-            } else if (axis1_phase == Axis1Phase::FastMove) {
+
+                if (axis1_crawl.window_active && !axis1_crawl.wait_rearm)
+                {
+                    if ((axis1_hand_dir > 0) && (std::abs(axis1_abs - axis1_crawl.end_abs) <= crawl_arrive_tol_mm))
+                    {
+                        axis1_crawl.target_abs = axis1_crawl.start_abs;
+                        axis1_crawl.phase = CrawlState::Phase::SwitchWait;
+                        axis1_crawl.phase_t0 = now_ms;
+                        axis1_crawl.rearm_dir = 1;
+                    }
+                    else if ((axis1_hand_dir < 0) && (std::abs(axis1_abs - axis1_crawl.start_abs) <= crawl_arrive_tol_mm))
+                    {
+                        axis1_crawl.target_abs = axis1_crawl.end_abs;
+                        axis1_crawl.phase = CrawlState::Phase::SwitchWait;
+                        axis1_crawl.phase_t0 = now_ms;
+                        axis1_crawl.rearm_dir = -1;
+                    }
+                }
+            }
+            else if (axis1_crawl.phase == CrawlState::Phase::SwitchWait)
+            {
                 cylinder1_cmd = cyl1_clamp;
                 cylinder2_cmd = cyl2_open;
-                axis1_pause_mirror = true;
+                if ((now_ms - axis1_crawl.phase_t0) >= crawl_switch_delay_ms)
+                {
+                    axis1_crawl.phase = CrawlState::Phase::FastMove;
+                    axis1_crawl.phase_t0 = now_ms;
+                }
+            }
+            else if (axis1_crawl.phase == CrawlState::Phase::FastMove)
+            {
+                cylinder1_cmd = cyl1_clamp;
+                cylinder2_cmd = cyl2_open;
                 axis1_fast_return = true;
-
-                pos[0] = axis1_target_abs - plc_init_pos[0];
-
-                a.ADSRead((char*)"G.Act_pos", sizeof(plc_act_pos), &plc_act_pos);
-                const double axis1_abs2 = plc_act_pos[0] + plc_init_pos[0];
-                if (std::abs(axis1_abs2 - axis1_target_abs) < axis1_tol_mm) {
-                    axis1_phase = Axis1Phase::Clamp2Wait;
-                    axis1_phase_t0 = now_ms;
+                pos[0] = axis1_crawl.target_abs - plc_init_pos[0];
+                if (std::abs(axis1_abs - axis1_crawl.target_abs) <= crawl_arrive_tol_mm)
+                {
+                    axis1_crawl.phase = CrawlState::Phase::ClampWait;
+                    axis1_crawl.phase_t0 = now_ms;
                 }
-            } else if (axis1_phase == Axis1Phase::Clamp2Wait) {
+            }
+            else if (axis1_crawl.phase == CrawlState::Phase::ClampWait)
+            {
                 cylinder1_cmd = cyl1_clamp;
                 cylinder2_cmd = cyl2_clamp;
-                axis1_pause_mirror = true;
-                if ((now_ms - axis1_phase_t0) >= axis1_clamp_delay_ms) {
-                    axis1_phase = Axis1Phase::Open1Wait;
-                    axis1_phase_t0 = now_ms;
+                if ((now_ms - axis1_crawl.phase_t0) >= crawl_clamp_delay_ms)
+                {
+                    axis1_crawl.phase = CrawlState::Phase::RestoreWait;
+                    axis1_crawl.phase_t0 = now_ms;
                 }
-            } else if (axis1_phase == Axis1Phase::Open1Wait) {
+            }
+            else if (axis1_crawl.phase == CrawlState::Phase::RestoreWait)
+            {
                 cylinder1_cmd = cyl1_open;
                 cylinder2_cmd = cyl2_clamp;
-                axis1_pause_mirror = true;
-                if ((now_ms - axis1_phase_t0) >= axis1_open_delay_ms) {
-                    sync.Sync(20);
+                if ((now_ms - axis1_crawl.phase_t0) >= crawl_switch_delay_ms)
+                {
+                    sync_axis1(20, true, axis1_crawl.rearm_dir);
                 }
             }
 
-            a.ADSWrite((char*)"G.refer", sizeof(pos), &pos);
+            const double axis6_abs = plc_act_pos[5] + plc_init_pos[5];
+            const double axis6_min_abs = (axis6_crawl.start_abs < axis6_crawl.end_abs) ? axis6_crawl.start_abs : axis6_crawl.end_abs;
+            const double axis6_max_abs = (axis6_crawl.start_abs > axis6_crawl.end_abs) ? axis6_crawl.start_abs : axis6_crawl.end_abs;
+            const double axis6_base_abs = axis6_crawl.base_rel + plc_init_pos[5];
+            const double axis6_hand_delta_mm = (handle_axis6.fJoints2[0] - axis6_crawl.handle_ref) * k_handle_to_mm * axis_push_sign;
+            const int axis6_hand_dir = hand_dir_from_delta(axis6_hand_delta_mm, crawl_trigger_deadband_mm);
+
+            if (axis6_crawl.enabled)
+            {
+                if (axis6_crawl.wait_rearm)
+                {
+                    const bool same_dir_push = (axis6_crawl.rearm_dir > 0) && (axis6_hand_delta_mm > crawl_rearm_threshold_mm);
+                    const bool same_dir_pull = (axis6_crawl.rearm_dir < 0) && (axis6_hand_delta_mm < -crawl_rearm_threshold_mm);
+                    if (same_dir_push || same_dir_pull)
+                    {
+                        axis6_crawl.wait_rearm = false;
+                    }
+                }
+
+                if (axis6_crawl.phase == CrawlState::Phase::Follow)
+                {
+                    const double axis6_cmd_abs = clamp_double(axis6_base_abs + axis6_hand_delta_mm, axis6_min_abs, axis6_max_abs);
+                    pos[5] = axis6_cmd_abs - plc_init_pos[5];
+                    pos[6] = axis6_crawl.rot_base_rel + (handle_axis6.fJoints2[1] - axis6_crawl.rot_ref) * axis_rot_scale_deg;
+                    cylinder3_cmd = cyl3_open;
+                    cylinder4_cmd = cyl4_clamp;
+
+                    if (!axis6_crawl.wait_rearm)
+                    {
+                        if ((axis6_hand_dir > 0) && (std::abs(axis6_abs - axis6_crawl.end_abs) <= crawl_arrive_tol_mm))
+                        {
+                            axis6_crawl.target_abs = axis6_crawl.start_abs;
+                            axis6_crawl.phase = CrawlState::Phase::SwitchWait;
+                            axis6_crawl.phase_t0 = now_ms;
+                            axis6_crawl.rearm_dir = 1;
+                        }
+                        else if ((axis6_hand_dir < 0) && (std::abs(axis6_abs - axis6_crawl.start_abs) <= crawl_arrive_tol_mm))
+                        {
+                            axis6_crawl.target_abs = axis6_crawl.end_abs;
+                            axis6_crawl.phase = CrawlState::Phase::SwitchWait;
+                            axis6_crawl.phase_t0 = now_ms;
+                            axis6_crawl.rearm_dir = -1;
+                        }
+                    }
+                }
+                else if (axis6_crawl.phase == CrawlState::Phase::SwitchWait)
+                {
+                    cylinder3_cmd = cyl3_clamp;
+                    cylinder4_cmd = cyl4_open;
+                    if ((now_ms - axis6_crawl.phase_t0) >= crawl_switch_delay_ms)
+                    {
+                        axis6_crawl.phase = CrawlState::Phase::FastMove;
+                        axis6_crawl.phase_t0 = now_ms;
+                    }
+                }
+                else if (axis6_crawl.phase == CrawlState::Phase::FastMove)
+                {
+                    cylinder3_cmd = cyl3_clamp;
+                    cylinder4_cmd = cyl4_open;
+                    axis6_fast_retract = true;
+                    pos[5] = axis6_crawl.target_abs - plc_init_pos[5];
+                    if (std::abs(axis6_abs - axis6_crawl.target_abs) <= crawl_arrive_tol_mm)
+                    {
+                        axis6_crawl.phase = CrawlState::Phase::ClampWait;
+                        axis6_crawl.phase_t0 = now_ms;
+                    }
+                }
+                else if (axis6_crawl.phase == CrawlState::Phase::ClampWait)
+                {
+                    cylinder3_cmd = cyl3_clamp;
+                    cylinder4_cmd = cyl4_clamp;
+                    if ((now_ms - axis6_crawl.phase_t0) >= crawl_clamp_delay_ms)
+                    {
+                        axis6_crawl.phase = CrawlState::Phase::RestoreWait;
+                        axis6_crawl.phase_t0 = now_ms;
+                    }
+                }
+                else if (axis6_crawl.phase == CrawlState::Phase::RestoreWait)
+                {
+                    cylinder3_cmd = cyl3_open;
+                    cylinder4_cmd = cyl4_clamp;
+                    if ((now_ms - axis6_crawl.phase_t0) >= crawl_switch_delay_ms)
+                    {
+                        sync_axis6(20, false, true, axis6_crawl.rearm_dir);
+                    }
+                }
+            }
+
+            write_refer();
         }
 
-        // Write IO (after state machine updates)
-        if (!freeze_active) {
-            cylinder3_cmd = (cylinder1_cmd == cyl1_open) ? cyl3_clamp : cyl3_open;
-            cylinder4_cmd = (cylinder2_cmd == cyl2_clamp) ? cyl4_open : cyl4_clamp;
-            a.ADSWrite((char*)"G.cylinder1_value", sizeof(cylinder1_cmd), &cylinder1_cmd);
-            a.ADSWrite((char*)"G.cylinder2_value", sizeof(cylinder2_cmd), &cylinder2_cmd);
-            a.ADSWrite((char*)"G.cylinder3_value", sizeof(cylinder3_cmd), &cylinder3_cmd);
-            a.ADSWrite((char*)"G.cylinder4_value", sizeof(cylinder4_cmd), &cylinder4_cmd);
+        if (!freeze_active)
+        {
+            ads.ADSWrite((char*)"G.cylinder1_value", sizeof(cylinder1_cmd), &cylinder1_cmd);
+            ads.ADSWrite((char*)"G.cylinder2_value", sizeof(cylinder2_cmd), &cylinder2_cmd);
+            ads.ADSWrite((char*)"G.cylinder3_value", sizeof(cylinder3_cmd), &cylinder3_cmd);
+            ads.ADSWrite((char*)"G.cylinder4_value", sizeof(cylinder4_cmd), &cylinder4_cmd);
         }
-        a.ADSWrite((char*)"G.axis1_fast_return", sizeof(axis1_fast_return), &axis1_fast_return);
+
+        ads.ADSWrite((char*)"G.axis1_fast_return", sizeof(axis1_fast_return), &axis1_fast_return);
+        ads.ADSWrite((char*)"G.axis6_fast_retract", sizeof(axis6_fast_retract), &axis6_fast_retract);
     }
 
-    handle.close();
+    handle_axis1.close();
+    handle_axis6.close();
     return 0;
 }

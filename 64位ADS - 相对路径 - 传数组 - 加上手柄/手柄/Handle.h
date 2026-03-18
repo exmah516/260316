@@ -16,6 +16,7 @@ struct USERData
 class Handle
 {
 public:
+	explicit Handle(DWORD serial = 582);
 	bool bQuit = false;
 	bool bForceEnable = false;
 	bool bPause = false;
@@ -26,13 +27,30 @@ public:
 	unsigned char buttons2;
 	long encoders2[2];
 
-	bool init();//����0˵����ʼ��ʧ�ܣ�����1˵���ɹ�
+	bool init();
+	bool init(DWORD serial);
+	bool poll();
 
-	void close();//�ر��豸
+	void close();
 
-	void setforce(double F, double N);//������������,��������������ģ����������������ʱ���
+	void setforce(double F, double N);
 
 	void setforce_axis(double F, int axis, double N);
 
-	void showinfo();//��ʾ״̬
+	void showinfo(const char* label = nullptr);
+
+	DWORD serial() const
+	{
+		return serial_number_;
+	}
+
+	bool is_open() const
+	{
+		return iID1 >= 0;
+	}
+
+private:
+	DWORD serial_number_;
+	static LONG s_open_devices;
+	static bool s_servo_loop_started;
 };
