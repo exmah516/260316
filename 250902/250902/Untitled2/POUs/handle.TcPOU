@@ -24,12 +24,14 @@ VAR
 	init_done : BOOL := FALSE;
 	all_enabled : BOOL;
 	all_powered : BOOL;
+	has_axis_error : BOOL;
 	hold_active : BOOL := FALSE;
 	
-	// 软限位参数
+	// software limit parameters
 	right_slimit : ARRAY[1..7] OF LREAL;
 	rslimit_distance	: ARRAY[1..7] OF LREAL := [30, 10, 10, 10, 10, 30, 15];
 	left_slimit  : ARRAY[1..7] OF LREAL;
+	left_from_right_distance : ARRAY[1..7] OF LREAL := [120.0, 0.0, 523.5, 0.0, 548.0, 534.0, 0.0];
 	slimit_enable : ARRAY[1..7] OF BOOL := [TRUE, FALSE, TRUE, FALSE, TRUE, TRUE, FALSE];
 END_VAR
 
@@ -39,9 +41,11 @@ END_VAR
 	init_done := FALSE;
 	G.handle_reinit_done := FALSE;
 	G.handle_reinit_req := FALSE;
+	G.estop_hold_req := TRUE;
 END_IF
 
 IF NOT init_done THEN
+	G.estop_hold_req := TRUE;
 	all_enabled := TRUE;
 	FOR i:=1 TO 7 DO
 		G.SetPointGenEnable[i](Axis:=G.axis[i], Execute:=TRUE);
@@ -51,40 +55,50 @@ IF NOT init_done THEN
 	END_FOR
 	
 	IF all_enabled THEN
-		// 初始化位置平滑缓冲区，避免突变
+		// initialize buffered references from current actual position
 		FOR j:=1 TO 7 DO
-	
+			G.Act_pos[j] := G.axis[j].NcToPlc.ActPos - G.init_pos[j];
 			G.ref_slow[j] := G.Act_pos[j]; 
 			G.act_h[j] := G.Act_pos[j]; 
+			G.act_hf[j] := G.Act_pos[j];
 			G.refer[j] := G.Act_pos[j];
 			
 			FOR k:=1 TO 30 DO
 				act_hh[j][k] := G.Act_pos[j];
 			END_FOR
 			
-			// 初始化软限位值
+			// initialize software limits:
+			//   right_slimit: forbid further motion toward the right limit
+			//   left_slimit : forbid further motion away from the right limit
 			IF slimit_enable[j] THEN
 				right_slimit[j] := G.rightlimit[j] - rslimit_distance[j];
-				CASE j OF
-				1: left_slimit[j] := right_slimit[j] - 90.0;
-				3: left_slimit[j] := right_slimit[j] - 655.0;
-				5: left_slimit[j] := right_slimit[j] - 670.0;
-				6: left_slimit[j] := right_slimit[j] - 690.0;
-				END_CASE
+				IF left_from_right_distance[j] > 0.0 THEN
+					left_slimit[j] := G.rightlimit[j] - left_from_right_distance[j];
+				ELSE
+					left_slimit[j] := -1.0E30;
+				END_IF
 			END_IF
 		END_FOR
 		
 		init_done := TRUE;
 		G.handle_reinit_done := TRUE;
 	END_IF
-	RETURN; // 等待 Enable 完成后再开始 Feed
+	RETURN; // wait until setpoint generator enable completes
 END_IF
 
-// 平滑参考与速度门限（窗口平均 20 点）
+// smooth reference and apply velocity limiting
 all_powered := TRUE;
 FOR i:=1 TO 7 DO
 	IF NOT G.power_output[i].Done THEN
 		all_powered := FALSE;
+		EXIT;
+	END_IF
+END_FOR
+
+has_axis_error := FALSE;
+FOR i:=1 TO 7 DO
+	IF G.axis[i].Status.Error OR G.power_output[i].Error OR G.reset_output[i].Error THEN
+		has_axis_error := TRUE;
 		EXIT;
 	END_IF
 END_FOR
@@ -102,18 +116,34 @@ IF NOT all_powered THEN
 			act_hh[j][k] := G.Act_pos[j];
 		END_FOR
 	END_FOR
+
+	IF has_axis_error THEN
+		G.gen_state := _err;
+		RETURN;
+	END_IF
 	RETURN;
 END_IF
 
 IF hold_active THEN
 	hold_active := FALSE;
-	G.estop_hold_req := FALSE;
 	G.handle_reinit_done := FALSE;
 	G.handle_reinit_req := TRUE;
+	G.estop_hold_req := TRUE;
+	IF has_axis_error THEN
+		G.gen_state := _err;
+	END_IF
+	RETURN;
 END_IF
 
+IF has_axis_error THEN
+	G.estop_hold_req := TRUE;
+	G.gen_state := _err;
+	RETURN;
+END_IF
+
+G.estop_hold_req := FALSE;
+
 FOR j:=1 TO 7 DO
-	
 	G.Act_pos[j]:=G.axis[j].NcToPlc.ActPos-G.init_pos[j];
 
 	v_step := G.v_limit[j];
@@ -130,15 +160,14 @@ FOR j:=1 TO 7 DO
 		act_hh[j][22-k]:=act_hh[j][21-k];
 	END_FOR
 
-	// 软限位保护：在应用速度限制前，先对 G.refer 进行限位裁剪
-	// 这样可以屏蔽掉非法的方向增量，同时保留合法的方向
+	// clip illegal reference growth at software limits before rate limiting
 	IF slimit_enable[j] THEN
-		// 当前位置 >= 右限位 且 试图继续向右(增大)
+		// at right limit: ignore further positive motion
 		IF (G.axis[j].NcToPlc.ActPos >= right_slimit[j]) AND (G.refer[j] > G.ref_slow[j]) THEN
-			G.refer[j] := G.ref_slow[j]; // 保持不变，忽略增大
-		// 当前位置 <= 左限位 且 试图继续向左(减小)
+			G.refer[j] := G.ref_slow[j]; // hold position
+		// at away limit: ignore further negative motion
 		ELSIF (G.axis[j].NcToPlc.ActPos <= left_slimit[j]) AND (G.refer[j] < G.ref_slow[j]) THEN
-			G.refer[j] := G.ref_slow[j]; // 保持不变，忽略减小
+			G.refer[j] := G.ref_slow[j]; // hold position
 		END_IF
 	END_IF
 
@@ -151,7 +180,6 @@ FOR j:=1 TO 7 DO
 	END_IF
 
 	act_hh[j][1]:=G.ref_slow[j];
-
 	G.act_h[j]:=0;
 	
 	FOR i:=1 TO avg_window DO
@@ -159,8 +187,8 @@ FOR j:=1 TO 7 DO
 	END_FOR
 END_FOR
 
-FOR i:=1 TO 7 DO      
-	// 检查驱动器错误并复位
+FOR i:=1 TO 7 DO
+	// latch drive errors for reset logic
 	IF G.power_output[i].Error THEN
 		G.axis_Reset[i].Execute := TRUE;
 		G.flag:=i;
@@ -168,23 +196,19 @@ FOR i:=1 TO 7 DO
 	END_IF
 END_FOR
 
-//各关节跟随
+// feed smoothed positions to the external setpoint generator
 FOR i:=1 TO 7 DO
-	// 直接使用平滑后的参考位置，不叠加 PID 修正量
-	// 注意：G.init_pos[i] 是相对零点的偏移量
+	// convert relative smoothed position back to absolute axis coordinates
 	pos_abs := G.act_h[i] + G.init_pos[i];
 
 	MC_ExtSetPointGenFeed(
 	Position:= pos_abs,
-	//Velocity:= 0, 
-	Velocity:= 0, 
+	Velocity:= 0,
 	Acceleration:=0,
 	Direction:= 1,
 	Axis:= G.axis[i]);
 	G.act_hf[i]:=G.act_h[i];
-END_FOR	
-
-
+END_FOR
 
 ]]></ST>
     </Implementation>

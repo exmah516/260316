@@ -25,22 +25,17 @@ END_VAR
 
 ]]></Declaration>
     <Implementation>
-      <ST><![CDATA[(*
-FUNCTION_BLOCK: clear_err
-功能说明:
-  清错完成后的过渡态：
-  - 若仍有错误则回到 _err
-  - 若电源未完成则回到 _init 重新上电/自检
-  - 若条件满足，则请求 handle 重新初始化参考缓冲区，并进入 _handle
-
-说明:
-  这里不做自动 Jog/回零动作，避免未知机械位置下误动作；
-  需要机械干预/单轴点动时，可在后续专门实现“手动清障”流程。
+      <ST><![CDATA[(* 
+Post-error recovery:
+  - keep the handle input frozen
+  - cold start or a fresh _init cycle must return to _init until self-check is completed
+  - otherwise wait until errors are gone and all axes are powered again
+  - then reinitialize handle references from the current position
 *)
 
 has_err := FALSE;
 FOR i:=1 TO 7 DO
-	IF G.axis[i].Status.Error OR G.power_output[i].Error THEN
+	IF G.axis[i].Status.Error OR G.power_output[i].Error OR G.reset_output[i].Error THEN
 		has_err := TRUE;
 		EXIT;
 	END_IF
@@ -54,20 +49,19 @@ FOR i:=1 TO 7 DO
 	END_IF
 END_FOR
 
+G.estop_hold_req := TRUE;
+
 CASE step OF
 0:
-	// 进入过渡态：撤销所有边沿触发命令，给 handle 准备一个稳定的起点
 	FOR i:=1 TO 7 DO
 		G.SetPointGenEnable[i].Execute := FALSE;
 		G.SetPointGenDisable[i].Execute := FALSE;
 		G.axis_Reset[i].Execute := FALSE;
 	END_FOR
-	settle_timer(IN:=TRUE, PT:=T#200MS);
+	settle_timer(IN:=FALSE);
 	step := 1;
 
 1:
-	settle_timer(IN:=TRUE);
-
 	IF has_err THEN
 		settle_timer(IN:=FALSE);
 		step := 0;
@@ -75,13 +69,22 @@ CASE step OF
 		RETURN;
 	END_IF
 
-	IF NOT all_powered THEN
+	IF NOT G.self_check_done THEN
 		settle_timer(IN:=FALSE);
 		step := 0;
 		G.gen_state := _init;
 		RETURN;
 	END_IF
 
+	IF NOT all_powered THEN
+		FOR i:=1 TO 7 DO
+			G.power_[i].Enable := TRUE;
+		END_FOR
+		settle_timer(IN:=FALSE);
+		RETURN;
+	END_IF
+
+	settle_timer(IN:=TRUE, PT:=T#200MS);
 	IF settle_timer.Q THEN
 		settle_timer(IN:=FALSE);
 		step := 0;

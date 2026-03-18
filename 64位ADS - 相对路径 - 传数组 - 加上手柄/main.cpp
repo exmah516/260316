@@ -217,7 +217,10 @@ int main(int argc, char* argv[])
     const double k_handle_to_mm = 500.0 * (75.0 / 50.0);
     const double axis_push_sign = -1.0;
     const double axis_rot_scale_deg = Rad;
-    const unsigned char axis6_arm_button_mask = 0x40;
+    const unsigned char button_mask_b0 = 0x01;
+    const unsigned char button_mask_b6 = 0x40;
+    const unsigned char axis1_pause_button_mask = button_mask_b6 | button_mask_b0;
+    const unsigned char axis6_arm_button_mask = button_mask_b6 | button_mask_b0;
 
     const double crawl_window_start_offset_mm = 56.0;
     const double crawl_window_size_mm = 30.0;
@@ -589,7 +592,7 @@ int main(int argc, char* argv[])
         axis1_fast_return = false;
         axis6_fast_retract = false;
 
-        const bool pause_pressed = (handle_axis1.buttons2 & 0x01) != 0;
+        const bool pause_pressed = (handle_axis1.buttons2 & axis1_pause_button_mask) != 0;
         const bool axis6_arm_pressed = (handle_axis6.buttons2 & axis6_arm_button_mask) != 0;
 
         if (axis6_arm_pressed && !axis6_arm_pressed_prev)
@@ -628,6 +631,7 @@ int main(int argc, char* argv[])
         {
             freeze_active = true;
             control_active = false;
+            std::cout << "Handle582 pause: ON." << std::endl;
         }
         else if (!pause_pressed && pause_pressed_prev)
         {
@@ -635,6 +639,15 @@ int main(int argc, char* argv[])
             if (!estop_hold_active && sync_all(20))
             {
                 control_active = true;
+                std::cout << "Handle582 pause: OFF, control resumed." << std::endl;
+            }
+            else if (estop_hold_active)
+            {
+                std::cout << "Handle582 pause released, waiting for PLC hold to clear." << std::endl;
+            }
+            else
+            {
+                std::cout << "Handle582 pause released, resync pending." << std::endl;
             }
         }
         pause_pressed_prev = pause_pressed;
@@ -732,16 +745,6 @@ int main(int argc, char* argv[])
         {
             std::cout << "Handle587 Btns: 0x" << std::hex << static_cast<int>(handle_axis6.buttons2) << std::dec << std::endl;
             last_btn_axis6 = handle_axis6.buttons2;
-        }
-
-        if ((handle_axis6.buttons2 & 0x01) != 0 && !axis6_arm_pressed)
-        {
-            static bool axis6_wrong_button_notice = false;
-            if (!axis6_wrong_button_notice)
-            {
-                std::cout << "Handle587 note: current press is b0 (0x01). Axis6 arm is configured for b6 (0x40, state 0x46)." << std::endl;
-                axis6_wrong_button_notice = true;
-            }
         }
 
         if (!estop_hold_active &&
@@ -894,7 +897,9 @@ int main(int argc, char* argv[])
             {
                 const bool same_dir_push = (axis1_crawl.rearm_dir > 0) && (axis1_hand_delta_mm > crawl_rearm_threshold_mm);
                 const bool same_dir_pull = (axis1_crawl.rearm_dir < 0) && (axis1_hand_delta_mm < -crawl_rearm_threshold_mm);
-                if (same_dir_push || same_dir_pull)
+                const bool reverse_dir_push = (axis1_crawl.rearm_dir < 0) && (axis1_hand_delta_mm > crawl_rearm_threshold_mm);
+                const bool reverse_dir_pull = (axis1_crawl.rearm_dir > 0) && (axis1_hand_delta_mm < -crawl_rearm_threshold_mm);
+                if (same_dir_push || same_dir_pull || reverse_dir_push || reverse_dir_pull)
                 {
                     axis1_crawl.wait_rearm = false;
                 }
@@ -992,7 +997,9 @@ int main(int argc, char* argv[])
                 {
                     const bool same_dir_push = (axis6_crawl.rearm_dir > 0) && (axis6_hand_delta_mm > crawl_rearm_threshold_mm);
                     const bool same_dir_pull = (axis6_crawl.rearm_dir < 0) && (axis6_hand_delta_mm < -crawl_rearm_threshold_mm);
-                    if (same_dir_push || same_dir_pull)
+                    const bool reverse_dir_push = (axis6_crawl.rearm_dir < 0) && (axis6_hand_delta_mm > crawl_rearm_threshold_mm);
+                    const bool reverse_dir_pull = (axis6_crawl.rearm_dir > 0) && (axis6_hand_delta_mm < -crawl_rearm_threshold_mm);
+                    if (same_dir_push || same_dir_pull || reverse_dir_push || reverse_dir_pull)
                     {
                         axis6_crawl.wait_rearm = false;
                     }

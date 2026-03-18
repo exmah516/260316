@@ -12,31 +12,48 @@ VAR
 	pulse_timer:TON;
 	retry_timer:TON;
 	has_err:BOOL;
+	has_power_not_ready:BOOL;
+	has_other_error:BOOL;
+	all_powered:BOOL;
+	power_not_ready_errid : UDINT := 16#00004650;
 END_VAR
 ]]></Declaration>
     <Implementation>
-      <ST><![CDATA[(*
-FUNCTION_BLOCK: err
-功能说明:
-  故障安全态：停止外部给定(SetPointGenDisable)，并周期性发出 MC_Reset 清错请求。
-  错误清除后跳转到 _clear_err 做一次恢复初始化，再进入 _handle。
-
-实现约束:
-  MC_Reset 功能块实例为 G.axis_Reset[i]，其调用在 MAIN 的 RESETED() 中统一完成；
-  本 FB 仅控制 G.axis_Reset[i].Execute 的上升沿/脉冲，避免每周期重复触发。
+      <ST><![CDATA[(* 
+Error recovery state:
+  - disable external setpoint generation and keep estop hold active
+  - if the only active power error is 16#00004650, recover by cycling MC_Power.Enable
+  - other errors still use MC_Reset
+  - leave _err only after errors are gone and all axes are powered again
 *)
 
 has_err := FALSE;
+has_power_not_ready := FALSE;
+has_other_error := FALSE;
+all_powered := TRUE;
+
 FOR i:=1 TO 7 DO
-	IF G.axis[i].Status.Error OR G.power_output[i].Error THEN
+	IF NOT G.power_output[i].Done THEN
+		all_powered := FALSE;
+	END_IF
+
+	IF G.axis[i].Status.Error OR G.power_output[i].Error OR G.reset_output[i].Error THEN
 		has_err := TRUE;
-		EXIT;
+
+		IF G.power_output[i].Error AND (G.power_output[i].ErrorID = power_not_ready_errid) THEN
+			has_power_not_ready := TRUE;
+		END_IF
+
+		IF G.axis[i].Status.Error OR G.reset_output[i].Error OR (G.power_output[i].Error AND (G.power_output[i].ErrorID <> power_not_ready_errid)) THEN
+			has_other_error := TRUE;
+		END_IF
 	END_IF
 END_FOR
 
+G.estop_hold_req := TRUE;
+
 CASE step OF
 0:
-	// 进入故障态：先停外部给定，并清空 Reset.Execute，准备后续脉冲清错
 	FOR i:=1 TO 7 DO
 		G.SetPointGenEnable[i].Execute := FALSE;
 		G.SetPointGenDisable[i].Execute := TRUE;
@@ -47,21 +64,35 @@ CASE step OF
 	step := 1;
 
 1:
-	// 禁用请求只需上升沿，避免每周期重复触发
 	FOR i:=1 TO 7 DO
 		G.SetPointGenDisable[i].Execute := FALSE;
 	END_FOR
 
-	// 错误已清除：进入清错过渡态统一恢复
-	IF NOT has_err THEN
+	IF (NOT has_err) AND all_powered THEN
 		step := 0;
 		G.gen_state := _clear_err;
 		RETURN;
 	END_IF
 
-	// 对处于 Error 的轴发出一次清错脉冲
+	IF NOT has_err THEN
+		FOR i:=1 TO 7 DO
+			G.axis_Reset[i].Execute := FALSE;
+			G.power_[i].Enable := TRUE;
+		END_FOR
+		retry_timer(IN:=TRUE, PT:=T#2S);
+		step := 11;
+		RETURN;
+	END_IF
+
+	IF has_power_not_ready AND NOT has_other_error THEN
+		pulse_timer(IN:=TRUE, PT:=T#200MS);
+		retry_timer(IN:=FALSE);
+		step := 10;
+		RETURN;
+	END_IF
+
 	FOR i:=1 TO 7 DO
-		IF G.axis[i].Status.Error OR G.power_output[i].Error THEN
+		IF G.axis[i].Status.Error OR G.power_output[i].Error OR G.reset_output[i].Error THEN
 			G.axis_Reset[i].Execute := TRUE;
 		END_IF
 	END_FOR
@@ -82,10 +113,55 @@ CASE step OF
 3:
 	retry_timer(IN:=TRUE);
 
-	IF NOT has_err THEN
+	IF (NOT has_err) AND all_powered THEN
 		retry_timer(IN:=FALSE);
 		step := 0;
 		G.gen_state := _clear_err;
+		RETURN;
+	END_IF
+
+	IF retry_timer.Q THEN
+		retry_timer(IN:=FALSE);
+		step := 1;
+	END_IF
+
+10:
+	FOR i:=1 TO 7 DO
+		G.axis_Reset[i].Execute := FALSE;
+		IF G.power_output[i].Error AND (G.power_output[i].ErrorID = power_not_ready_errid) THEN
+			G.power_[i].Enable := FALSE;
+		ELSE
+			G.power_[i].Enable := TRUE;
+		END_IF
+	END_FOR
+
+	pulse_timer(IN:=TRUE, PT:=T#200MS);
+	IF pulse_timer.Q THEN
+		pulse_timer(IN:=FALSE);
+		FOR i:=1 TO 7 DO
+			G.power_[i].Enable := TRUE;
+		END_FOR
+		retry_timer(IN:=TRUE, PT:=T#3S);
+		step := 11;
+	END_IF
+
+11:
+	FOR i:=1 TO 7 DO
+		G.power_[i].Enable := TRUE;
+	END_FOR
+
+	retry_timer(IN:=TRUE);
+
+	IF (NOT has_err) AND all_powered THEN
+		retry_timer(IN:=FALSE);
+		step := 0;
+		G.gen_state := _clear_err;
+		RETURN;
+	END_IF
+
+	IF has_err THEN
+		retry_timer(IN:=FALSE);
+		step := 1;
 		RETURN;
 	END_IF
 

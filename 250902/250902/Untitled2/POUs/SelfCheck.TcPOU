@@ -59,6 +59,33 @@ FUNCTION_BLOCK: SelfCheck
 *)
 
 // 统计：目标轴是否全部进入同步等待阶段（stu>=6）
+IF G.selfcheck_reset_req THEN
+    FOR i:=1 TO 7 DO
+        stu[i] := 0;
+        mv_vel_exec[i] := FALSE;
+        mv_vel_vel[i] := 0.0;
+        mv_abs_exec[i] := FALSE;
+        mv_abs_pos[i] := 0.0;
+        mv_abs_vel[i] := 0.0;
+        set_pos_exec[i] := FALSE;
+        debug_limit_pos[i] := 0.0;
+        debug_init_target_pos[i] := 0.0;
+        scan_start_pos[i] := 0.0;
+        G.selfcheck_stu[i] := 0;
+        wait_timer[i](IN:=FALSE);
+        set_pos_timer[i](IN:=FALSE);
+        G.SetPointGenDisable[i](Axis:=G.axis[i], Execute:=FALSE);
+        G.axis_Reset[i](Axis:=G.axis[i], Execute:=FALSE);
+        fb_move_vel[i](Axis:=G.axis[i], Execute:=FALSE);
+        fb_move_abs[i](Axis:=G.axis[i], Execute:=FALSE);
+        fb_stop[i](Axis:=G.axis[i], Execute:=FALSE);
+        fb_set_pos[i](Axis:=G.axis[i], Execute:=FALSE);
+    END_FOR
+    G.selfcheck_all_reach_limit := FALSE;
+    G.selfcheck_all_powered_target := FALSE;
+    G.selfcheck_reset_req := FALSE;
+END_IF
+
 all_reach_limit := TRUE;
 FOR i:=1 TO 7 DO
     IF target_axes[i] AND stu[i] < 6 THEN
@@ -183,7 +210,7 @@ FOR i:=1 TO 7 DO
             END_IF
         
 		6: // 步骤6：同步等待（全部目标轴都到达后，同时放行回退）
-            IF all_reach_limit AND all_powered_target THEN
+            IF all_reach_limit THEN
                 stu[i] := 7;
             END_IF
             
@@ -205,7 +232,7 @@ FOR i:=1 TO 7 DO
 			END_IF
 
         71: // 步骤71：等待位置同步完成，然后启动回退
-			set_pos_timer[i](IN:= NOT fb_set_pos[i].Done, PT:=T#2s);
+			set_pos_timer[i](IN:= NOT fb_set_pos[i].Done, PT:=T#200ms);
             fb_set_pos[i](Axis:=G.axis[i], Execute:=set_pos_exec[i]);
             
             IF fb_set_pos[i].Done THEN
@@ -231,7 +258,12 @@ FOR i:=1 TO 7 DO
 			ELSIF set_pos_timer[i].Q THEN
 				set_pos_exec[i] := FALSE;
 				fb_set_pos[i](Axis:=G.axis[i], Execute:=FALSE);
-				stu[i] := 7;
+				debug_limit_pos[i] := G.rightlimit[i];
+				debug_init_target_pos[i] := G.rightlimit[i] + back_dist[i];
+				mv_abs_pos[i] := debug_init_target_pos[i];
+				mv_abs_vel[i] := vel_back;
+				mv_abs_exec[i] := TRUE;
+				stu[i] := 8;
             END_IF
             
         8: // 步骤8：等待回退完成

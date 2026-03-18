@@ -33,6 +33,8 @@ CASE step OF
 		G.axis_Reset[i].Execute := FALSE;
 		G.power_[i].Enable := TRUE;
 	END_FOR
+	G.self_check_done := FALSE;
+	G.selfcheck_reset_req := TRUE;
 
 	init_watchdog(IN:=TRUE, PT:=T#5S);
 	step := 1;

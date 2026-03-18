@@ -4,7 +4,7 @@
     <Declaration><![CDATA[{attribute 'qualified_only'}
 VAR_GLOBAL
 	//专有变量
-	gen_state			:	state;
+	gen_state			:	state := _init;
 	axis				:	ARRAY[1..7] OF axis_REF;
 	power_				:	ARRAY[1..7] OF MC_Power;
 	power_output		:	ARRAY[1..7] OF ST_McOutputs;
@@ -26,6 +26,7 @@ VAR_GLOBAL
     self_check_done     : BOOL := FALSE;
 	handle_reinit_req	: BOOL := FALSE;
 	handle_reinit_done	: BOOL := FALSE;
+	selfcheck_reset_req : BOOL := FALSE;
 	selfcheck_stu		: ARRAY[1..7] OF INT;
 	selfcheck_all_reach_limit : BOOL := FALSE;
 	selfcheck_all_powered_target : BOOL := FALSE;

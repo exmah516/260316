@@ -15,6 +15,20 @@ END_VAR]]></Declaration>
       <ST><![CDATA[FOR i:=1 TO 7 DO
 	G.axis[i]();	
 END_FOR
+
+IF TwinCAT_SystemInfoVarList._TaskInfo[1].FirstCycle THEN
+	G.gen_state := _init;
+	G.self_check_done := FALSE;
+	G.handle_reinit_req := FALSE;
+	G.handle_reinit_done := FALSE;
+	G.estop_hold_req := TRUE;
+	G.selfcheck_reset_req := TRUE;
+	FOR i:=1 TO 7 DO
+		G.SetPointGenEnable[i].Execute := FALSE;
+		G.SetPointGenDisable[i].Execute := FALSE;
+		G.axis_Reset[i].Execute := FALSE;
+	END_FOR
+END_IF
 	
 POWERED();
 SETPOSITIONGEN();
