@@ -111,6 +111,8 @@ enum class StartupPhase
 {
     WaitForEnter,
     ReleaseClamps,
+    MoveAxis5ToReady,
+    ClampCylinder3Wait,
     MoveAxis3ToReady,
     ClampCylinder2Wait,
     MoveAxis3AndAxis5,
@@ -252,6 +254,7 @@ int main(int argc, char* argv[])
     const DWORD crawl_clamp_delay_ms = 50;
     const DWORD startup_clamp_settle_delay_ms = 300;
     const double startup_motion_speed_scale = 0.5;
+    const double startup_axis5_ready_from_right_mm = 425.0;
     const double startup_axis3_ready_from_right_mm = 250.0;
     const double startup_axis3_follow_from_right_mm = 110.0;
     const double startup_axis6_follow_from_right_mm = 50.0;
@@ -1296,9 +1299,11 @@ int main(int argc, char* argv[])
                 pos[5] = startup_axis6_hold_rel;
                 pos[6] = startup_axis7_hold_rel;
 
+                const double startup_axis5_ready_abs = plc_rightlimit[4] - startup_axis5_ready_from_right_mm;
                 const double startup_axis3_ready_abs = plc_rightlimit[2] - startup_axis3_ready_from_right_mm;
                 const double startup_axis3_follow_abs = plc_rightlimit[2] - startup_axis3_follow_from_right_mm;
                 const double startup_axis6_follow_abs = plc_rightlimit[5] - startup_axis6_follow_from_right_mm;
+                const double axis5_abs = plc_act_pos[4] + plc_init_pos[4];
                 const double axis3_abs = plc_act_pos[2] + plc_init_pos[2];
 
                 if (startup_phase == StartupPhase::ReleaseClamps)
@@ -1306,9 +1311,36 @@ int main(int argc, char* argv[])
                     cylinder1_cmd = cyl1_open;
                     cylinder2_cmd = cyl2_open;
                     cylinder3_cmd = cyl3_open;
-                    cylinder4_cmd = cyl4_clamp;
+                    cylinder4_cmd = cyl4_open;
                     if ((now_ms - startup_phase_t0) >= startup_clamp_settle_delay_ms)
                     {
+                        startup_phase = StartupPhase::MoveAxis5ToReady;
+                    }
+                }
+                else if (startup_phase == StartupPhase::MoveAxis5ToReady)
+                {
+                    cylinder1_cmd = cyl1_open;
+                    cylinder2_cmd = cyl2_open;
+                    cylinder3_cmd = cyl3_open;
+                    cylinder4_cmd = cyl4_open;
+                    pos[4] = startup_axis5_ready_abs - plc_init_pos[4];
+                    if (std::abs(axis5_abs - startup_axis5_ready_abs) <= crawl_arrive_tol_mm)
+                    {
+                        startup_phase = StartupPhase::ClampCylinder3Wait;
+                        startup_phase_t0 = now_ms;
+                    }
+                }
+                else if (startup_phase == StartupPhase::ClampCylinder3Wait)
+                {
+                    cylinder1_cmd = cyl1_open;
+                    cylinder2_cmd = cyl2_open;
+                    cylinder3_cmd = cyl3_clamp;
+                    cylinder4_cmd = cyl4_open;
+                    pos[4] = startup_axis5_ready_abs - plc_init_pos[4];
+                    if ((now_ms - startup_phase_t0) >= startup_clamp_settle_delay_ms)
+                    {
+                        startup_axis3_phase2_base_rel = plc_act_pos[2];
+                        startup_axis5_phase2_base_rel = plc_act_pos[4];
                         startup_phase = StartupPhase::MoveAxis3ToReady;
                     }
                 }
@@ -1316,9 +1348,12 @@ int main(int argc, char* argv[])
                 {
                     cylinder1_cmd = cyl1_open;
                     cylinder2_cmd = cyl2_open;
-                    cylinder3_cmd = cyl3_open;
-                    cylinder4_cmd = cyl4_clamp;
-                    pos[2] = startup_axis3_ready_abs - plc_init_pos[2];
+                    cylinder3_cmd = cyl3_clamp;
+                    cylinder4_cmd = cyl4_open;
+                    const double axis3_target_rel = startup_axis3_ready_abs - plc_init_pos[2];
+                    const double axis35_delta_rel = axis3_target_rel - startup_axis3_phase2_base_rel;
+                    pos[2] = axis3_target_rel;
+                    pos[4] = startup_axis5_phase2_base_rel + axis35_delta_rel;
                     if (std::abs(axis3_abs - startup_axis3_ready_abs) <= crawl_arrive_tol_mm)
                     {
                         startup_phase = StartupPhase::ClampCylinder2Wait;
@@ -1329,13 +1364,16 @@ int main(int argc, char* argv[])
                 {
                     cylinder1_cmd = cyl1_open;
                     cylinder2_cmd = cyl2_clamp;
-                    cylinder3_cmd = cyl3_open;
-                    cylinder4_cmd = cyl4_clamp;
-                    pos[2] = startup_axis3_ready_abs - plc_init_pos[2];
+                    cylinder3_cmd = cyl3_clamp;
+                    cylinder4_cmd = cyl4_open;
+                    const double axis3_target_rel = startup_axis3_ready_abs - plc_init_pos[2];
+                    const double axis35_delta_rel = axis3_target_rel - startup_axis3_phase2_base_rel;
+                    pos[2] = axis3_target_rel;
+                    pos[4] = startup_axis5_phase2_base_rel + axis35_delta_rel;
                     if ((now_ms - startup_phase_t0) >= startup_clamp_settle_delay_ms)
                     {
-                        startup_axis3_phase2_base_rel = plc_act_pos[2];
-                        startup_axis5_phase2_base_rel = plc_act_pos[4];
+                        startup_axis3_phase3_base_rel = plc_act_pos[2];
+                        startup_axis5_phase3_base_rel = plc_act_pos[4];
                         startup_phase = StartupPhase::MoveAxis3AndAxis5;
                     }
                 }
@@ -1343,12 +1381,12 @@ int main(int argc, char* argv[])
                 {
                     cylinder1_cmd = cyl1_open;
                     cylinder2_cmd = cyl2_clamp;
-                    cylinder3_cmd = cyl3_open;
-                    cylinder4_cmd = cyl4_clamp;
+                    cylinder3_cmd = cyl3_clamp;
+                    cylinder4_cmd = cyl4_open;
                     const double axis3_target_rel = startup_axis3_follow_abs - plc_init_pos[2];
-                    const double axis35_delta_rel = axis3_target_rel - startup_axis3_phase2_base_rel;
+                    const double axis35_delta_rel = axis3_target_rel - startup_axis3_phase3_base_rel;
                     pos[2] = axis3_target_rel;
-                    pos[4] = startup_axis5_phase2_base_rel + axis35_delta_rel;
+                    pos[4] = startup_axis5_phase3_base_rel + axis35_delta_rel;
                     if (std::abs(axis3_abs - startup_axis3_follow_abs) <= crawl_arrive_tol_mm)
                     {
                         startup_axis3_phase3_base_rel = plc_act_pos[2];
@@ -1361,8 +1399,8 @@ int main(int argc, char* argv[])
                 {
                     cylinder1_cmd = cyl1_open;
                     cylinder2_cmd = cyl2_clamp;
-                    cylinder3_cmd = cyl3_open;
-                    cylinder4_cmd = cyl4_clamp;
+                    cylinder3_cmd = cyl3_clamp;
+                    cylinder4_cmd = cyl4_open;
                     const double axis6_target_rel = startup_axis6_follow_abs - plc_init_pos[5];
                     const double axis356_delta_rel = axis6_target_rel - startup_axis6_phase3_base_rel;
                     pos[2] = startup_axis3_phase3_base_rel + axis356_delta_rel;
