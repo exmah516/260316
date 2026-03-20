@@ -251,6 +251,7 @@ int main(int argc, char* argv[])
     const DWORD crawl_switch_delay_ms = 250;
     const DWORD crawl_clamp_delay_ms = 50;
     const DWORD startup_clamp_settle_delay_ms = 300;
+    const double startup_motion_speed_scale = 0.5;
     const double startup_axis3_ready_from_right_mm = 250.0;
     const double startup_axis3_follow_from_right_mm = 110.0;
     const double startup_axis6_follow_from_right_mm = 50.0;
@@ -316,6 +317,7 @@ int main(int argc, char* argv[])
     double plc_act_pos[7] = { 0 };
     double plc_init_pos[7] = { 0 };
     double plc_rightlimit[7] = { 0 };
+    double plc_v_limit[7] = { 0 };
 
     auto read_plc_state = [&]() -> bool
     {
@@ -329,6 +331,16 @@ int main(int argc, char* argv[])
     auto write_refer = [&]() -> bool
     {
         return ads.ADSWrite((char*)"G.refer", sizeof(pos), pos);
+    };
+
+    auto read_v_limit = [&]() -> bool
+    {
+        return ads.ADSRead((char*)"G.v_limit", sizeof(plc_v_limit), plc_v_limit);
+    };
+
+    auto write_v_limit = [&](const double* values) -> bool
+    {
+        return ads.ADSWrite((char*)"G.v_limit", sizeof(plc_v_limit), (void*)values);
     };
 
     auto load_pos_from_actual = [&]()
@@ -362,6 +374,8 @@ int main(int argc, char* argv[])
     double startup_axis3_phase3_base_rel = 0.0;
     double startup_axis5_phase3_base_rel = 0.0;
     double startup_axis6_phase3_base_rel = 0.0;
+    double startup_v_limit_backup[7] = { 0 };
+    bool startup_v_limit_scaled = false;
 
     CrawlState axis1_crawl;
     CrawlState axis6_crawl;
@@ -655,18 +669,74 @@ int main(int argc, char* argv[])
         startup_axis5_hold_rel = plc_act_pos[4];
         startup_axis6_hold_rel = plc_act_pos[5];
         startup_axis7_hold_rel = plc_act_pos[6];
+        if (!startup_v_limit_scaled)
+        {
+            if (!read_v_limit())
+            {
+                return false;
+            }
+
+            copy_positions(plc_v_limit, startup_v_limit_backup, 7);
+
+            double scaled_v_limit[7] = { 0 };
+            copy_positions(plc_v_limit, scaled_v_limit, 7);
+            scaled_v_limit[2] *= startup_motion_speed_scale;
+            scaled_v_limit[4] *= startup_motion_speed_scale;
+            scaled_v_limit[5] *= startup_motion_speed_scale;
+
+            if (!write_v_limit(scaled_v_limit))
+            {
+                return false;
+            }
+
+            startup_v_limit_scaled = true;
+        }
         guidewire_mode = GuidewireMode::None;
         axis6_crawl.enabled = false;
         axis1_fastmove_prev = false;
         startup_phase = StartupPhase::ReleaseClamps;
         startup_phase_t0 = GetTickCount();
         startup_prompted = false;
-        return write_refer();
+        if (!write_refer())
+        {
+            if (startup_v_limit_scaled)
+            {
+                write_v_limit(startup_v_limit_backup);
+                startup_v_limit_scaled = false;
+            }
+            return false;
+        }
+        return true;
     };
 
     auto startup_sequence_is_active = [&]() -> bool
     {
         return startup_phase != StartupPhase::WaitForEnter && startup_phase != StartupPhase::Done;
+    };
+
+    auto restore_startup_v_limit = [&]() -> bool
+    {
+        if (!startup_v_limit_scaled)
+        {
+            return true;
+        }
+
+        if (!write_v_limit(startup_v_limit_backup))
+        {
+            return false;
+        }
+
+        startup_v_limit_scaled = false;
+        return true;
+    };
+
+    auto prompt_startup_mode = [&]()
+    {
+        if (!startup_prompted)
+        {
+            std::cout << "Startup mode pending: press C for direct control, or S to run startup preparation first." << std::endl;
+            startup_prompted = true;
+        }
     };
 
     if (!read_plc_state())
@@ -729,8 +799,7 @@ int main(int argc, char* argv[])
             startup_phase = StartupPhase::WaitForEnter;
             startup_completed = false;
             startup_prompted = false;
-            std::cout << "Press Enter to start startup preparation sequence." << std::endl;
-            startup_prompted = true;
+            prompt_startup_mode();
         }
     }
 
@@ -772,10 +841,9 @@ int main(int argc, char* argv[])
                     control_active = false;
                     if (!startup_prompted && (!has_self_check_flag || self_check_done))
                     {
-                        std::cout << "Press Enter to start startup preparation sequence." << std::endl;
-                        startup_prompted = true;
+                        prompt_startup_mode();
                     }
-                    std::cout << "Handle582 pause: OFF, waiting for startup sequence." << std::endl;
+                    std::cout << "Handle582 pause: OFF, waiting for startup mode selection." << std::endl;
                 }
                 else if (estop_hold_active)
                 {
@@ -838,7 +906,41 @@ int main(int argc, char* argv[])
         if (_kbhit())
         {
             const int ch = _getch();
-            if (ch == '\r')
+            if (ch == 'c' || ch == 'C')
+            {
+                if (!startup_completed && startup_phase == StartupPhase::WaitForEnter)
+                {
+                    if (freeze_active)
+                    {
+                        std::cout << "Direct control start ignored: Handle582 pause is active." << std::endl;
+                    }
+                    else if (estop_hold_active)
+                    {
+                        std::cout << "Direct control start ignored: PLC hold is active." << std::endl;
+                    }
+                    else if (has_self_check_flag && !self_check_done)
+                    {
+                        std::cout << "Direct control start ignored: PLC self check is not done yet." << std::endl;
+                    }
+                    else if (!restore_startup_v_limit())
+                    {
+                        std::cout << "Direct control start failed: unable to restore startup v_limit." << std::endl;
+                    }
+                    else if (sync_all(20))
+                    {
+                        startup_phase = StartupPhase::Done;
+                        startup_completed = true;
+                        startup_prompted = false;
+                        control_active = true;
+                        std::cout << "Direct control started." << std::endl;
+                    }
+                    else
+                    {
+                        std::cout << "Direct control start failed: ADS sync failed." << std::endl;
+                    }
+                }
+            }
+            else if (ch == 's' || ch == 'S')
             {
                 if (!startup_completed && startup_phase == StartupPhase::WaitForEnter)
                 {
@@ -863,6 +965,13 @@ int main(int argc, char* argv[])
                     {
                         std::cout << "Startup preparation sequence start failed: ADS sync failed." << std::endl;
                     }
+                }
+            }
+            else if (ch == '\r')
+            {
+                if (!startup_completed && startup_phase == StartupPhase::WaitForEnter)
+                {
+                    prompt_startup_mode();
                 }
             }
             else if (ch == 'f' || ch == 'F')
@@ -965,6 +1074,10 @@ int main(int argc, char* argv[])
             {
                 if (!last_self_check_done && self_check_done)
                 {
+                    if (!restore_startup_v_limit())
+                    {
+                        std::cout << "Warning: failed to restore startup v_limit after PLC self check transition." << std::endl;
+                    }
                     guidewire_mode = GuidewireMode::None;
                     axis6_crawl.enabled = false;
                     axis1_fastmove_prev = false;
@@ -974,8 +1087,8 @@ int main(int argc, char* argv[])
                     if (!freeze_active && !estop_hold_active && sync_all(30))
                     {
                         control_active = false;
-                        std::cout << "PLC self check completed. Press Enter to start startup preparation sequence." << std::endl;
-                        startup_prompted = true;
+                        std::cout << "PLC self check completed." << std::endl;
+                        prompt_startup_mode();
                     }
                     else
                     {
@@ -996,8 +1109,7 @@ int main(int argc, char* argv[])
                             control_active = startup_completed && (startup_phase == StartupPhase::Done);
                             if (!startup_completed && (!has_self_check_flag || self_check_done) && !startup_prompted)
                             {
-                                std::cout << "Press Enter to start startup preparation sequence." << std::endl;
-                                startup_prompted = true;
+                                prompt_startup_mode();
                             }
                         }
                     }
@@ -1145,8 +1257,7 @@ int main(int argc, char* argv[])
                  !startup_prompted &&
                  (!has_self_check_flag || self_check_done))
         {
-            std::cout << "Press Enter to start startup preparation sequence." << std::endl;
-            startup_prompted = true;
+            prompt_startup_mode();
         }
 
         unsigned short cylinder1_cmd = cyl1_open;
@@ -1259,6 +1370,10 @@ int main(int argc, char* argv[])
                     pos[5] = axis6_target_rel;
                     if (std::abs(axis6_abs - startup_axis6_follow_abs) <= crawl_arrive_tol_mm)
                     {
+                        if (!restore_startup_v_limit())
+                        {
+                            std::cout << "Warning: failed to restore startup v_limit after startup sequence." << std::endl;
+                        }
                         startup_phase = StartupPhase::Done;
                         startup_completed = true;
                         if (sync_all(30))
