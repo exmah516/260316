@@ -180,10 +180,10 @@ struct CylinderPreset
 	unsigned short cyl1_clamp  = 100;
 	unsigned short cyl2_open   = 0;
 	unsigned short cyl2_clamp  = 1000;
-	unsigned short cyl3_open   = 1000;
-	unsigned short cyl3_clamp  = 100;
+	unsigned short cyl3_open   = 500;
+	unsigned short cyl3_clamp  = 0;
 	unsigned short cyl4_open   = 0;
-	unsigned short cyl4_clamp  = 1000;
+	unsigned short cyl4_clamp  = 500;
 	unsigned short cyl3_follow_release = 150;
 	unsigned short cyl4_follow_release = 100;
 };
@@ -370,12 +370,18 @@ struct CrawlSettleResult
 /// 导管轴1和导丝轴6的 SwitchWait→FastMove→ClampWait→RestoreWait 状态转换结构相同，
 /// 区别仅在：
 ///   1. 操作的气缸编号不同（轴1用cyl1/cyl2，轴6用cyl3/cyl4）。
-///   2. 轴6独立模式在 ClampWait/RestoreWait 阶段需要显式保持目标位（hold_in_settle=true），
+///   2. 前后气缸的夹紧/松开数值不同（如 cyl3 夹紧=0/松开=500，cyl4 夹紧=500/松开=0），
+///      因此需要分别传入各自的 clamp/open 值。
+///   3. 轴6独立模式在 ClampWait/RestoreWait 阶段需要显式保持目标位（hold_in_settle=true），
 ///      而轴1依赖帧开头 load_pos_from_actual 的值（hold_in_settle=false）。
-///   3. 调用方负责不同的 sync 回调。
+///   4. 调用方负责不同的 sync 回调。
 ///
 /// @param pos_slot       指向 pos 数组中对应轴的槽（如 &pos[0] 或 &pos[5]）。
 /// @param hold_in_settle 若 true，在 ClampWait/RestoreWait 也写目标位到 pos_slot。
+/// @param front_clamp    前端气缸夹紧值（如 cyl1_clamp 或 cyl3_clamp）。
+/// @param front_open     前端气缸松开值（如 cyl1_open 或 cyl3_open）。
+/// @param rear_clamp     后端气缸夹紧值（如 cyl2_clamp 或 cyl4_clamp）。
+/// @param rear_open      后端气缸松开值（如 cyl2_open 或 cyl4_open）。
 CrawlSettleResult process_crawl_settle_phases(
 	CrawlState& crawl,
 	double axis_abs,
@@ -386,12 +392,14 @@ CrawlSettleResult process_crawl_settle_phases(
 	DWORD switch_delay_ms,
 	DWORD clamp_delay_ms,
 	double arrive_tol_mm,
-	unsigned short cyl_clamp,
-	unsigned short cyl_open)
+	unsigned short front_clamp,
+	unsigned short front_open,
+	unsigned short rear_clamp,
+	unsigned short rear_open)
 {
 	CrawlSettleResult r;
-	r.cyl_front = cyl_clamp;
-	r.cyl_rear = cyl_open;
+	r.cyl_front = front_clamp;
+	r.cyl_rear = rear_open;
 	r.fast_flag = false;
 	r.sync_needed = false;
 
@@ -400,8 +408,8 @@ CrawlSettleResult process_crawl_settle_phases(
 	if (crawl.phase == CrawlState::Phase::SwitchWait)
 	{
 		// 前端夹紧、后端松开，等待气缸完成动作
-		r.cyl_front = cyl_clamp;
-		r.cyl_rear = cyl_open;
+		r.cyl_front = front_clamp;
+		r.cyl_rear = rear_open;
 		if ((now_ms - crawl.phase_t0) >= switch_delay_ms)
 		{
 			crawl.phase = CrawlState::Phase::FastMove;
@@ -411,8 +419,8 @@ CrawlSettleResult process_crawl_settle_phases(
 	else if (crawl.phase == CrawlState::Phase::FastMove)
 	{
 		// 快速回退到窗口另一端
-		r.cyl_front = cyl_clamp;
-		r.cyl_rear = cyl_open;
+		r.cyl_front = front_clamp;
+		r.cyl_rear = rear_open;
 		r.fast_flag = true;
 		*pos_slot = target_rel;
 		if (std::abs(axis_abs - crawl.target_abs) <= arrive_tol_mm)
@@ -425,8 +433,8 @@ CrawlSettleResult process_crawl_settle_phases(
 	{
 		// 前后都夹紧，等待稳定
 		if (hold_in_settle) *pos_slot = target_rel;
-		r.cyl_front = cyl_clamp;
-		r.cyl_rear = cyl_clamp;
+		r.cyl_front = front_clamp;
+		r.cyl_rear = rear_clamp;
 		if ((now_ms - crawl.phase_t0) >= clamp_delay_ms)
 		{
 			crawl.phase = CrawlState::Phase::RestoreWait;
@@ -437,8 +445,8 @@ CrawlSettleResult process_crawl_settle_phases(
 	{
 		// 前端松开、后端夹紧，恢复正常跟随夹持配置
 		if (hold_in_settle) *pos_slot = target_rel;
-		r.cyl_front = cyl_open;
-		r.cyl_rear = cyl_clamp;
+		r.cyl_front = front_open;
+		r.cyl_rear = rear_clamp;
 		if ((now_ms - crawl.phase_t0) >= switch_delay_ms)
 		{
 			r.sync_needed = true;
@@ -915,7 +923,7 @@ int main(int argc, char* argv[])
 		if (capture_window || !axis6_crawl.enabled)
 		{
 			axis6_crawl.start_abs = plc_act_pos[5] + plc_init_pos[5];
-			axis6_crawl.end_abs = axis6_crawl.start_abs + cfg.axis6_independent_window_size_mm;
+			axis6_crawl.end_abs = axis6_crawl.start_abs - cfg.axis6_independent_window_size_mm;
 		}
 		axis6_crawl.window_active = is_within_range(
 			plc_act_pos[5] + plc_init_pos[5],
@@ -984,17 +992,19 @@ int main(int argc, char* argv[])
 	/// 全轴同步。用于启动、暂停恢复、self-check 完成等全局重置场景。
 	auto sync_all = [&](int samples) -> bool
 	{
-		const double preserved_axis2_hold_rel = axis2_hold_rel;
-		const double preserved_axis7_hold_rel = axis7_hold_rel;
-
 		if (!read_plc_state())
 		{
 			return false;
 		}
 
+		// 直接使用 PLC 当前实际位置作为旋转轴保持基准。
+		// 不再保留旧的 axis2_hold_rel / axis7_hold_rel——
+		// 在 WaitForEnter、self-check 等非控制阶段，PLC 可能已经
+		// 移动过旋转轴（如自检流程），若仍用旧值会导致同步后跳变归零。
+		axis2_hold_rel = plc_act_pos[1];
+		axis7_hold_rel = plc_act_pos[6];
+
 		load_pos_from_actual();
-		pos[1] = preserved_axis2_hold_rel;
-		pos[6] = preserved_axis7_hold_rel;
 		if (!write_refer())
 		{
 			return false;
@@ -1018,16 +1028,19 @@ int main(int argc, char* argv[])
 			return false;
 		}
 
+		// 第二次读取后再次刷新旋转轴保持值（与第一次几乎相同，
+		// 因为采样期间无运动指令变化，但保持一致性）。
+		axis2_hold_rel = plc_act_pos[1];
+		axis7_hold_rel = plc_act_pos[6];
+
 		load_pos_from_actual();
-		pos[1] = preserved_axis2_hold_rel;
-		pos[6] = preserved_axis7_hold_rel;
 		if (!write_refer())
 		{
 			return false;
 		}
 
 		axis1_crawl.base_rel = plc_act_pos[0];
-		axis1_crawl.rot_base_rel = preserved_axis2_hold_rel;
+		axis1_crawl.rot_base_rel = plc_act_pos[1];
 		axis1_crawl.start_abs = axis1_start_abs();
 		axis1_crawl.end_abs = axis1_end_abs();
 		axis1_crawl.window_active = is_within_range(
@@ -1039,7 +1052,6 @@ int main(int argc, char* argv[])
 		axis1_crawl.wait_rearm = false;
 		axis1_crawl.rearm_dir = 0;
 		axis1_crawl.enabled = true;
-		axis2_hold_rel = preserved_axis2_hold_rel;
 		axis2_rot_reengage_required = true;
 		axis2_rot_reengage_ref = handle_axis1.fJoints2[1];
 
@@ -1048,16 +1060,15 @@ int main(int argc, char* argv[])
 		axis6_mirror_base_rel = plc_act_pos[5];
 
 		axis6_crawl.base_rel = plc_act_pos[5];
-		axis6_crawl.rot_base_rel = preserved_axis7_hold_rel;
+		axis6_crawl.rot_base_rel = plc_act_pos[6];
 		axis6_crawl.start_abs = plc_act_pos[5] + plc_init_pos[5];
-		axis6_crawl.end_abs = axis6_crawl.start_abs + cfg.axis6_independent_window_size_mm;
+		axis6_crawl.end_abs = axis6_crawl.start_abs - cfg.axis6_independent_window_size_mm;
 		axis6_crawl.window_active = false;
 		axis6_crawl.phase = CrawlState::Phase::Follow;
 		axis6_crawl.phase_t0 = GetTickCount();
 		axis6_crawl.wait_rearm = false;
 		axis6_crawl.rearm_dir = 0;
 		axis6_crawl.enabled = false;
-		axis7_hold_rel = preserved_axis7_hold_rel;
 		axis7_rot_reengage_required = true;
 		axis7_rot_reengage_ref = handle_axis6.fJoints2[1];
 
@@ -1111,7 +1122,7 @@ int main(int argc, char* argv[])
 		axis6_crawl.base_rel = plc_act_pos[5];
 		axis6_crawl.rot_base_rel = plc_act_pos[6];
 		axis6_crawl.start_abs = plc_act_pos[5] + plc_init_pos[5];
-		axis6_crawl.end_abs = axis6_crawl.start_abs + cfg.axis6_independent_window_size_mm;
+		axis6_crawl.end_abs = axis6_crawl.start_abs - cfg.axis6_independent_window_size_mm;
 		axis6_crawl.target_abs = axis6_crawl.start_abs;
 		axis6_crawl.phase = CrawlState::Phase::Follow;
 		axis6_crawl.phase_t0 = GetTickCount();
@@ -1998,7 +2009,9 @@ int main(int argc, char* argv[])
 						axis6_crawl, axis6_abs, plc_init_pos[5], &pos[5],
 						true, now_ms,
 						cfg.crawl_switch_delay_ms, cfg.crawl_clamp_delay_ms,
-						cfg.crawl_arrive_tol_mm, cyl.cyl3_clamp, cyl.cyl3_open);
+						cfg.crawl_arrive_tol_mm,
+						cyl.cyl3_clamp, cyl.cyl3_open,
+						cyl.cyl4_clamp, cyl.cyl4_open);
 					cylinder3_cmd = sr.cyl_front;
 					cylinder4_cmd = sr.cyl_rear;
 					axis6_fast_retract = sr.fast_flag;
