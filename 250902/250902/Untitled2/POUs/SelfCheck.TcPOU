@@ -4,7 +4,7 @@
     <Declaration><![CDATA[ FUNCTION_BLOCK SelfCheck
 VAR
     i : INT;
-    stu : ARRAY[1..7] OF INT; // 0:WaitDisable, 1:StartScan, 2:ScanMonitor, 3:WaitStop, 4:ResetTrigger, 5:WaitReset, 6:SyncWait, 7:SetPosStart, 71:SetPosWait, 8:BackoffMove, 10:Done
+    stu : ARRAY[1..7] OF INT; // 0:WaitDisable, 1:StartScan, 2:ScanMonitor, 3:WaitStop, 4:ResetTrigger, 5:WaitReset, 6:SyncWait, 7:SetPosStart, 71:SetPosWait, 72:BackoffDelay, 8:BackoffMove, 10:Done
     fb_move_abs : ARRAY[1..7] OF MC_MoveAbsolute;
     fb_move_vel : ARRAY[1..7] OF MC_MoveVelocity;
     fb_stop     : ARRAY[1..7] OF MC_Stop;
@@ -17,6 +17,7 @@ VAR
     
     back_dist : ARRAY[1..7] OF LREAL:= [-5,0,-413,0,-253.7,-74.2,0];  // 回退距离（轴单位）
     target_axes : ARRAY[1..7] OF BOOL:= [TRUE,FALSE,TRUE,FALSE,TRUE,TRUE,FALSE];	// 目标轴（平移轴）
+    backoff_delay : ARRAY[1..7] OF TIME := [T#0ms,T#0ms,T#0ms,T#0ms,T#1s,T#1500ms,T#0ms];
     
     all_done : BOOL;
     all_reach_limit : BOOL;
@@ -246,9 +247,10 @@ FOR i:=1 TO 7 DO
                 
                 mv_abs_pos[i] := debug_init_target_pos[i];
                 mv_abs_vel[i] := vel_back;
-                mv_abs_exec[i] := TRUE;
+                mv_abs_exec[i] := FALSE;
+                wait_timer[i](IN:=FALSE);
                 
-                stu[i] := 8;
+                stu[i] := 72;
              
             ELSIF fb_set_pos[i].Error THEN
                 // 如果 SetPosition 失败，尝试重试复位
@@ -262,8 +264,27 @@ FOR i:=1 TO 7 DO
 				debug_init_target_pos[i] := G.rightlimit[i] + back_dist[i];
 				mv_abs_pos[i] := debug_init_target_pos[i];
 				mv_abs_vel[i] := vel_back;
-				mv_abs_exec[i] := TRUE;
-				stu[i] := 8;
+				mv_abs_exec[i] := FALSE;
+				wait_timer[i](IN:=FALSE);
+				stu[i] := 72;
+            END_IF
+
+        72: // 步骤72：回退前分轴等待，轴3直接回，轴5延时1s，轴6再延时0.5s
+            mv_abs_pos[i] := debug_init_target_pos[i];
+            mv_abs_vel[i] := vel_back;
+            mv_abs_exec[i] := FALSE;
+
+            IF backoff_delay[i] = T#0ms THEN
+                wait_timer[i](IN:=FALSE);
+                mv_abs_exec[i] := TRUE;
+                stu[i] := 8;
+            ELSE
+                wait_timer[i](IN:=TRUE, PT:=backoff_delay[i]);
+                IF wait_timer[i].Q THEN
+                    wait_timer[i](IN:=FALSE);
+                    mv_abs_exec[i] := TRUE;
+                    stu[i] := 8;
+                END_IF
             END_IF
             
         8: // 步骤8：等待回退完成

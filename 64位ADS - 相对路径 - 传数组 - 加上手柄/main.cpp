@@ -126,6 +126,7 @@ struct ControlConfig
 	double axis_push_sign = -1.0;
 	// 旋转轴：手柄输出弧度，乘以 Rad (= 180/π ≈ 57.296) 转为度。
 	double axis_rot_scale_deg = Rad;
+	double axis2_rot_reengage_deadband_deg = 1.0;
 
 	// --- 力反馈 ---
 	int    axial_force_axis = 1;   // 力反馈施加在手柄的第 1 轴（直线轴）
@@ -159,6 +160,7 @@ struct ControlConfig
 	// --- 启动准备序列参数 ---
 	DWORD  startup_clamp_settle_delay_ms = 300;
 	double startup_motion_speed_scale = 0.5;
+	unsigned short startup_cyl3_open = 2000;
 	// 各轴就位目标：距离右限位的偏移量 (mm)。
 	double startup_axis5_ready_from_right_mm = 425.0;
 	double startup_axis3_ready_from_right_mm = 250.0;
@@ -338,8 +340,8 @@ struct StartupState
 // ═══════════════════════════════════════════════════════════════════════════════
 
 /// 检测蠕动 rearm 条件。
-/// 蠕动完成一次后置 wait_rearm=true，要求操作者把手柄推过阈值才能触发下一次，
-/// 防止蠕动在窗口边界反复误触发。支持同向和反向两种 rearm。
+/// 蠕动完成一次后置 wait_rearm=true，要求操作者沿上一次有效方向再次推过阈值，
+/// 防止蠕动在窗口边界反复误触发。反方向位移仅视为回弹/重置手柄行程，不清除 wait_rearm。
 void check_crawl_rearm(CrawlState& crawl, double hand_delta_mm, double threshold_mm)
 {
 	if (!crawl.wait_rearm)
@@ -348,9 +350,7 @@ void check_crawl_rearm(CrawlState& crawl, double hand_delta_mm, double threshold
 	}
 	const bool same_dir_push    = (crawl.rearm_dir > 0) && (hand_delta_mm > threshold_mm);
 	const bool same_dir_pull    = (crawl.rearm_dir < 0) && (hand_delta_mm < -threshold_mm);
-	const bool reverse_dir_push = (crawl.rearm_dir < 0) && (hand_delta_mm > threshold_mm);
-	const bool reverse_dir_pull = (crawl.rearm_dir > 0) && (hand_delta_mm < -threshold_mm);
-	if (same_dir_push || same_dir_pull || reverse_dir_push || reverse_dir_pull)
+	if (same_dir_push || same_dir_pull)
 	{
 		crawl.wait_rearm = false;
 	}
@@ -812,6 +812,12 @@ int main(int argc, char* argv[])
 	double axis3_base_rel = 0.0;
 	double axis5_base_rel = 0.0;
 	double axis6_mirror_base_rel = 0.0;
+	double axis2_hold_rel = 0.0;
+	bool axis2_rot_reengage_required = false;
+	double axis2_rot_reengage_ref = 0.0;
+	double axis7_hold_rel = 0.0;
+	bool axis7_rot_reengage_required = false;
+	double axis7_rot_reengage_ref = 0.0;
 
 	GuidewireMode guidewire_mode = GuidewireMode::None;
 
@@ -854,17 +860,20 @@ int main(int argc, char* argv[])
 	/// 同步轴1蠕动状态。用于反向按钮切换、蠕动 RestoreWait 完成等场景。
 	auto sync_axis1 = [&](int samples, bool wait_rearm, int rearm_dir) -> bool
 	{
+		const double preserved_axis2_hold_rel = axis2_hold_rel;
+
 		if (!read_plc_state())
 		{
 			return false;
 		}
 
 		load_pos_from_actual();
+		pos[1] = preserved_axis2_hold_rel;
 
 		axis1_crawl.handle_ref = get_average_pos(handle_axis1, 0, samples);
 		axis1_crawl.rot_ref = handle_axis1.fJoints2[1];
 		axis1_crawl.base_rel = plc_act_pos[0];
-		axis1_crawl.rot_base_rel = plc_act_pos[1];
+		axis1_crawl.rot_base_rel = preserved_axis2_hold_rel;
 		axis1_crawl.start_abs = axis1_start_abs();
 		axis1_crawl.end_abs = axis1_end_abs();
 		axis1_crawl.window_active = is_within_range(
@@ -875,6 +884,9 @@ int main(int argc, char* argv[])
 		axis1_crawl.phase_t0 = GetTickCount();
 		axis1_crawl.wait_rearm = wait_rearm;
 		axis1_crawl.rearm_dir = rearm_dir;
+		axis2_hold_rel = preserved_axis2_hold_rel;
+		axis2_rot_reengage_required = wait_rearm;
+		axis2_rot_reengage_ref = handle_axis1.fJoints2[1];
 
 		axis3_base_rel = plc_act_pos[2];
 		axis5_base_rel = plc_act_pos[4];
@@ -886,17 +898,20 @@ int main(int argc, char* argv[])
 	/// 同步轴6蠕动状态。用于独立模式下反向切换、蠕动完成等场景。
 	auto sync_axis6 = [&](int samples, bool capture_window, bool wait_rearm, int rearm_dir) -> bool
 	{
+		const double preserved_axis7_hold_rel = axis7_hold_rel;
+
 		if (!read_plc_state())
 		{
 			return false;
 		}
 
 		load_pos_from_actual();
+		pos[6] = preserved_axis7_hold_rel;
 
 		axis6_crawl.handle_ref = get_average_pos(handle_axis6, 0, samples);
 		axis6_crawl.rot_ref = handle_axis6.fJoints2[1];
 		axis6_crawl.base_rel = plc_act_pos[5];
-		axis6_crawl.rot_base_rel = plc_act_pos[6];
+		axis6_crawl.rot_base_rel = preserved_axis7_hold_rel;
 		if (capture_window || !axis6_crawl.enabled)
 		{
 			axis6_crawl.start_abs = plc_act_pos[5] + plc_init_pos[5];
@@ -911,6 +926,9 @@ int main(int argc, char* argv[])
 		axis6_crawl.wait_rearm = wait_rearm;
 		axis6_crawl.rearm_dir = rearm_dir;
 		axis6_crawl.enabled = true;
+		axis7_hold_rel = preserved_axis7_hold_rel;
+		axis7_rot_reengage_required = wait_rearm;
+		axis7_rot_reengage_ref = handle_axis6.fJoints2[1];
 
 		return write_refer();
 	};
@@ -935,6 +953,9 @@ int main(int argc, char* argv[])
 		axis6_crawl.rearm_dir = 0;
 		axis6_crawl.enabled = false;
 		axis6_crawl.window_active = false;
+		axis7_hold_rel = plc_act_pos[6];
+		axis7_rot_reengage_required = false;
+		axis7_rot_reengage_ref = handle_axis6.fJoints2[1];
 
 		// 退出独立控制时，把轴6镜像基准校到当前点。
 		// 如果轴1正在 Follow，需要扣除轴1已经产生的偏移量，
@@ -963,12 +984,17 @@ int main(int argc, char* argv[])
 	/// 全轴同步。用于启动、暂停恢复、self-check 完成等全局重置场景。
 	auto sync_all = [&](int samples) -> bool
 	{
+		const double preserved_axis2_hold_rel = axis2_hold_rel;
+		const double preserved_axis7_hold_rel = axis7_hold_rel;
+
 		if (!read_plc_state())
 		{
 			return false;
 		}
 
 		load_pos_from_actual();
+		pos[1] = preserved_axis2_hold_rel;
+		pos[6] = preserved_axis7_hold_rel;
 		if (!write_refer())
 		{
 			return false;
@@ -993,13 +1019,15 @@ int main(int argc, char* argv[])
 		}
 
 		load_pos_from_actual();
+		pos[1] = preserved_axis2_hold_rel;
+		pos[6] = preserved_axis7_hold_rel;
 		if (!write_refer())
 		{
 			return false;
 		}
 
 		axis1_crawl.base_rel = plc_act_pos[0];
-		axis1_crawl.rot_base_rel = plc_act_pos[1];
+		axis1_crawl.rot_base_rel = preserved_axis2_hold_rel;
 		axis1_crawl.start_abs = axis1_start_abs();
 		axis1_crawl.end_abs = axis1_end_abs();
 		axis1_crawl.window_active = is_within_range(
@@ -1011,13 +1039,16 @@ int main(int argc, char* argv[])
 		axis1_crawl.wait_rearm = false;
 		axis1_crawl.rearm_dir = 0;
 		axis1_crawl.enabled = true;
+		axis2_hold_rel = preserved_axis2_hold_rel;
+		axis2_rot_reengage_required = true;
+		axis2_rot_reengage_ref = handle_axis1.fJoints2[1];
 
 		axis3_base_rel = plc_act_pos[2];
 		axis5_base_rel = plc_act_pos[4];
 		axis6_mirror_base_rel = plc_act_pos[5];
 
 		axis6_crawl.base_rel = plc_act_pos[5];
-		axis6_crawl.rot_base_rel = plc_act_pos[6];
+		axis6_crawl.rot_base_rel = preserved_axis7_hold_rel;
 		axis6_crawl.start_abs = plc_act_pos[5] + plc_init_pos[5];
 		axis6_crawl.end_abs = axis6_crawl.start_abs + cfg.axis6_independent_window_size_mm;
 		axis6_crawl.window_active = false;
@@ -1026,6 +1057,9 @@ int main(int argc, char* argv[])
 		axis6_crawl.wait_rearm = false;
 		axis6_crawl.rearm_dir = 0;
 		axis6_crawl.enabled = false;
+		axis7_hold_rel = preserved_axis7_hold_rel;
+		axis7_rot_reengage_required = true;
+		axis7_rot_reengage_ref = handle_axis6.fJoints2[1];
 
 		return true;
 	};
@@ -1043,7 +1077,10 @@ int main(int argc, char* argv[])
 		axis1_crawl.handle_ref = handle_axis1.fJoints2[0];
 		axis1_crawl.rot_ref = handle_axis1.fJoints2[1];
 		axis1_crawl.base_rel = plc_act_pos[0];
-		axis1_crawl.rot_base_rel = plc_act_pos[1];
+		// 旋转基准使用当前保持值而非 PLC 实际值，避免因 PLC 执行延迟
+		// 导致 rot_base_rel 与 axis2_hold_rel 不一致，产生旋转轴瞬间跳变。
+		axis1_crawl.rot_base_rel = axis2_hold_rel;
+		// axis2_hold_rel 不重新赋值——保持上一帧的累积旋转位置
 		axis3_base_rel = plc_act_pos[2];
 		axis5_base_rel = plc_act_pos[4];
 		if (!axis6_crawl.enabled)
@@ -1065,6 +1102,9 @@ int main(int argc, char* argv[])
 		independent_axis2_hold_rel = plc_act_pos[1];
 		independent_axis3_hold_rel = plc_act_pos[2];
 		independent_axis5_hold_rel = plc_act_pos[4];
+		axis7_hold_rel = plc_act_pos[6];
+		axis7_rot_reengage_required = false;
+		axis7_rot_reengage_ref = handle_axis6.fJoints2[1];
 
 		axis6_crawl.handle_ref = get_average_pos(handle_axis6, 0, 20);
 		axis6_crawl.rot_ref = handle_axis6.fJoints2[1];
@@ -1101,6 +1141,9 @@ int main(int argc, char* argv[])
 
 		load_pos_from_actual();
 		cooperative_axis6_hold_rel = plc_act_pos[5];
+		axis7_hold_rel = plc_act_pos[6];
+		axis7_rot_reengage_required = false;
+		axis7_rot_reengage_ref = handle_axis6.fJoints2[1];
 		axis6_crawl.handle_ref = handle_axis6.fJoints2[0];
 		axis6_crawl.rot_ref = handle_axis6.fJoints2[1];
 		axis6_crawl.base_rel = plc_act_pos[5];
@@ -1217,6 +1260,12 @@ int main(int argc, char* argv[])
 	}
 
 	load_pos_from_actual();
+	axis2_hold_rel = plc_act_pos[1];
+	axis2_rot_reengage_required = false;
+	axis2_rot_reengage_ref = handle_axis1.fJoints2[1];
+	axis7_hold_rel = plc_act_pos[6];
+	axis7_rot_reengage_required = false;
+	axis7_rot_reengage_ref = handle_axis6.fJoints2[1];
 	write_refer();
 
 	// 检测 PLC 是否支持 self-check 流程
@@ -1676,7 +1725,7 @@ int main(int argc, char* argv[])
 			// 轴1 运动学量（绝对坐标 = 相对位置 + init_pos）
 			const double axis1_abs = plc_act_pos[0] + plc_init_pos[0];
 			const double axis1_base_abs = axis1_crawl.base_rel + plc_init_pos[0];
-			const double axis1_hand_delta_mm = (handle_axis1.fJoints2[0] - axis1_crawl.handle_ref) * cfg.k_handle_to_mm * cfg.axis_push_sign;
+			double axis1_hand_delta_mm = (handle_axis1.fJoints2[0] - axis1_crawl.handle_ref) * cfg.k_handle_to_mm * cfg.axis_push_sign;
 			// "far" 和 "near"：相对于右限位的远近。
 			// 用距离右限位的远近来判断推进方向——rightlimit 是导管/导丝可到达的最远端，
 			// "远离 rightlimit" 即向前推进（away），"靠近 rightlimit" 即后退（toward）。
@@ -1691,14 +1740,34 @@ int main(int argc, char* argv[])
 			// 轴6 运动学量
 			const double axis6_abs = plc_act_pos[5] + plc_init_pos[5];
 			const double axis6_base_abs = axis6_crawl.base_rel + plc_init_pos[5];
-			const double axis6_hand_delta_mm = (handle_axis6.fJoints2[0] - axis6_crawl.handle_ref) * cfg.k_handle_to_mm * cfg.axis_push_sign;
+			double axis6_hand_delta_mm = (handle_axis6.fJoints2[0] - axis6_crawl.handle_ref) * cfg.k_handle_to_mm * cfg.axis_push_sign;
 			const double axis6_start_right_dist = std::abs(plc_rightlimit[5] - axis6_crawl.start_abs);
 			const double axis6_end_right_dist = std::abs(plc_rightlimit[5] - axis6_crawl.end_abs);
 			const double axis6_far_abs = (axis6_start_right_dist >= axis6_end_right_dist) ? axis6_crawl.start_abs : axis6_crawl.end_abs;
 			const double axis6_near_abs = (axis6_start_right_dist >= axis6_end_right_dist) ? axis6_crawl.end_abs : axis6_crawl.start_abs;
 			const double axis6_right_soft_abs = plc_rightlimit[5] - cfg.axis6_right_soft_margin_mm;
+			auto compute_axis7_cmd_rel = [&]() -> double
+			{
+				if (axis7_rot_reengage_required)
+				{
+					const double axis7_rot_delta_deg =
+						(handle_axis6.fJoints2[1] - axis7_rot_reengage_ref) * cfg.axis_rot_scale_deg;
+					if (std::abs(axis7_rot_delta_deg) >= cfg.axis2_rot_reengage_deadband_deg)
+					{
+						axis7_rot_reengage_required = false;
+						axis6_crawl.rot_ref = handle_axis6.fJoints2[1];
+						axis6_crawl.rot_base_rel = axis7_hold_rel;
+					}
+					return axis7_hold_rel;
+				}
+
+				const double axis7_follow_rel =
+					axis6_crawl.rot_base_rel + (handle_axis6.fJoints2[1] - axis6_crawl.rot_ref) * cfg.axis_rot_scale_deg;
+				axis7_hold_rel = axis7_follow_rel;
+				return axis7_follow_rel;
+			};
 			const double axis7_cmd_rel =
-				axis6_crawl.rot_base_rel + (handle_axis6.fJoints2[1] - axis6_crawl.rot_ref) * cfg.axis_rot_scale_deg;
+				(guidewire_mode == GuidewireMode::None) ? axis7_hold_rel : compute_axis7_cmd_rel();
 
 			// ─────────────────────────────────────────────────────────────────
 			//  分支一：启动准备状态机
@@ -1726,7 +1795,7 @@ int main(int argc, char* argv[])
 				{
 					cylinder1_cmd = cyl.cyl1_open;
 					cylinder2_cmd = cyl.cyl2_open;
-					cylinder3_cmd = cyl.cyl3_open;
+					cylinder3_cmd = cfg.startup_cyl3_open;
 					cylinder4_cmd = cyl.cyl4_open;
 					if ((now_ms - startup.phase_t0) >= cfg.startup_clamp_settle_delay_ms)
 					{
@@ -1737,7 +1806,7 @@ int main(int argc, char* argv[])
 				{
 					cylinder1_cmd = cyl.cyl1_open;
 					cylinder2_cmd = cyl.cyl2_open;
-					cylinder3_cmd = cyl.cyl3_open;
+					cylinder3_cmd = cfg.startup_cyl3_open;
 					cylinder4_cmd = cyl.cyl4_open;
 					pos[4] = startup_axis5_ready_abs - plc_init_pos[4];
 					if (std::abs(axis5_abs - startup_axis5_ready_abs) <= cfg.crawl_arrive_tol_mm)
@@ -1857,14 +1926,21 @@ int main(int argc, char* argv[])
 				pos[4] = independent_axis5_hold_rel;
 				pos[6] = axis7_cmd_rel;
 
+				// 轴6 单向前进行程重置：同轴1逻辑，回拉时重置手柄基准而非后退。
+				if (!axis6_reverse_pressed && axis6_hand_delta_mm > cfg.crawl_trigger_deadband_mm)
+				{
+					axis6_crawl.handle_ref = handle_axis6.fJoints2[0];
+					axis6_hand_delta_mm = 0.0;
+				}
+
 				check_crawl_rearm(axis6_crawl, axis6_hand_delta_mm, cfg.crawl_rearm_threshold_mm);
 
 				if (axis6_crawl.phase == CrawlState::Phase::Follow)
 				{
 					// --- 轴6 Follow：手柄跟随计算 ---
 					const double axis6_raw_cmd_abs = axis6_base_abs + axis6_hand_delta_mm;
-					const double axis6_base_right_dist = std::abs(plc_rightlimit[5] - axis6_base_abs);
-					const double axis6_raw_right_dist = std::abs(plc_rightlimit[5] - axis6_raw_cmd_abs);
+					const double axis6_base_right_dist = plc_rightlimit[5] - axis6_base_abs;
+					const double axis6_raw_right_dist = plc_rightlimit[5] - axis6_raw_cmd_abs;
 					const bool axis6_request_away =
 						(std::abs(axis6_hand_delta_mm) > cfg.crawl_trigger_deadband_mm) &&
 						(axis6_raw_right_dist > axis6_base_right_dist);
@@ -1877,7 +1953,8 @@ int main(int argc, char* argv[])
 							axis6_raw_cmd_abs,
 							(axis6_base_abs < axis6_right_soft_abs) ? axis6_base_abs : axis6_right_soft_abs,
 							(axis6_base_abs > axis6_right_soft_abs) ? axis6_base_abs : axis6_right_soft_abs);
-						if (std::abs(plc_rightlimit[5] - axis6_reverse_cmd_abs) <= axis6_base_right_dist)
+						const double axis6_reverse_right_dist = plc_rightlimit[5] - axis6_reverse_cmd_abs;
+						if (axis6_reverse_right_dist <= axis6_base_right_dist)
 						{
 							axis6_cmd_abs = axis6_reverse_cmd_abs;
 						}
@@ -1889,7 +1966,8 @@ int main(int argc, char* argv[])
 							axis6_raw_cmd_abs,
 							(axis6_near_abs < axis6_far_abs) ? axis6_near_abs : axis6_far_abs,
 							(axis6_near_abs > axis6_far_abs) ? axis6_near_abs : axis6_far_abs);
-						if (std::abs(plc_rightlimit[5] - axis6_forward_cmd_abs) >= axis6_base_right_dist)
+						const double axis6_forward_right_dist = plc_rightlimit[5] - axis6_forward_cmd_abs;
+						if (axis6_forward_right_dist >= axis6_base_right_dist)
 						{
 							axis6_cmd_abs = axis6_forward_cmd_abs;
 						}
@@ -1949,6 +2027,19 @@ int main(int argc, char* argv[])
 					std::cout << "Axis1 entered crawl window; crawl logic enabled." << std::endl;
 				}
 
+				// 单向前进行程重置：操作者把手柄往回拉（hand_delta > 0，即靠近右限位方向）时，
+				// 不让轴1后退，而是把手柄基准重置到当前位置，使后续从新位置继续推时仍能前进。
+				// 注意：hand_delta > 0 对应物理上的"回拉"——因为 axis_push_sign = -1，
+				// 手柄物理正方向（推）→ 负 delta（远离右限位），
+				// 手柄物理负方向（拉）→ 正 delta（靠近右限位）。
+				if (guidewire_mode == GuidewireMode::None &&
+					!axis1_reverse_pressed &&
+					axis1_hand_delta_mm > cfg.crawl_trigger_deadband_mm)
+				{
+					axis1_crawl.handle_ref = handle_axis1.fJoints2[0];
+					axis1_hand_delta_mm = 0.0;
+				}
+
 				check_crawl_rearm(axis1_crawl, axis1_hand_delta_mm, cfg.crawl_rearm_threshold_mm);
 
 				if (axis1_crawl.phase == CrawlState::Phase::Follow)
@@ -1956,8 +2047,8 @@ int main(int argc, char* argv[])
 					// --- 轴1 Follow：手柄跟随 + 多轴联动计算 ---
 					const double axis1_raw_cmd_abs = axis1_base_abs + axis1_hand_delta_mm;
 					const bool axis1_normal_mode = guidewire_mode == GuidewireMode::None;
-					const double axis1_base_right_dist = std::abs(plc_rightlimit[0] - axis1_base_abs);
-					const double axis1_raw_right_dist = std::abs(plc_rightlimit[0] - axis1_raw_cmd_abs);
+					const double axis1_base_right_dist = plc_rightlimit[0] - axis1_base_abs;
+					const double axis1_raw_right_dist = plc_rightlimit[0] - axis1_raw_cmd_abs;
 					// "request away" = 手柄在推且指令点比基准更远离右限位（即向前推进）
 					const bool axis1_request_away =
 						axis1_normal_mode &&
@@ -1974,7 +2065,8 @@ int main(int argc, char* argv[])
 							axis1_raw_cmd_abs,
 							(axis1_base_abs < axis1_right_soft_abs) ? axis1_base_abs : axis1_right_soft_abs,
 							(axis1_base_abs > axis1_right_soft_abs) ? axis1_base_abs : axis1_right_soft_abs);
-						if (std::abs(plc_rightlimit[0] - axis1_reverse_cmd_abs) <= axis1_base_right_dist)
+						const double axis1_reverse_right_dist = plc_rightlimit[0] - axis1_reverse_cmd_abs;
+						if (axis1_reverse_right_dist <= axis1_base_right_dist)
 						{
 							axis1_cmd_abs = axis1_reverse_cmd_abs;
 						}
@@ -1988,7 +2080,20 @@ int main(int argc, char* argv[])
 								(axis1_near_abs < axis1_far_abs) ? axis1_near_abs : axis1_far_abs,
 								(axis1_near_abs > axis1_far_abs) ? axis1_near_abs : axis1_far_abs)
 							: axis1_raw_cmd_abs;
-						if (std::abs(plc_rightlimit[0] - axis1_forward_cmd_abs) >= axis1_base_right_dist)
+						const double axis1_forward_right_dist = plc_rightlimit[0] - axis1_forward_cmd_abs;
+						if ((loop_count % 50) == 0 && !axis1_reverse_pressed)
+						{
+							std::cout << "[DIR] R=" << plc_rightlimit[0]
+								<< " B=" << axis1_base_abs
+								<< " C=" << axis1_forward_cmd_abs
+								<< " delta=" << axis1_hand_delta_mm
+								<< " base_dist=" << axis1_base_right_dist
+								<< " cmd_dist=" << std::abs(plc_rightlimit[0] - axis1_forward_cmd_abs)
+								<< " pass=" << (axis1_forward_right_dist >= axis1_base_right_dist)
+								<< " win=" << axis1_crawl.window_active
+								<< std::endl;
+						}
+						if (axis1_forward_right_dist >= axis1_base_right_dist)
 						{
 							axis1_cmd_abs = axis1_forward_cmd_abs;
 						}
@@ -2005,7 +2110,23 @@ int main(int argc, char* argv[])
 					// PLC 内部会加上 init_pos 得到绝对位置。
 					const double axis1_delta_rel = axis1_cmd_abs - plc_init_pos[0] - axis1_crawl.base_rel;
 					pos[0] = axis1_cmd_abs - plc_init_pos[0];
-					pos[1] = axis1_crawl.rot_base_rel + (handle_axis1.fJoints2[1] - axis1_crawl.rot_ref) * cfg.axis_rot_scale_deg;
+					if (axis2_rot_reengage_required)
+					{
+						pos[1] = axis2_hold_rel;
+						const double axis2_rot_delta_deg =
+							(handle_axis1.fJoints2[1] - axis2_rot_reengage_ref) * cfg.axis_rot_scale_deg;
+						if (std::abs(axis2_rot_delta_deg) >= cfg.axis2_rot_reengage_deadband_deg)
+						{
+							axis2_rot_reengage_required = false;
+							axis1_crawl.rot_ref = handle_axis1.fJoints2[1];
+							axis1_crawl.rot_base_rel = axis2_hold_rel;
+						}
+					}
+					else
+					{
+						pos[1] = axis1_crawl.rot_base_rel + (handle_axis1.fJoints2[1] - axis1_crawl.rot_ref) * cfg.axis_rot_scale_deg;
+						axis2_hold_rel = pos[1];
+					}
 					// 轴3、轴5 与轴1 联动——导管体跟随导管头同步平移
 					pos[2] = axis3_base_rel + axis1_delta_rel;
 					pos[4] = axis5_base_rel + axis1_delta_rel;
@@ -2062,6 +2183,7 @@ int main(int argc, char* argv[])
 					// 轴1的时序恢复为备份版的显式实现：
 					// 1. 电缸1夹紧、电缸2松开；
 					// 2. 等待切换延时结束后，下一步才允许轴1进入快速回退。
+					pos[1] = axis2_hold_rel;
 					cylinder1_cmd = cyl.cyl1_clamp;
 					cylinder2_cmd = cyl.cyl2_open;
 					if ((now_ms - axis1_crawl.phase_t0) >= cfg.crawl_switch_delay_ms)
@@ -2072,6 +2194,7 @@ int main(int argc, char* argv[])
 				}
 				else if (axis1_crawl.phase == CrawlState::Phase::FastMove)
 				{
+					pos[1] = axis2_hold_rel;
 					cylinder1_cmd = cyl.cyl1_clamp;
 					cylinder2_cmd = cyl.cyl2_open;
 					axis1_fast_return = true;
@@ -2084,6 +2207,7 @@ int main(int argc, char* argv[])
 				}
 				else if (axis1_crawl.phase == CrawlState::Phase::ClampWait)
 				{
+					pos[1] = axis2_hold_rel;
 					cylinder1_cmd = cyl.cyl1_clamp;
 					cylinder2_cmd = cyl.cyl2_clamp;
 					if ((now_ms - axis1_crawl.phase_t0) >= cfg.crawl_clamp_delay_ms)
@@ -2094,6 +2218,7 @@ int main(int argc, char* argv[])
 				}
 				else if (axis1_crawl.phase == CrawlState::Phase::RestoreWait)
 				{
+					pos[1] = axis2_hold_rel;
 					cylinder1_cmd = cyl.cyl1_open;
 					cylinder2_cmd = cyl.cyl2_clamp;
 					if ((now_ms - axis1_crawl.phase_t0) >= cfg.crawl_switch_delay_ms)
