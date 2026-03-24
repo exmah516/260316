@@ -22,20 +22,31 @@ VAR_GLOBAL
     refer,Act_pos,act_h,act_hf	: ARRAY[1..7] OF LREAL;
     
 	// 自检相关变量
-    rightlimit          : ARRAY[1..7] OF LREAL;
+    leftlimit           : ARRAY[1..7] OF LREAL;
+	act_pos_from_left	: ARRAY[1..7] OF LREAL;
+	refer_from_left		: ARRAY[1..7] OF LREAL;
     self_check_done     : BOOL := FALSE;
 	handle_reinit_req	: BOOL := FALSE;
 	handle_reinit_done	: BOOL := FALSE;
 	selfcheck_reset_req : BOOL := FALSE;
 	selfcheck_stu		: ARRAY[1..7] OF INT;
 	selfcheck_all_reach_limit : BOOL := FALSE;
-	selfcheck_all_powered_target : BOOL := FALSE;
 
 	// 急停/掉使能冻结：用于通知上位机停止写 refer，并在恢复时触发重同步
 	estop_hold_req		: BOOL := FALSE;
 
 	axis6_fast_retract	: BOOL := FALSE;
 	axis1_fast_return	: BOOL := FALSE;
+	axis1_return_cmd	: ST_AxisPlannedReturnCmd;
+	axis3_return_cmd	: ST_AxisPlannedReturnCmd;
+	axis5_return_cmd	: ST_AxisPlannedReturnCmd;
+	axis6_return_cmd	: ST_AxisPlannedReturnCmd;
+	axis4_fwd_req		: BOOL := FALSE;
+	axis4_rev_req		: BOOL := FALSE;
+	axis4_manual_busy	: BOOL := FALSE;
+	axis4_manual_done	: BOOL := FALSE;
+	axis4_manual_error	: BOOL := FALSE;
+	axis4_manual_error_id : UDINT := 0;
 
 
 	// 速度门限与参考缓动（参考“方式10-仿真”风格）

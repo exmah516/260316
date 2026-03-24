@@ -18,6 +18,9 @@
     <LibraryReferences>{bbb33405-4167-4a02-8ada-573e359d6068}</LibraryReferences>
   </PropertyGroup>
   <ItemGroup>
+    <Compile Include="DUTs\ST_AxisPlannedReturnCmd.TcDUT">
+      <SubType>Code</SubType>
+    </Compile>
     <Compile Include="DUTs\state.TcDUT">
       <SubType>Code</SubType>
     </Compile>

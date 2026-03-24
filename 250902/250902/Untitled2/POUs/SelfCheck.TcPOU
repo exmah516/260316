@@ -1,10 +1,10 @@
-<?xml version="1.0" encoding="utf-8"?>
+﻿<?xml version="1.0" encoding="utf-8"?>
 <TcPlcObject Version="1.1.0.1" ProductVersion="3.1.4024.15">
   <POU Name="SelfCheck" Id="{a1b2c3d4-e5f6-4789-8012-34567890abcd}" SpecialFunc="None">
     <Declaration><![CDATA[ FUNCTION_BLOCK SelfCheck
 VAR
     i : INT;
-    stu : ARRAY[1..7] OF INT; // 0:WaitDisable, 1:StartScan, 2:ScanMonitor, 3:WaitStop, 4:ResetTrigger, 5:WaitReset, 6:SyncWait, 7:SetPosStart, 71:SetPosWait, 72:BackoffDelay, 8:BackoffMove, 10:Done
+    stu : ARRAY[1..7] OF INT; // 0:WaitDisable, 1:StartScan, 2:ScanMonitor, 3:WaitStop, 4:ResetTrigger, 5:WaitReset, 55:RepowerPulse, 56:RepowerWait, 6:SyncWait, 7:SetPosStart, 71:SetPosWait, 72:BackoffDelay, 8:BackoffMove, 10:Done
     fb_move_abs : ARRAY[1..7] OF MC_MoveAbsolute;
     fb_move_vel : ARRAY[1..7] OF MC_MoveVelocity;
     fb_stop     : ARRAY[1..7] OF MC_Stop;
@@ -12,16 +12,17 @@ VAR
     // fb_set_blocked is a function, no instantiation needed
     dist_scan_large : LREAL := 1000.0;
     target_pos_large : LREAL := 1000.0;
-    vel_scan : LREAL := 10.0;   // 寻参逼近速度，>0（单位随轴：mm/s 或 deg/s
+    power_not_ready_errid : UDINT := 16#00004650;
+    vel_scan : LREAL := 30.0;   // 寻参逼近速度，>0（单位随轴：mm/s 或 deg/s
     vel_back : LREAL := 50.0;   // 回退速度，>0（单位随轴：mm/s 或 deg/s）
-    
-    back_dist : ARRAY[1..7] OF LREAL:= [-5,0,-413,0,-253.7,-74.2,0];  // 回退距离（轴单位）
+
+    init_target_from_left : ARRAY[1..7] OF LREAL:= [96,0,280,0,530,680,0];  // 左限位寻参后回到的工作位（距左限位）
     target_axes : ARRAY[1..7] OF BOOL:= [TRUE,FALSE,TRUE,FALSE,TRUE,TRUE,FALSE];	// 目标轴（平移轴）
-    backoff_delay : ARRAY[1..7] OF TIME := [T#0ms,T#0ms,T#0ms,T#0ms,T#1s,T#1500ms,T#0ms];
+    stagger_delay : ARRAY[1..7] OF TIME := [T#3s,T#0ms,T#2s,T#0ms,T#1s,T#0ms,T#0ms];
+    stagger_started : BOOL := FALSE;
     
     all_done : BOOL;
     all_reach_limit : BOOL;
-	all_powered_target : BOOL;
     
     // 日志触发 (示例)
     log_trigger : ARRAY[1..7] OF R_TRIG;
@@ -42,7 +43,9 @@ VAR
     
     // 延时计时器
     wait_timer : ARRAY[1..7] OF TON;
-	set_pos_timer : ARRAY[1..7] OF TON;
+    power_pulse_timer : ARRAY[1..7] OF TON;
+    power_wait_timer : ARRAY[1..7] OF TON;
+    stagger_timer : TON;
 END_VAR
 ]]></Declaration>
     <Implementation>
@@ -52,7 +55,7 @@ FUNCTION_BLOCK: SelfCheck
   上电自检/寻参流程（正向低速逼近右限位 + 顺序回退），用于建立各轴相对坐标系零点并消除进入外部给定模式前的 SetPos/ActPos 偏差。
 
 自检流程:
-  1) 对 target_axes[]包括的平移轴：禁用外部给定（SetPointGenDisable），正向低速逼近右限位并记录 G.rightlimit[]
+  1) 对 target_axes[]包括的平移轴：禁用外部给定（SetPointGenDisable），反向低速逼近左限位并记录 G.leftlimit[]
   2) 对旋转轴（轴2/4/7）：禁用外部给定后，直接 MC_MoveAbsolute 到绝对位置 0
   3) 停止与清错：MC_Stop 平滑停止；若出现故障则 MC_Reset 清错
   4) 目标轴回退：按 seq_order[] 依次 MC_SetPosition(ActPos→SetPos) → MC_MoveAbsolute 回退 → 以回退终点刷新 init_pos[]
@@ -74,7 +77,8 @@ IF G.selfcheck_reset_req THEN
         scan_start_pos[i] := 0.0;
         G.selfcheck_stu[i] := 0;
         wait_timer[i](IN:=FALSE);
-        set_pos_timer[i](IN:=FALSE);
+        power_pulse_timer[i](IN:=FALSE);
+        power_wait_timer[i](IN:=FALSE);
         G.SetPointGenDisable[i](Axis:=G.axis[i], Execute:=FALSE);
         G.axis_Reset[i](Axis:=G.axis[i], Execute:=FALSE);
         fb_move_vel[i](Axis:=G.axis[i], Execute:=FALSE);
@@ -82,30 +86,50 @@ IF G.selfcheck_reset_req THEN
         fb_stop[i](Axis:=G.axis[i], Execute:=FALSE);
         fb_set_pos[i](Axis:=G.axis[i], Execute:=FALSE);
     END_FOR
+    stagger_started := FALSE;
+    stagger_timer(IN:=FALSE);
     G.selfcheck_all_reach_limit := FALSE;
-    G.selfcheck_all_powered_target := FALSE;
+    G.axis1_return_cmd.Req := FALSE;
+    G.axis1_return_cmd.Busy := FALSE;
+    G.axis1_return_cmd.Done := FALSE;
+    G.axis1_return_cmd.Error := FALSE;
+    G.axis1_return_cmd.ErrorId := 0;
+    G.axis3_return_cmd.Req := FALSE;
+    G.axis3_return_cmd.Busy := FALSE;
+    G.axis3_return_cmd.Done := FALSE;
+    G.axis3_return_cmd.Error := FALSE;
+    G.axis3_return_cmd.ErrorId := 0;
+    G.axis5_return_cmd.Req := FALSE;
+    G.axis5_return_cmd.Busy := FALSE;
+    G.axis5_return_cmd.Done := FALSE;
+    G.axis5_return_cmd.Error := FALSE;
+    G.axis5_return_cmd.ErrorId := 0;
+    G.axis6_return_cmd.Req := FALSE;
+    G.axis6_return_cmd.Busy := FALSE;
+    G.axis6_return_cmd.Done := FALSE;
+    G.axis6_return_cmd.Error := FALSE;
+    G.axis6_return_cmd.ErrorId := 0;
+    G.axis4_fwd_req := FALSE;
+    G.axis4_rev_req := FALSE;
+    G.axis4_manual_busy := FALSE;
+    G.axis4_manual_done := FALSE;
+    G.axis4_manual_error := FALSE;
+    G.axis4_manual_error_id := 0;
     G.selfcheck_reset_req := FALSE;
 END_IF
 
 all_reach_limit := TRUE;
 FOR i:=1 TO 7 DO
-    IF target_axes[i] AND stu[i] < 6 THEN
+    IF target_axes[i] AND ((stu[i] < 6) OR (NOT G.power_output[i].Done)) THEN
         all_reach_limit := FALSE;
         EXIT;
     END_IF
 END_FOR
 
 // 统计：目标轴是否全部处于上电使能状态（避免在 SetPosition 时单轴卡顿）
-all_powered_target := TRUE;
-FOR i:=1 TO 7 DO
-	IF target_axes[i] AND (NOT G.power_output[i].Done) THEN
-		all_powered_target := FALSE;
-		EXIT;
-	END_IF
-END_FOR
 
 G.selfcheck_all_reach_limit := all_reach_limit;
-G.selfcheck_all_powered_target := all_powered_target;
+stagger_timer(IN:=stagger_started, PT:=T#10s);
 
 FOR i:=1 TO 7 DO
     // 初始化本周期的控制变量
@@ -135,7 +159,6 @@ FOR i:=1 TO 7 DO
             scan_start_pos[i] := G.axis[i].NcToPlc.ActPos;
             mv_vel_vel[i] := vel_scan;
             mv_vel_exec[i] := TRUE;
-            
             stu[i] := 2;
             
         2:  // 步骤2：监控逼近过程（到限位/堵转判据）
@@ -158,7 +181,7 @@ FOR i:=1 TO 7 DO
             IF fb_move_vel[i].Error OR wait_timer[i].Q THEN
                
                 // 记录右限位（绝对坐标）
-                G.rightlimit[i] := G.axis[i].NcToPlc.ActPos;
+                G.leftlimit[i] := G.axis[i].NcToPlc.ActPos;
                 
                 // 停止逼近：先撤销 MoveVelocity，再发 MC_Stop 做平滑减速
                 mv_vel_exec[i] := FALSE;
@@ -178,17 +201,14 @@ FOR i:=1 TO 7 DO
                  fb_stop[i](Axis:=G.axis[i], Execute:=FALSE);
                  IF G.axis[i].Status.Error THEN
                     stu[i] := 4;
-                 ELSE
+                 ELSIF G.power_output[i].Done THEN
                     stu[i] := 6;
+                 ELSE
+                    power_pulse_timer[i](IN:=FALSE);
+                    power_wait_timer[i](IN:=FALSE);
+                    stu[i] := 55;
                  END_IF
             // 保险：Stop 报错或中止时也允许进入后续清错/同步阶段
-            ELSIF fb_stop[i].Error OR fb_stop[i].CommandAborted THEN
-                 fb_stop[i](Axis:=G.axis[i], Execute:=FALSE);
-                 IF G.axis[i].Status.Error THEN
-                    stu[i] := 4;
-                 ELSE
-                    stu[i] := 6;
-                 END_IF
             END_IF
             
         4: // 步骤4：触发错误清除（通常为限位/跟随相关故障）
@@ -199,51 +219,105 @@ FOR i:=1 TO 7 DO
             
         5: // 步骤5：等待错误清除完成
             G.axis_Reset[i](Axis:=G.axis[i]);
+            power_pulse_timer[i](IN:=FALSE);
+            power_wait_timer[i](IN:=FALSE);
             
             IF G.axis_Reset[i].Done OR NOT G.axis[i].Status.Error THEN
                 G.axis_Reset[i](Axis:=G.axis[i], Execute:=FALSE);
                 // 进入同步等待：后续统一进行 SetPosition + 回退
-                stu[i] := 6;
+                IF G.power_output[i].Done THEN
+                    stu[i] := 6;
+                ELSE
+                    power_pulse_timer[i](IN:=FALSE);
+                    power_wait_timer[i](IN:=FALSE);
+                    IF i = 6 THEN
+                        stagger_started := FALSE;
+                        stagger_timer(IN:=FALSE);
+                    END_IF
+                    stu[i] := 55;
+                END_IF
             ELSIF G.axis_Reset[i].Error THEN
                 // 复位失败，尝试重试
                 G.axis_Reset[i](Axis:=G.axis[i], Execute:=FALSE);
                 stu[i] := 4;
             END_IF
-        
+        55: // RepowerPulse: 关闭 MC_Power Enable 一个脉冲，让轴重新初始化
+            G.power_[i].Enable := FALSE;
+            power_pulse_timer[i](IN:=TRUE, PT:=T#200ms);
+            IF power_pulse_timer[i].Q THEN
+                power_pulse_timer[i](IN:=FALSE);
+                G.power_[i].Enable := TRUE;
+                stu[i] := 56;
+            END_IF
+
+        56: // RepowerWait: 等待 MC_Power 重新就绪
+            G.power_[i].Enable := TRUE;
+            power_wait_timer[i](IN:=TRUE, PT:=T#3s);
+            IF G.power_output[i].Done THEN
+                power_wait_timer[i](IN:=FALSE);
+                stu[i] := 6;
+            ELSIF power_wait_timer[i].Q THEN
+                // 超时仍未就绪，重试
+                power_wait_timer[i](IN:=FALSE);
+                power_pulse_timer[i](IN:=FALSE);
+                stu[i] := 55;
+            END_IF
 		6: // 步骤6：同步等待（全部目标轴都到达后，同时放行回退）
-            IF all_reach_limit THEN
+            IF all_reach_limit AND G.power_output[i].Done THEN
                 stu[i] := 7;
+            ELSIF NOT G.power_output[i].Done THEN
+                power_pulse_timer[i](IN:=FALSE);
+                power_wait_timer[i](IN:=FALSE);
+                IF i = 6 THEN
+                    stagger_started := FALSE;
+                    stagger_timer(IN:=FALSE);
+                END_IF
+                stu[i] := 55;
             END_IF
             
         7: // 步骤7：同步 SetPos=ActPos，避免进入回退/外部给定时产生突跳
-            set_pos_timer[i](IN:=FALSE);
-			IF NOT G.power_output[i].Done THEN
-				set_pos_exec[i] := FALSE;
-				fb_set_pos[i](Axis:=G.axis[i], Execute:=FALSE);
-				stu[i] := 6;
-			ELSE
+            IF NOT G.power_output[i].Done THEN
+                set_pos_exec[i] := FALSE;
+                fb_set_pos[i](Axis:=G.axis[i], Execute:=FALSE);
+                power_pulse_timer[i](IN:=FALSE);
+                power_wait_timer[i](IN:=FALSE);
+                IF i = 6 THEN
+                    stagger_started := FALSE;
+                    stagger_timer(IN:=FALSE);
+                END_IF
+                stu[i] := 55;
+            ELSE
 				set_pos_exec[i] := TRUE;
 				fb_set_pos[i](
-					Axis:=G.axis[i], 
-					Position:=G.axis[i].NcToPlc.ActPos, 
+					Axis:=G.axis[i],
+					Position:=G.axis[i].NcToPlc.ActPos,
 					Mode:=FALSE,
 					Execute:=set_pos_exec[i]
 				);
 				stu[i] := 71;
-			END_IF
+            END_IF
 
         71: // 步骤71：等待位置同步完成，然后启动回退
-			set_pos_timer[i](IN:= NOT fb_set_pos[i].Done, PT:=T#200ms);
             fb_set_pos[i](Axis:=G.axis[i], Execute:=set_pos_exec[i]);
             
-            IF fb_set_pos[i].Done THEN
+            IF NOT G.power_output[i].Done THEN
+                set_pos_exec[i] := FALSE;
+                fb_set_pos[i](Axis:=G.axis[i], Execute:=FALSE);
+                power_pulse_timer[i](IN:=FALSE);
+                power_wait_timer[i](IN:=FALSE);
+                IF i = 6 THEN
+                    stagger_started := FALSE;
+                    stagger_timer(IN:=FALSE);
+                END_IF
+                stu[i] := 55;
+            ELSIF fb_set_pos[i].Done THEN
 				set_pos_exec[i] := FALSE;
                 fb_set_pos[i](Axis:=G.axis[i], Execute:=FALSE);
                 
                
                 // 启动绝对回退（目标=右限位绝对坐标 + 回退距离）
-                debug_limit_pos[i] := G.rightlimit[i];
-                debug_init_target_pos[i] := G.rightlimit[i] + back_dist[i];
+                debug_limit_pos[i] := G.leftlimit[i];
+                debug_init_target_pos[i] := G.leftlimit[i] + init_target_from_left[i];
                 
                 mv_abs_pos[i] := debug_init_target_pos[i];
                 mv_abs_vel[i] := vel_back;
@@ -256,34 +330,50 @@ FOR i:=1 TO 7 DO
                 // 如果 SetPosition 失败，尝试重试复位
 				set_pos_exec[i] := FALSE;
                 fb_set_pos[i](Axis:=G.axis[i], Execute:=FALSE);
-                stu[i] := 4;
-			ELSIF set_pos_timer[i].Q THEN
-				set_pos_exec[i] := FALSE;
-				fb_set_pos[i](Axis:=G.axis[i], Execute:=FALSE);
-				debug_limit_pos[i] := G.rightlimit[i];
-				debug_init_target_pos[i] := G.rightlimit[i] + back_dist[i];
-				mv_abs_pos[i] := debug_init_target_pos[i];
-				mv_abs_vel[i] := vel_back;
-				mv_abs_exec[i] := FALSE;
-				wait_timer[i](IN:=FALSE);
-				stu[i] := 72;
+                IF G.power_output[i].Error THEN
+                    power_pulse_timer[i](IN:=FALSE);
+                    power_wait_timer[i](IN:=FALSE);
+                    IF i = 6 THEN
+                        stagger_started := FALSE;
+                        stagger_timer(IN:=FALSE);
+                    END_IF
+                    stu[i] := 55;
+                ELSE
+                    stu[i] := 4;
+                END_IF
             END_IF
 
-        72: // 步骤72：回退前分轴等待，轴3直接回，轴5延时1s，轴6再延时0.5s
+        72: // 步骤72：轴6先发起并确认回退，其他目标轴按 stagger_delay 依次放行
             mv_abs_pos[i] := debug_init_target_pos[i];
             mv_abs_vel[i] := vel_back;
             mv_abs_exec[i] := FALSE;
 
-            IF backoff_delay[i] = T#0ms THEN
-                wait_timer[i](IN:=FALSE);
-                mv_abs_exec[i] := TRUE;
-                stu[i] := 8;
-            ELSE
-                wait_timer[i](IN:=TRUE, PT:=backoff_delay[i]);
-                IF wait_timer[i].Q THEN
-                    wait_timer[i](IN:=FALSE);
+            wait_timer[i](IN:=FALSE);
+            IF i = 6 THEN
+                IF NOT G.power_output[i].Done THEN
+                    power_pulse_timer[i](IN:=FALSE);
+                    power_wait_timer[i](IN:=FALSE);
+                    stagger_started := FALSE;
+                    stagger_timer(IN:=FALSE);
+                    stu[i] := 55;
+                ELSE
+                    mv_abs_exec[i] := TRUE;
+                    IF fb_move_abs[i].Busy OR fb_move_abs[i].Done OR (ABS(G.axis[i].NcToPlc.ActVelo) > 0.5) THEN
+                        IF NOT stagger_started THEN
+                            stagger_started := TRUE;
+                            stagger_timer(IN:=FALSE);
+                        END_IF
+                        stu[i] := 8;
+                    END_IF
+                END_IF
+            ELSIF stagger_started AND (stagger_timer.ET >= stagger_delay[i]) THEN
+                IF G.power_output[i].Done THEN
                     mv_abs_exec[i] := TRUE;
                     stu[i] := 8;
+                ELSE
+                    power_pulse_timer[i](IN:=FALSE);
+                    power_wait_timer[i](IN:=FALSE);
+                    stu[i] := 55;
                 END_IF
             END_IF
             
@@ -295,11 +385,21 @@ FOR i:=1 TO 7 DO
             IF fb_move_abs[i].Done THEN
                 mv_abs_exec[i] := FALSE;
                 stu[i] := 10; // 完成
-            ELSIF fb_move_abs[i].Error OR fb_move_abs[i].CommandAborted THEN
-                 // 回退报错，尝试重新复位
-                 mv_abs_exec[i] := FALSE;
-                 stu[i] := 4; 
-            END_IF
+			ELSIF fb_move_abs[i].Error OR fb_move_abs[i].CommandAborted THEN
+				mv_abs_exec[i] := FALSE;
+				IF G.power_output[i].Error THEN
+					// Power 层面出了问题，先重新上电
+					power_pulse_timer[i](IN:=FALSE);
+					power_wait_timer[i](IN:=FALSE);
+                    IF i = 6 THEN
+                        stagger_started := FALSE;
+                        stagger_timer(IN:=FALSE);
+                    END_IF
+					stu[i] := 55;
+				ELSE
+					stu[i] := 4;
+				END_IF
+			END_IF
             
         10: // 完成：以回退终点作为新的相对零点（刷新 init_pos）
             G.init_pos[i] := G.axis[i].NcToPlc.ActPos;
@@ -360,7 +460,7 @@ FOR i:=1 TO 7 DO
         Acceleration:=100,
         Deceleration:=100,
         Jerk:=100,
-        Direction:=MC_Direction.MC_Positive_Direction
+        Direction:=MC_Direction.MC_Negative_Direction
     );
     fb_move_abs[i](
         Axis:=G.axis[i], 
@@ -393,10 +493,12 @@ IF all_done THEN
     FOR i:=1 TO 7 DO
         // 统一刷新相对坐标/参考，避免切换到 handle 后出现参考突变
         G.Act_pos[i] := G.axis[i].NcToPlc.ActPos - G.init_pos[i];
+        G.act_pos_from_left[i] := G.axis[i].NcToPlc.ActPos - G.leftlimit[i];
         G.refer[i] := G.Act_pos[i];
         G.ref_slow[i] := G.Act_pos[i];
         G.act_h[i] := G.Act_pos[i];
         G.act_hf[i] := G.Act_pos[i];
+        G.refer_from_left[i] := G.act_pos_from_left[i];
     END_FOR
     G.gen_state := _handle;
 END_IF
@@ -425,16 +527,23 @@ END_IF
       <LineId Id="239" Count="0" />
       <LineId Id="111" Count="15" />
       <LineId Id="129" Count="52" />
-      <LineId Id="240" Count="3" />
+      <LineId Id="240" Count="0" />
+      <LineId Id="450" Count="19" />
+      <LineId Id="241" Count="2" />
       <LineId Id="186" Count="22" />
       <LineId Id="244" Count="2" />
       <LineId Id="212" Count="2" />
       <LineId Id="247" Count="0" />
       <LineId Id="216" Count="3" />
       <LineId Id="248" Count="0" />
-      <LineId Id="275" Count="29" />
-      <LineId Id="249" Count="25" />
+      <LineId Id="275" Count="20" />
+      <LineId Id="482" Count="7" />
+      <LineId Id="494" Count="9" />
+      <LineId Id="252" Count="22" />
       <LineId Id="305" Count="0" />
+      <LineId Id="377" Count="25" />
+      <LineId Id="306" Count="52" />
+      <LineId Id="403" Count="0" />
     </LineIds>
   </POU>
 </TcPlcObject>

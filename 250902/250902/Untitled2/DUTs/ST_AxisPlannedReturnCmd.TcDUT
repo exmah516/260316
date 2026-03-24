@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<TcPlcObject Version="1.1.0.1" ProductVersion="3.1.4024.15">
+  <DUT Name="ST_AxisPlannedReturnCmd" Id="{d0ad7d4d-f5d4-46e2-b98e-3c5f5777e6ff}">
+    <Declaration><![CDATA[TYPE ST_AxisPlannedReturnCmd :
+STRUCT
+	Req			: BOOL;
+	Busy		: BOOL;
+	Done		: BOOL;
+	Error		: BOOL;
+	ErrorId		: UDINT;
+	TargetAbs	: LREAL;
+	Velocity	: LREAL;
+	Acc			: LREAL;
+	Dec			: LREAL;
+	Jerk		: LREAL;
+END_STRUCT
+END_TYPE]]></Declaration>
+  </DUT>
+</TcPlcObject>
