@@ -1,4 +1,4 @@
-<?xml version="1.0" encoding="utf-8"?>
+﻿<?xml version="1.0" encoding="utf-8"?>
 <TcPlcObject Version="1.1.0.1" ProductVersion="3.1.4024.15">
   <POU Name="handle" Id="{687f3d3e-09ee-464b-b8db-c97aea6d31ed}" SpecialFunc="None">
     <Declaration><![CDATA[FUNCTION_BLOCK handle
@@ -10,6 +10,7 @@ VAR
 	i,j,k:INT;
 	v_step		: LREAL;
 	avg_window	: INT;
+	return_handoff_bypass : BOOL;
 
 	Kp			:	LREAL:=0.14;
 	Ki			:	LREAL:=0.016;
@@ -62,6 +63,7 @@ VAR
 	axis4_manual_direction : MC_Direction := MC_Direction.MC_Positive_Direction;
 	fb_axis4_move_velocity : MC_MoveVelocity;
 	fb_axis4_stop : MC_Stop;
+	ramp_counter: ARRAY[1..7] OF INT;
 END_VAR
 
 ]]></Declaration>
@@ -260,6 +262,14 @@ FOR j:=1 TO 7 DO
 
 	v_step := G.v_limit[j];
 	avg_window := 20;
+	return_handoff_bypass := ((j = 1) AND G.axis1_fast_return) OR ((j = 6) AND G.axis6_fast_retract);
+	IF return_handoff_bypass THEN
+		avg_window := 1;
+		ramp_counter[j] := 0;
+	ELSE
+		ramp_counter[j] := MIN(ramp_counter[j] + 1, 20);
+		avg_window := MAX(1, ramp_counter[j]);
+	END_IF
 	
 	FOR k:=2 TO 20 DO
 		act_hh[j][22-k] := act_hh[j][21-k];
@@ -271,20 +281,31 @@ FOR j:=1 TO 7 DO
 		END_IF
 	END_IF
 
-	IF (G.refer[j] - G.ref_slow[j]) > v_step THEN
-		G.ref_slow[j] := G.ref_slow[j] + v_step;
-	ELSIF (G.refer[j] - G.ref_slow[j]) < -v_step THEN
-		G.ref_slow[j] := G.ref_slow[j] - v_step;
-	ELSE
+	IF return_handoff_bypass THEN
 		G.ref_slow[j] := G.refer[j];
+	ELSE
+		IF (G.refer[j] - G.ref_slow[j]) > v_step THEN
+			G.ref_slow[j] := G.ref_slow[j] + v_step;
+		ELSIF (G.refer[j] - G.ref_slow[j]) < -v_step THEN
+			G.ref_slow[j] := G.ref_slow[j] - v_step;
+		ELSE
+			G.ref_slow[j] := G.refer[j];
+		END_IF
 	END_IF
 
-	act_hh[j][1] := G.ref_slow[j];
-	G.act_h[j] := 0;
-	
-	FOR i:=1 TO avg_window DO
-		G.act_h[j] := G.act_h[j] + act_hh[j][i] / TO_LREAL(avg_window);
-	END_FOR
+	IF return_handoff_bypass THEN
+		FOR i:=1 TO 20 DO
+			act_hh[j][i] := G.ref_slow[j];
+		END_FOR
+		G.act_h[j] := G.ref_slow[j];
+	ELSE
+		act_hh[j][1] := G.ref_slow[j];
+		G.act_h[j] := 0;
+
+		FOR i:=1 TO avg_window DO
+			G.act_h[j] := G.act_h[j] + act_hh[j][i] / TO_LREAL(avg_window);
+		END_FOR
+	END_IF
 END_FOR
 
 IF return_state[1] = 0 THEN
@@ -331,35 +352,42 @@ CASE return_state[1] OF
 	END_IF
 
 30:
-	G.axis1_return_cmd.Busy := TRUE;
-	G.Act_pos[1] := G.axis[1].NcToPlc.ActPos - G.init_pos[1];
-	G.act_pos_from_left[1] := G.axis[1].NcToPlc.ActPos - G.leftlimit[1];
-	G.refer[1] := G.Act_pos[1];
-	G.ref_slow[1] := G.Act_pos[1];
-	G.act_h[1] := G.Act_pos[1];
-	G.act_hf[1] := G.Act_pos[1];
-	G.refer_from_left[1] := G.act_pos_from_left[1];
-	FOR k:=1 TO 30 DO
-		act_hh[1][k] := G.Act_pos[1];
-	END_FOR
+    G.axis1_return_cmd.Busy := TRUE;
 
-	spg_enable_exec[1] := TRUE;
-	IF G.SetPointGenEnable[1].Done THEN
-		ext_setpoint_enabled[1] := TRUE;
-		G.axis1_return_cmd.Busy := FALSE;
-		IF return_finish_error[1] THEN
-			G.axis1_return_cmd.Done := FALSE;
-			G.axis1_return_cmd.Error := TRUE;
-			G.axis1_return_cmd.ErrorId := return_error_id_pending[1];
-		ELSE
-			G.axis1_return_cmd.Done := TRUE;
-			G.axis1_return_cmd.Error := FALSE;
-			G.axis1_return_cmd.ErrorId := 0;
-		END_IF
-		return_finish_error[1] := FALSE;
-		return_error_id_pending[1] := 0;
-		return_state[1] := 0;
-	END_IF
+    IF ABS(G.axis[1].NcToPlc.ActVelo) > 0.5 THEN
+        // 还没停稳，保持当前参考不变，等下一个周期
+        // 不做 snap，不做 spg_enable，什么都不动
+    ELSE
+        // 真正停稳了，执行原有逻辑
+        G.Act_pos[1] := G.axis[1].NcToPlc.ActPos - G.init_pos[1];
+        G.act_pos_from_left[1] := G.axis[1].NcToPlc.ActPos - G.leftlimit[1];
+        G.refer[1] := G.Act_pos[1];
+        G.ref_slow[1] := G.Act_pos[1];
+        G.act_h[1] := G.Act_pos[1];
+        G.act_hf[1] := G.Act_pos[1];
+        G.refer_from_left[1] := G.act_pos_from_left[1];
+        FOR k:=1 TO 30 DO
+            act_hh[1][k] := G.Act_pos[1];
+        END_FOR
+
+        spg_enable_exec[1] := TRUE;
+        IF G.SetPointGenEnable[1].Done THEN
+            ext_setpoint_enabled[1] := TRUE;
+            G.axis1_return_cmd.Busy := FALSE;
+            IF return_finish_error[1] THEN
+                G.axis1_return_cmd.Done := FALSE;
+                G.axis1_return_cmd.Error := TRUE;
+                G.axis1_return_cmd.ErrorId := return_error_id_pending[1];
+            ELSE
+                G.axis1_return_cmd.Done := TRUE;
+                G.axis1_return_cmd.Error := FALSE;
+                G.axis1_return_cmd.ErrorId := 0;
+            END_IF
+            return_finish_error[1] := FALSE;
+            return_error_id_pending[1] := 0;
+            return_state[1] := 0;
+        END_IF
+    END_IF
 END_CASE
 
 IF return_state[3] = 0 THEN
@@ -406,35 +434,42 @@ CASE return_state[3] OF
 	END_IF
 
 30:
-	G.axis3_return_cmd.Busy := TRUE;
-	G.Act_pos[3] := G.axis[3].NcToPlc.ActPos - G.init_pos[3];
-	G.act_pos_from_left[3] := G.axis[3].NcToPlc.ActPos - G.leftlimit[3];
-	G.refer[3] := G.Act_pos[3];
-	G.ref_slow[3] := G.Act_pos[3];
-	G.act_h[3] := G.Act_pos[3];
-	G.act_hf[3] := G.Act_pos[3];
-	G.refer_from_left[3] := G.act_pos_from_left[3];
-	FOR k:=1 TO 30 DO
-		act_hh[3][k] := G.Act_pos[3];
-	END_FOR
+    G.axis3_return_cmd.Busy := TRUE;
 
-	spg_enable_exec[3] := TRUE;
-	IF G.SetPointGenEnable[3].Done THEN
-		ext_setpoint_enabled[3] := TRUE;
-		G.axis3_return_cmd.Busy := FALSE;
-		IF return_finish_error[3] THEN
-			G.axis3_return_cmd.Done := FALSE;
-			G.axis3_return_cmd.Error := TRUE;
-			G.axis3_return_cmd.ErrorId := return_error_id_pending[3];
-		ELSE
-			G.axis3_return_cmd.Done := TRUE;
-			G.axis3_return_cmd.Error := FALSE;
-			G.axis3_return_cmd.ErrorId := 0;
-		END_IF
-		return_finish_error[3] := FALSE;
-		return_error_id_pending[3] := 0;
-		return_state[3] := 0;
-	END_IF
+    IF ABS(G.axis[3].NcToPlc.ActVelo) > 0.5 THEN
+        // 还没停稳，保持当前参考不变，等下一个周期
+        // 不做 snap，不做 spg_enable，什么都不动
+    ELSE
+        // 真正停稳了，执行原有逻辑
+        G.Act_pos[3] := G.axis[3].NcToPlc.ActPos - G.init_pos[3];
+        G.act_pos_from_left[3] := G.axis[3].NcToPlc.ActPos - G.leftlimit[3];
+        G.refer[3] := G.Act_pos[3];
+        G.ref_slow[3] := G.Act_pos[3];
+        G.act_h[3] := G.Act_pos[3];
+        G.act_hf[3] := G.Act_pos[3];
+        G.refer_from_left[3] := G.act_pos_from_left[3];
+        FOR k:=1 TO 30 DO
+            act_hh[3][k] := G.Act_pos[3];
+        END_FOR
+
+        spg_enable_exec[3] := TRUE;
+        IF G.SetPointGenEnable[3].Done THEN
+            ext_setpoint_enabled[3] := TRUE;
+            G.axis3_return_cmd.Busy := FALSE;
+            IF return_finish_error[3] THEN
+                G.axis3_return_cmd.Done := FALSE;
+                G.axis3_return_cmd.Error := TRUE;
+                G.axis3_return_cmd.ErrorId := return_error_id_pending[3];
+            ELSE
+                G.axis3_return_cmd.Done := TRUE;
+                G.axis3_return_cmd.Error := FALSE;
+                G.axis3_return_cmd.ErrorId := 0;
+            END_IF
+            return_finish_error[3] := FALSE;
+            return_error_id_pending[3] := 0;
+            return_state[3] := 0;
+        END_IF
+    END_IF
 END_CASE
 
 IF return_state[5] = 0 THEN
@@ -481,35 +516,42 @@ CASE return_state[5] OF
 	END_IF
 
 30:
-	G.axis5_return_cmd.Busy := TRUE;
-	G.Act_pos[5] := G.axis[5].NcToPlc.ActPos - G.init_pos[5];
-	G.act_pos_from_left[5] := G.axis[5].NcToPlc.ActPos - G.leftlimit[5];
-	G.refer[5] := G.Act_pos[5];
-	G.ref_slow[5] := G.Act_pos[5];
-	G.act_h[5] := G.Act_pos[5];
-	G.act_hf[5] := G.Act_pos[5];
-	G.refer_from_left[5] := G.act_pos_from_left[5];
-	FOR k:=1 TO 30 DO
-		act_hh[5][k] := G.Act_pos[5];
-	END_FOR
+    G.axis5_return_cmd.Busy := TRUE;
 
-	spg_enable_exec[5] := TRUE;
-	IF G.SetPointGenEnable[5].Done THEN
-		ext_setpoint_enabled[5] := TRUE;
-		G.axis5_return_cmd.Busy := FALSE;
-		IF return_finish_error[5] THEN
-			G.axis5_return_cmd.Done := FALSE;
-			G.axis5_return_cmd.Error := TRUE;
-			G.axis5_return_cmd.ErrorId := return_error_id_pending[5];
-		ELSE
-			G.axis5_return_cmd.Done := TRUE;
-			G.axis5_return_cmd.Error := FALSE;
-			G.axis5_return_cmd.ErrorId := 0;
-		END_IF
-		return_finish_error[5] := FALSE;
-		return_error_id_pending[5] := 0;
-		return_state[5] := 0;
-	END_IF
+    IF ABS(G.axis[5].NcToPlc.ActVelo) > 0.5 THEN
+        // 还没停稳，保持当前参考不变，等下一个周期
+        // 不做 snap，不做 spg_enable，什么都不动
+    ELSE
+        // 真正停稳了，执行原有逻辑
+        G.Act_pos[5] := G.axis[5].NcToPlc.ActPos - G.init_pos[5];
+        G.act_pos_from_left[5] := G.axis[5].NcToPlc.ActPos - G.leftlimit[5];
+        G.refer[5] := G.Act_pos[5];
+        G.ref_slow[5] := G.Act_pos[5];
+        G.act_h[5] := G.Act_pos[5];
+        G.act_hf[5] := G.Act_pos[5];
+        G.refer_from_left[5] := G.act_pos_from_left[5];
+        FOR k:=1 TO 30 DO
+            act_hh[5][k] := G.Act_pos[5];
+        END_FOR
+
+        spg_enable_exec[5] := TRUE;
+        IF G.SetPointGenEnable[5].Done THEN
+            ext_setpoint_enabled[5] := TRUE;
+            G.axis5_return_cmd.Busy := FALSE;
+            IF return_finish_error[5] THEN
+                G.axis5_return_cmd.Done := FALSE;
+                G.axis5_return_cmd.Error := TRUE;
+                G.axis5_return_cmd.ErrorId := return_error_id_pending[5];
+            ELSE
+                G.axis5_return_cmd.Done := TRUE;
+                G.axis5_return_cmd.Error := FALSE;
+                G.axis5_return_cmd.ErrorId := 0;
+            END_IF
+            return_finish_error[5] := FALSE;
+            return_error_id_pending[5] := 0;
+            return_state[5] := 0;
+        END_IF
+    END_IF
 END_CASE
 
 IF return_state[6] = 0 THEN
@@ -556,35 +598,42 @@ CASE return_state[6] OF
 	END_IF
 
 30:
-	G.axis6_return_cmd.Busy := TRUE;
-	G.Act_pos[6] := G.axis[6].NcToPlc.ActPos - G.init_pos[6];
-	G.act_pos_from_left[6] := G.axis[6].NcToPlc.ActPos - G.leftlimit[6];
-	G.refer[6] := G.Act_pos[6];
-	G.ref_slow[6] := G.Act_pos[6];
-	G.act_h[6] := G.Act_pos[6];
-	G.act_hf[6] := G.Act_pos[6];
-	G.refer_from_left[6] := G.act_pos_from_left[6];
-	FOR k:=1 TO 30 DO
-		act_hh[6][k] := G.Act_pos[6];
-	END_FOR
+    G.axis6_return_cmd.Busy := TRUE;
 
-	spg_enable_exec[6] := TRUE;
-	IF G.SetPointGenEnable[6].Done THEN
-		ext_setpoint_enabled[6] := TRUE;
-		G.axis6_return_cmd.Busy := FALSE;
-		IF return_finish_error[6] THEN
-			G.axis6_return_cmd.Done := FALSE;
-			G.axis6_return_cmd.Error := TRUE;
-			G.axis6_return_cmd.ErrorId := return_error_id_pending[6];
-		ELSE
-			G.axis6_return_cmd.Done := TRUE;
-			G.axis6_return_cmd.Error := FALSE;
-			G.axis6_return_cmd.ErrorId := 0;
-		END_IF
-		return_finish_error[6] := FALSE;
-		return_error_id_pending[6] := 0;
-		return_state[6] := 0;
-	END_IF
+    IF ABS(G.axis[6].NcToPlc.ActVelo) > 0.5 THEN
+        // 还没停稳，保持当前参考不变，等下一个周期
+        // 不做 snap，不做 spg_enable，什么都不动
+    ELSE
+        // 真正停稳了，执行原有逻辑
+        G.Act_pos[6] := G.axis[6].NcToPlc.ActPos - G.init_pos[6];
+        G.act_pos_from_left[6] := G.axis[6].NcToPlc.ActPos - G.leftlimit[6];
+        G.refer[6] := G.Act_pos[6];
+        G.ref_slow[6] := G.Act_pos[6];
+        G.act_h[6] := G.Act_pos[6];
+        G.act_hf[6] := G.Act_pos[6];
+        G.refer_from_left[6] := G.act_pos_from_left[6];
+        FOR k:=1 TO 30 DO
+            act_hh[6][k] := G.Act_pos[6];
+        END_FOR
+
+        spg_enable_exec[6] := TRUE;
+        IF G.SetPointGenEnable[6].Done THEN
+            ext_setpoint_enabled[6] := TRUE;
+            G.axis6_return_cmd.Busy := FALSE;
+            IF return_finish_error[6] THEN
+                G.axis6_return_cmd.Done := FALSE;
+                G.axis6_return_cmd.Error := TRUE;
+                G.axis6_return_cmd.ErrorId := return_error_id_pending[6];
+            ELSE
+                G.axis6_return_cmd.Done := TRUE;
+                G.axis6_return_cmd.Error := FALSE;
+                G.axis6_return_cmd.ErrorId := 0;
+            END_IF
+            return_finish_error[6] := FALSE;
+            return_error_id_pending[6] := 0;
+            return_state[6] := 0;
+        END_IF
+    END_IF
 END_CASE
 
 axis4_request_dir_now := 0;
@@ -783,6 +832,22 @@ fb_axis4_stop(
       <LineId Id="71" Count="28" />
       <LineId Id="104" Count="26" />
       <LineId Id="2" Count="0" />
+      <LineId Id="1691" Count="20" />
+      <LineId Id="131" Count="65" />
+      <LineId Id="1784" Count="2" />
+      <LineId Id="1796" Count="3" />
+      <LineId Id="1787" Count="0" />
+      <LineId Id="201" Count="79" />
+      <LineId Id="1807" Count="0" />
+      <LineId Id="1814" Count="35" />
+      <LineId Id="311" Count="45" />
+      <LineId Id="1850" Count="35" />
+      <LineId Id="386" Count="45" />
+      <LineId Id="1886" Count="35" />
+      <LineId Id="461" Count="45" />
+      <LineId Id="1987" Count="35" />
+      <LineId Id="536" Count="166" />
+      <LineId Id="1712" Count="0" />
     </LineIds>
   </POU>
 </TcPlcObject>

@@ -16,7 +16,7 @@ VAR
     vel_scan : LREAL := 30.0;   // 寻参逼近速度，>0（单位随轴：mm/s 或 deg/s
     vel_back : LREAL := 50.0;   // 回退速度，>0（单位随轴：mm/s 或 deg/s）
 
-    init_target_from_left : ARRAY[1..7] OF LREAL:= [96,0,280,0,530,680,0];  // 左限位寻参后回到的工作位（距左限位）
+    init_target_from_left : ARRAY[1..7] OF LREAL:= [96,0,280,0,430,580,0];  // 左限位寻参后回到的工作位（距左限位）
     target_axes : ARRAY[1..7] OF BOOL:= [TRUE,FALSE,TRUE,FALSE,TRUE,TRUE,FALSE];	// 目标轴（平移轴）
     stagger_delay : ARRAY[1..7] OF TIME := [T#3s,T#0ms,T#2s,T#0ms,T#1s,T#0ms,T#0ms];
     stagger_started : BOOL := FALSE;
@@ -544,6 +544,9 @@ END_IF
       <LineId Id="377" Count="25" />
       <LineId Id="306" Count="52" />
       <LineId Id="403" Count="0" />
+      <LineId Id="504" Count="17" />
+      <LineId Id="404" Count="45" />
+      <LineId Id="522" Count="6" />
     </LineIds>
   </POU>
 </TcPlcObject>
