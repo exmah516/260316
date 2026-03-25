@@ -1,4 +1,4 @@
-<?xml version="1.0" encoding="utf-8"?>
+﻿<?xml version="1.0" encoding="utf-8"?>
 <TcPlcObject Version="1.1.0.1" ProductVersion="3.1.4024.15">
   <GVL Name="G" Id="{ccabbda2-7ae2-40eb-8293-a1b7a36c29fa}">
     <Declaration><![CDATA[{attribute 'qualified_only'}
@@ -37,6 +37,7 @@ VAR_GLOBAL
 
 	axis6_fast_retract	: BOOL := FALSE;
 	axis1_fast_return	: BOOL := FALSE;
+	startup_smoothing_bypass : BOOL := FALSE;
 	axis1_return_cmd	: ST_AxisPlannedReturnCmd;
 	axis3_return_cmd	: ST_AxisPlannedReturnCmd;
 	axis5_return_cmd	: ST_AxisPlannedReturnCmd;
@@ -67,10 +68,11 @@ VAR_GLOBAL
 	cylinder3_value		AT %Q* : WORD;		// 电缸3控制值 (安装在轴5机构上)
 	cylinder4_value		AT %Q* : WORD;		// 电缸4控制值 (安装在轴6机构上)
 
-	fn_value			AT %I* : INT;
-	ft_value			AT %I* : INT;
+	ft_1_value			AT %I* : INT;
+	fn_1_value			AT %I* : INT;
+	fn_2_value			AT %I* : INT;
+	ft_2_value			AT %I* : INT;
 
-	test_value			AT %I* : INT;
 
 END_VAR]]></Declaration>
   </GVL>

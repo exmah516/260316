@@ -11,9 +11,6 @@ VAR
 	v_step		: LREAL;
 	avg_window	: INT;
 	return_handoff_bypass : BOOL;
-	avg_window_follow : INT := 10;
-	avg_window_legacy : INT := 20;
-	ema_alpha : LREAL := 0.08;
 
 	Kp			:	LREAL:=0.14;
 	Ki			:	LREAL:=0.016;
@@ -67,16 +64,6 @@ VAR
 	fb_axis4_move_velocity : MC_MoveVelocity;
 	fb_axis4_stop : MC_Stop;
 	ramp_counter: ARRAY[1..7] OF INT;
-	act_h_prev : ARRAY[1..7] OF LREAL;
-	vel_ff : LREAL;
-	refer_prev      : ARRAY[1..7] OF LREAL;
-	refer_interp    : ARRAY[1..7] OF LREAL;
-	refer_step_from : ARRAY[1..7] OF LREAL;
-	refer_step_to   : ARRAY[1..7] OF LREAL;
-	refer_interval  : ARRAY[1..7] OF INT;
-	refer_tick      : ARRAY[1..7] OF INT;
-	refer_progress  : ARRAY[1..7] OF INT;
-	frac            : LREAL;
 END_VAR
 
 ]]></Declaration>
@@ -100,13 +87,6 @@ END_VAR
 		return_jerk[i] := 0.0;
 		return_finish_error[i] := FALSE;
 		return_error_id_pending[i] := 0;
-		refer_prev[i] := 0.0;
-		refer_interp[i] := 0.0;
-		refer_step_from[i] := 0.0;
-		refer_step_to[i] := 0.0;
-		refer_interval[i] := 50;
-		refer_tick[i] := 0;
-		refer_progress[i] := 50;
 	END_FOR
 
 	axis4_manual_state := 0;
@@ -171,14 +151,7 @@ IF NOT init_done THEN
 			FOR k:=1 TO 30 DO
 				act_hh[j][k] := G.Act_pos[j];
 			END_FOR
-			act_h_prev[j] := G.Act_pos[j];
-			refer_prev[j] := G.Act_pos[j];
-			refer_interp[j] := G.Act_pos[j];
-			refer_step_from[j] := G.Act_pos[j];
-			refer_step_to[j] := G.Act_pos[j];
-			refer_interval[j] := 50;
-			refer_tick[j] := 0;
-			refer_progress[j] := 50;
+			
 			IF slimit_enable[j] THEN
 				right_slimit[j] := G.leftlimit[j] + rslimit_distance[j];
 			END_IF
@@ -240,12 +213,6 @@ IF NOT all_powered THEN
 		G.refer_from_left[j] := G.act_pos_from_left[j];
 		FOR k:=1 TO 30 DO
 			act_hh[j][k] := G.Act_pos[j];
-			refer_prev[j] := G.Act_pos[j];
-			refer_interp[j] := G.Act_pos[j];
-			refer_step_from[j] := G.Act_pos[j];
-			refer_step_to[j] := G.Act_pos[j];
-			refer_progress[j] := refer_interval[j];
-			act_h_prev[j] := G.Act_pos[j];
 		END_FOR
 	END_FOR
 
@@ -294,15 +261,13 @@ FOR j:=1 TO 7 DO
 	G.refer_from_left[j] := (G.refer[j] + G.init_pos[j]) - G.leftlimit[j];
 
 	v_step := G.v_limit[j];
+	avg_window := 20;
 	return_handoff_bypass := ((j = 1) AND G.axis1_fast_return) OR ((j = 6) AND G.axis6_fast_retract);
 	IF return_handoff_bypass THEN
 		avg_window := 1;
 		ramp_counter[j] := 0;
-	ELSIF G.startup_smoothing_bypass THEN
-		ramp_counter[j] := MIN(ramp_counter[j] + 1, avg_window_legacy);
-		avg_window := MAX(1, ramp_counter[j]);
 	ELSE
-		ramp_counter[j] := MIN(ramp_counter[j] + 1, avg_window_follow);
+		ramp_counter[j] := MIN(ramp_counter[j] + 1, 20);
 		avg_window := MAX(1, ramp_counter[j]);
 	END_IF
 	
@@ -318,22 +283,13 @@ FOR j:=1 TO 7 DO
 
 	IF return_handoff_bypass THEN
 		G.ref_slow[j] := G.refer[j];
-	ELSIF G.startup_smoothing_bypass THEN
+	ELSE
 		IF (G.refer[j] - G.ref_slow[j]) > v_step THEN
 			G.ref_slow[j] := G.ref_slow[j] + v_step;
 		ELSIF (G.refer[j] - G.ref_slow[j]) < -v_step THEN
 			G.ref_slow[j] := G.ref_slow[j] - v_step;
 		ELSE
 			G.ref_slow[j] := G.refer[j];
-		END_IF
-	ELSE
-		frac := G.ref_slow[j] + ema_alpha * (G.refer[j] - G.ref_slow[j]);
-		IF (frac - G.ref_slow[j]) > v_step THEN
-			G.ref_slow[j] := G.ref_slow[j] + v_step;
-		ELSIF (frac - G.ref_slow[j]) < -v_step THEN
-			G.ref_slow[j] := G.ref_slow[j] - v_step;
-		ELSE
-			G.ref_slow[j] := frac;
 		END_IF
 	END_IF
 
@@ -360,13 +316,6 @@ IF return_state[1] = 0 THEN
 		G.axis1_return_cmd.ErrorId := 0;
 		return_finish_error[1] := FALSE;
 		return_error_id_pending[1] := 0;
-		refer_prev[1] := 0.0;
-		refer_interp[1] := 0.0;
-		refer_step_from[1] := 0.0;
-		refer_step_to[1] := 0.0;
-		refer_interval[1] := 50;
-		refer_tick[1] := 0;
-		refer_progress[1] := 50;
 	ELSIF (NOT G.axis1_return_cmd.Done) AND (NOT G.axis1_return_cmd.Error) THEN
 		return_state[1] := 10;
 	END_IF
@@ -420,12 +369,7 @@ CASE return_state[1] OF
         FOR k:=1 TO 30 DO
             act_hh[1][k] := G.Act_pos[1];
         END_FOR
-		refer_prev[1] := G.Act_pos[1];
-		refer_interp[1] := G.Act_pos[1];
-		refer_step_from[1] := G.Act_pos[1];
-		refer_step_to[1] := G.Act_pos[1];
-		refer_progress[1] := refer_interval[1];
-		act_h_prev[1] := G.Act_pos[1];
+
         spg_enable_exec[1] := TRUE;
         IF G.SetPointGenEnable[1].Done THEN
             ext_setpoint_enabled[1] := TRUE;
@@ -454,13 +398,6 @@ IF return_state[3] = 0 THEN
 		G.axis3_return_cmd.ErrorId := 0;
 		return_finish_error[3] := FALSE;
 		return_error_id_pending[3] := 0;
-		refer_prev[3] := 0.0;
-		refer_interp[3] := 0.0;
-		refer_step_from[3] := 0.0;
-		refer_step_to[3] := 0.0;
-		refer_interval[3] := 50;
-		refer_tick[3] := 0;
-		refer_progress[3] := 50;
 	ELSIF (NOT G.axis3_return_cmd.Done) AND (NOT G.axis3_return_cmd.Error) THEN
 		return_state[3] := 10;
 	END_IF
@@ -514,12 +451,7 @@ CASE return_state[3] OF
         FOR k:=1 TO 30 DO
             act_hh[3][k] := G.Act_pos[3];
         END_FOR
-		refer_prev[3] := G.Act_pos[3];
-		refer_interp[3] := G.Act_pos[3];
-		refer_step_from[3] := G.Act_pos[3];
-		refer_step_to[3] := G.Act_pos[3];
-		refer_progress[3] := refer_interval[3];
-		act_h_prev[3] := G.Act_pos[3];
+
         spg_enable_exec[3] := TRUE;
         IF G.SetPointGenEnable[3].Done THEN
             ext_setpoint_enabled[3] := TRUE;
@@ -548,13 +480,6 @@ IF return_state[5] = 0 THEN
 		G.axis5_return_cmd.ErrorId := 0;
 		return_finish_error[5] := FALSE;
 		return_error_id_pending[5] := 0;
-		refer_prev[5] := 0.0;
-		refer_interp[5] := 0.0;
-		refer_step_from[5] := 0.0;
-		refer_step_to[5] := 0.0;
-		refer_interval[5] := 50;
-		refer_tick[5] := 0;
-		refer_progress[5] := 50;
 	ELSIF (NOT G.axis5_return_cmd.Done) AND (NOT G.axis5_return_cmd.Error) THEN
 		return_state[5] := 10;
 	END_IF
@@ -608,12 +533,7 @@ CASE return_state[5] OF
         FOR k:=1 TO 30 DO
             act_hh[5][k] := G.Act_pos[5];
         END_FOR
-		refer_prev[5] := G.Act_pos[5];
-		refer_interp[5] := G.Act_pos[5];
-		refer_step_from[5] := G.Act_pos[5];
-		refer_step_to[5] := G.Act_pos[5];
-		refer_progress[5] := refer_interval[5];
-		act_h_prev[5] := G.Act_pos[5];
+
         spg_enable_exec[5] := TRUE;
         IF G.SetPointGenEnable[5].Done THEN
             ext_setpoint_enabled[5] := TRUE;
@@ -642,13 +562,6 @@ IF return_state[6] = 0 THEN
 		G.axis6_return_cmd.ErrorId := 0;
 		return_finish_error[6] := FALSE;
 		return_error_id_pending[6] := 0;
-		refer_prev[6] := 0.0;
-		refer_interp[6] := 0.0;
-		refer_step_from[6] := 0.0;
-		refer_step_to[6] := 0.0;
-		refer_interval[6] := 50;
-		refer_tick[6] := 0;
-		refer_progress[6] := 50;
 	ELSIF (NOT G.axis6_return_cmd.Done) AND (NOT G.axis6_return_cmd.Error) THEN
 		return_state[6] := 10;
 	END_IF
@@ -702,12 +615,7 @@ CASE return_state[6] OF
         FOR k:=1 TO 30 DO
             act_hh[6][k] := G.Act_pos[6];
         END_FOR
-		refer_prev[6] := G.Act_pos[6];
-		refer_interp[6] := G.Act_pos[6];
-		refer_step_from[6] := G.Act_pos[6];
-		refer_step_to[6] := G.Act_pos[6];
-		refer_progress[6] := refer_interval[6];
-		act_h_prev[6] := G.Act_pos[6];
+
         spg_enable_exec[6] := TRUE;
         IF G.SetPointGenEnable[6].Done THEN
             ext_setpoint_enabled[6] := TRUE;
@@ -818,12 +726,7 @@ CASE axis4_manual_state OF
 	FOR k:=1 TO 30 DO
 		act_hh[4][k] := G.Act_pos[4];
 	END_FOR
-	refer_prev[4] := G.Act_pos[4];
-	refer_interp[4] := G.Act_pos[4];
-	refer_step_from[4] := G.Act_pos[4];
-	refer_step_to[4] := G.Act_pos[4];
-	refer_progress[4] := refer_interval[4];
-	act_h_prev[4] := G.Act_pos[4];
+
 	spg_enable_exec[4] := TRUE;
 	IF G.SetPointGenEnable[4].Done THEN
 		ext_setpoint_enabled[4] := TRUE;
@@ -852,20 +755,19 @@ FOR i:=1 TO 7 DO
 END_FOR
 
 FOR i:=1 TO 7 DO
-    IF ext_setpoint_enabled[i] THEN
-        pos_abs := G.act_h[i] + G.init_pos[i];
+	IF ext_setpoint_enabled[i] THEN
+		pos_abs := G.act_h[i] + G.init_pos[i];
 
-        MC_ExtSetPointGenFeed(
-            Position:=pos_abs,
-            Velocity:=0,
-            Acceleration:=0,
-            Direction:=1,
-            Axis:=G.axis[i]);
-
-        G.act_hf[i] := G.act_h[i];
-    ELSE
-        G.act_hf[i] := G.axis[i].NcToPlc.ActPos - G.init_pos[i];
-    END_IF
+		MC_ExtSetPointGenFeed(
+			Position:=pos_abs,
+			Velocity:=0,
+			Acceleration:=0,
+			Direction:=1,
+			Axis:=G.axis[i]);
+		G.act_hf[i] := G.act_h[i];
+	ELSE
+		G.act_hf[i] := G.axis[i].NcToPlc.ActPos - G.init_pos[i];
+	END_IF
 END_FOR
 
 FOR i:=1 TO 7 DO
@@ -911,8 +813,6 @@ fb_axis4_stop(
       <LineId Id="1591" Count="2" />
       <LineId Id="1517" Count="1" />
       <LineId Id="1542" Count="1" />
-      <LineId Id="2158" Count="5" />
-      <LineId Id="2157" Count="0" />
       <LineId Id="1522" Count="1" />
       <LineId Id="1669" Count="2" />
       <LineId Id="1665" Count="1" />
@@ -930,55 +830,23 @@ fb_axis4_stop(
       <LineId Id="9" Count="0" />
       <LineId Id="58" Count="4" />
       <LineId Id="71" Count="28" />
-      <LineId Id="104" Count="4" />
-      <LineId Id="2145" Count="5" />
-      <LineId Id="2144" Count="0" />
-      <LineId Id="109" Count="21" />
+      <LineId Id="104" Count="26" />
       <LineId Id="2" Count="0" />
       <LineId Id="1691" Count="20" />
-      <LineId Id="131" Count="16" />
-      <LineId Id="2152" Count="4" />
-      <LineId Id="2151" Count="0" />
-      <LineId Id="148" Count="48" />
+      <LineId Id="131" Count="65" />
       <LineId Id="1784" Count="2" />
       <LineId Id="1796" Count="3" />
       <LineId Id="1787" Count="0" />
-      <LineId Id="201" Count="13" />
-      <LineId Id="2219" Count="5" />
-      <LineId Id="221" Count="25" />
-      <LineId Id="2117" Count="5" />
-      <LineId Id="2116" Count="0" />
-      <LineId Id="247" Count="33" />
+      <LineId Id="201" Count="79" />
       <LineId Id="1807" Count="0" />
-      <LineId Id="1814" Count="17" />
-      <LineId Id="2194" Count="4" />
-      <LineId Id="1832" Count="17" />
-      <LineId Id="311" Count="10" />
-      <LineId Id="2124" Count="5" />
-      <LineId Id="2123" Count="0" />
-      <LineId Id="322" Count="34" />
-      <LineId Id="1850" Count="17" />
-      <LineId Id="2199" Count="4" />
-      <LineId Id="1868" Count="17" />
-      <LineId Id="386" Count="10" />
-      <LineId Id="2131" Count="5" />
-      <LineId Id="2130" Count="0" />
-      <LineId Id="397" Count="34" />
-      <LineId Id="1886" Count="17" />
-      <LineId Id="2204" Count="4" />
-      <LineId Id="1904" Count="17" />
-      <LineId Id="461" Count="10" />
-      <LineId Id="2138" Count="5" />
-      <LineId Id="2137" Count="0" />
-      <LineId Id="472" Count="34" />
-      <LineId Id="1987" Count="17" />
-      <LineId Id="2209" Count="4" />
-      <LineId Id="2005" Count="17" />
-      <LineId Id="536" Count="92" />
-      <LineId Id="2214" Count="4" />
-      <LineId Id="629" Count="27" />
-      <LineId Id="2090" Count="17" />
-      <LineId Id="671" Count="31" />
+      <LineId Id="1814" Count="35" />
+      <LineId Id="311" Count="45" />
+      <LineId Id="1850" Count="35" />
+      <LineId Id="386" Count="45" />
+      <LineId Id="1886" Count="35" />
+      <LineId Id="461" Count="45" />
+      <LineId Id="1987" Count="35" />
+      <LineId Id="536" Count="166" />
       <LineId Id="1712" Count="0" />
     </LineIds>
   </POU>

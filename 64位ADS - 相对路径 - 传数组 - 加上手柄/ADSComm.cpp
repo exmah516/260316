@@ -1,11 +1,16 @@
 #include <ADSComm1.h>
 
+// ADS 通讯封装说明：
+// - 对外提供“按符号名”和“按句柄”两类读写接口。
+// - 内部缓存符号句柄，减少重复 HNDBYNAME 查询。
+// - CloseComm() 中统一释放句柄并关闭端口，避免 PLC 侧资源泄漏。
+
 CADSComm::CADSComm(void)
 {
-	m_bOpen=false;
-	m_PAmsAddr =new AmsAddr;
+	m_bOpen = false;
+	m_PAmsAddr = new AmsAddr;
 	m_adsPort = 0;
-	memset(m_lastError,0,sizeof(char)*256);
+	memset(m_lastError, 0, sizeof(char) * 256);
 }
 
 CADSComm::~CADSComm(void)
@@ -14,7 +19,10 @@ CADSComm::~CADSComm(void)
 	delete m_PAmsAddr;
 }
 
-bool CADSComm::ADSWrite(const char * paraName, unsigned long length, void * data)//plc��������sizeof(����)��c++Ҫ����Ķ����ĵ�ַ
+// 按符号名写：
+// 1) 将符号名解析为句柄（带缓存）；
+// 2) 复用按句柄写接口。
+bool CADSComm::ADSWrite(const char* paraName, unsigned long length, void* data)
 {
 	const auto addr = ADSGetAddr(paraName);
 	if (addr == 0)
@@ -23,7 +31,11 @@ bool CADSComm::ADSWrite(const char * paraName, unsigned long length, void * data
 	}
 	return ADSWrite(addr, length, data);
 }
-bool CADSComm::ADSRead(const char * paraName, unsigned long length, void * data)
+
+// 按符号名读：
+// 1) 将符号名解析为句柄（带缓存）；
+// 2) 复用按句柄读接口。
+bool CADSComm::ADSRead(const char* paraName, unsigned long length, void* data)
 {
 	const auto addr = ADSGetAddr(paraName);
 	if (addr == 0)
@@ -32,47 +44,57 @@ bool CADSComm::ADSRead(const char * paraName, unsigned long length, void * data)
 	}
 	return ADSRead(addr, length, data);
 }
-bool CADSComm::ADSWrite(unsigned long addr , unsigned long length, void * data)
+
+// 按句柄写：要求通讯已打开，失败时记录 ADS 错误码。
+bool CADSComm::ADSWrite(unsigned long addr, unsigned long length, void* data)
 {
 	if (!m_bOpen)
 	{
 		sprintf_s(m_lastError, sizeof(m_lastError), "Error: Ads not Open\n");
 		return false;
 	}
-	long nErr;
-	nErr = AdsSyncWriteReqEx(m_adsPort, m_PAmsAddr, ADSIGRP_SYM_VALBYHND, addr, length, data);
+
+	long nErr = AdsSyncWriteReqEx(m_adsPort, m_PAmsAddr, ADSIGRP_SYM_VALBYHND, addr, length, data);
 	if (nErr)
-	{ 
+	{
 		sprintf_s(m_lastError, sizeof(m_lastError), "Error: AdsSyncWriteReqEx: %ld\n", nErr);
 		return false;
 	}
 	return true;
 }
-bool CADSComm::ADSRead(unsigned long addr , unsigned long length, void * data)
+
+// 按句柄读：要求通讯已打开，失败时记录 ADS 错误码。
+bool CADSComm::ADSRead(unsigned long addr, unsigned long length, void* data)
 {
 	if (!m_bOpen)
 	{
 		sprintf_s(m_lastError, sizeof(m_lastError), "Error: Ads not Open\n");
 		return false;
 	}
+
 	long nErr;
 	unsigned long cbReturn = 0;
 	nErr = AdsSyncReadReqEx2(m_adsPort, m_PAmsAddr, ADSIGRP_SYM_VALBYHND, addr, length, data, &cbReturn);
 	if (nErr)
-	{ 
+	{
 		sprintf_s(m_lastError, sizeof(m_lastError), "Error: AdsSyncReadReqEx2: %ld\n", nErr);
 		return false;
 	}
 	return true;
 }
 
-unsigned long CADSComm::ADSGetAddr(const char * paraName)
+// 句柄获取流程：
+// - 先查缓存；
+// - 缓存未命中时通过 ADSIGRP_SYM_HNDBYNAME 向 PLC 申请；
+// - 申请成功后写入缓存并返回。
+unsigned long CADSComm::ADSGetAddr(const char* paraName)
 {
 	if (!m_bOpen)
 	{
 		sprintf_s(m_lastError, sizeof(m_lastError), "Error: Ads not Open\n");
 		return 0;
 	}
+
 	const std::string key = paraName ? std::string(paraName) : std::string();
 	if (key.empty())
 	{
@@ -111,17 +133,18 @@ unsigned long CADSComm::ADSGetAddr(const char * paraName)
 	return lHdlVar;
 }
 
+// 外部路由连接（固定远端 NetId）：
+// 连接到远端 PLC 运行端口 851。
 bool CADSComm::OpenComm()
 {
 	m_bOpen = false;
 	long nErr;
-	USHORT   nAdsState;
+	USHORT nAdsState;
 
-	//AmsNetId _AmsId = { 5, 100, 219, 36, 1, 1 };
-	AmsNetId _AmsId = { 169, 254, 119, 135, 1, 1 }; 
+	// AmsNetId _AmsId = { 5, 100, 219, 36, 1, 1 };
+	AmsNetId _AmsId = { 169, 254, 119, 135, 1, 1 };
 
-	m_PAmsAddr->netId = _AmsId;			// external comm
-
+	m_PAmsAddr->netId = _AmsId;
 	m_PAmsAddr->port = 851;
 
 	m_adsPort = AdsPortOpenEx();
@@ -131,9 +154,8 @@ bool CADSComm::OpenComm()
 		return false;
 	}
 
-	USHORT        nDeviceState;
+	USHORT nDeviceState;
 	nErr = AdsSyncReadStateReqEx(m_adsPort, m_PAmsAddr, &nAdsState, &nDeviceState);
-
 	if (nErr)
 	{
 		sprintf_s(m_lastError, sizeof(m_lastError), "Error: AdsSyncReadStateReqEx: %ld\n", nErr);
@@ -141,6 +163,8 @@ bool CADSComm::OpenComm()
 		m_adsPort = 0;
 		return false;
 	}
+
+	// 当目标设备状态为 6 时，尝试切换到 RUN。
 	if (nAdsState == 6)
 	{
 		nAdsState = ADSSTATE_RUN;
@@ -153,16 +177,18 @@ bool CADSComm::OpenComm()
 			return false;
 		}
 	}
-	m_bOpen = true;
 
+	m_bOpen = true;
 	return true;
 }
 
+// 本地路由连接：
+// 先取本机 AMS 地址，再访问本机 PLC 运行端口 851。
 bool CADSComm::OpenComm_inside()
 {
 	m_bOpen = false;
 	long nErr;
-	USHORT   nAdsState;
+	USHORT nAdsState;
 
 	m_adsPort = AdsPortOpenEx();
 	if (m_adsPort <= 0)
@@ -182,7 +208,7 @@ bool CADSComm::OpenComm_inside()
 
 	m_PAmsAddr->port = 851;
 
-	USHORT        nDeviceState;
+	USHORT nDeviceState;
 	nErr = AdsSyncReadStateReqEx(m_adsPort, m_PAmsAddr, &nAdsState, &nDeviceState);
 	if (nErr)
 	{
@@ -191,6 +217,7 @@ bool CADSComm::OpenComm_inside()
 		m_adsPort = 0;
 		return false;
 	}
+
 	if (nAdsState == 6)
 	{
 		nAdsState = ADSSTATE_RUN;
@@ -203,9 +230,15 @@ bool CADSComm::OpenComm_inside()
 			return false;
 		}
 	}
+
 	m_bOpen = true;
 	return true;
 }
+
+// 关闭顺序：
+// 1) 释放所有已缓存的 PLC 符号句柄；
+// 2) 清空缓存；
+// 3) 关闭 ADS 端口并复位本地状态。
 bool CADSComm::CloseComm()
 {
 	if (!m_bOpen && m_adsPort == 0)

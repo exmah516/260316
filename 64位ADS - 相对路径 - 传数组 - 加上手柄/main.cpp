@@ -3,20 +3,67 @@
 
 #include <cmath>
 #include <conio.h>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <fstream>
 #include <iostream>
 #include <string>
 #include <windows.h>
 
+// 说明：
+// 1) 本文件是 ADS 主控制程序入口，负责上位机状态机、手柄采样、ADS 读写与气缸/轴指令下发。
+// 2) 坐标体系以左限位为基准：绝对位置 abs = plc_act_pos + plc_init_pos。
+// 3) 关键运行模式：
+//    - 普通导管模式（axis1 主导，axis3/5 随动）
+//    - 导丝独立模式（axis6/7 独立）
+//    - 导丝协同模式（axis1 链路保留，axis6 使用叠速前馈）
+// 4) 注释以“意图 + 单位 + 生命周期/触发条件”为主，不改变任何控制逻辑。
 namespace
 {
 
-// Historical project notes still mention right-limit based coordinates.
-// The current runtime path uses G.leftlimit and derives all startup/crawl
-// windows from left-limit referenced absolute positions.
+// 生成 Force_sensor 日志文件名：Force_sensor_YYYYMMDD_HHMMSS.csv
+std::string build_force_log_filename()
+{
+	SYSTEMTIME st;
+	GetLocalTime(&st);
+	char name[128] = { 0 };
+	sprintf_s(
+		name,
+		"Force_sensor_%04u%02u%02u_%02u%02u%02u.csv",
+		static_cast<unsigned>(st.wYear),
+		static_cast<unsigned>(st.wMonth),
+		static_cast<unsigned>(st.wDay),
+		static_cast<unsigned>(st.wHour),
+		static_cast<unsigned>(st.wMinute),
+		static_cast<unsigned>(st.wSecond));
+	return std::string(name);
+}
 
-// Clamp a scalar into a closed interval.
+// 生成带毫秒时间戳：YYYY-MM-DD HH:MM:SS.mmm
+std::string build_force_log_timestamp()
+{
+	SYSTEMTIME st;
+	GetLocalTime(&st);
+	char ts[64] = { 0 };
+	sprintf_s(
+		ts,
+		"%04u-%02u-%02u %02u:%02u:%02u.%03u",
+		static_cast<unsigned>(st.wYear),
+		static_cast<unsigned>(st.wMonth),
+		static_cast<unsigned>(st.wDay),
+		static_cast<unsigned>(st.wHour),
+		static_cast<unsigned>(st.wMinute),
+		static_cast<unsigned>(st.wSecond),
+		static_cast<unsigned>(st.wMilliseconds));
+	return std::string(ts);
+}
+
+// 当前运行流程使用 G.leftlimit，并将所有启动/爬行
+// 窗口都从左限位参考的绝对位置推导出来。
+
+// 将标量值限制在闭区间内。
+// 将标量值限制在闭区间 [low, high]，用于目标位置与速度派生值的安全裁剪。
 double clamp_double(double value, double low, double high)
 {
 	if (value < low) return low;
@@ -24,13 +71,15 @@ double clamp_double(double value, double low, double high)
 	return value;
 }
 
-// Tolerance-aware range check used for window activation and arrival checks.
+// 带容差的区间判断，用于窗口激活和到位检测。
+// 带容差的区间判定，常用于窗口激活判断与“到位”判定。
 bool is_within_range(double value, double low, double high, double tol = 0.0)
 {
 	return (value >= (low - tol)) && (value <= (high + tol));
 }
 
-// Capture one handle pose in the same short window so translation/rotation baselines stay aligned.
+// 在同一短时间窗内采集单个手柄姿态，确保平移/旋转基准对齐。
+// 在固定采样窗口内取均值，降低手柄瞬时抖动对重同步基准的影响。
 void get_average_handle_pose(Handle& handle, int samples, double& axis0, double& axis1)
 {
 	double axis0_sum = 0.0;
@@ -49,7 +98,8 @@ void get_average_handle_pose(Handle& handle, int samples, double& axis0, double&
 	axis1 = axis1_sum * inv;
 }
 
-// Capture both handles in the same time window so the shared resync baseline is coherent.
+// 在同一时间窗内同时采集两个手柄，确保共享重同步基准一致。
+// 同时采样两把手柄，保证两路基准在同一时刻对齐。
 void get_average_dual_pos(
 	Handle& handle_a,
 	Handle& handle_b,
@@ -82,7 +132,8 @@ void get_average_dual_pos(
 	b_axis1 = b1_sum * inv;
 }
 
-// Small helper for PLC mirrored arrays and refer buffers.
+// 用于 PLC 镜像数组和 refer 缓冲区的小工具函数。
+// 简单数组拷贝工具：用于 PLC 数组缓存/备份/恢复。
 void copy_positions(const double* src, double* dst, int count)
 {
 	for (int i = 0; i < count; ++i)
@@ -157,8 +208,13 @@ namespace AdsSymbol
 	const char* estop_hold_req = "G.estop_hold_req";
 	const char* fn_value = "G.fn_value";
 	const char* ft_value = "G.ft_value";
+	const char* ft_1_value = "G.ft_1_value";
+	const char* fn_1_value = "G.fn_1_value";
+	const char* fn_2_value = "G.fn_2_value";
+	const char* ft_2_value = "G.ft_2_value";
 	const char* axis1_fast_return = "G.axis1_fast_return";
 	const char* axis6_fast_retract = "G.axis6_fast_retract";
+	const char* startup_smoothing_bypass = "G.startup_smoothing_bypass";
 	const char* axis4_fwd_req = "G.axis4_fwd_req";
 	const char* axis4_rev_req = "G.axis4_rev_req";
 	const char* axis4_manual_busy = "G.axis4_manual_busy";
@@ -221,23 +277,23 @@ namespace AdsSymbol
 
 struct ControlConfig
 {
-	// Hand motion scaling and sign conventions.
+	// 手柄运动缩放系数与符号约定。
 	double k_handle_to_mm = 500.0 * (75.0 / 50.0);
 	double axis_push_sign = -1.0;
 	double axis_rot_scale_deg = Rad;
 	double axis2_rot_reengage_deadband_deg = 1.0;
 
-	// Force feedback is only applied on handle 582.
+	// 力反馈仅作用于 582 手柄。
 	int axial_force_axis = 1;
 	double axial_force_sign = -1.0;
 
-	// Button mapping derived from buttons2 bit masks.
+	// 按键映射来自 buttons2 位掩码。
 	unsigned char btn_b0 = 0x01;
 	unsigned char btn_b5 = 0x20;
 	unsigned char btn_b6 = 0x40;
 	unsigned char btn_b7 = 0x80;
 
-	// Left-limit referenced crawl windows.
+	// 基于左限位参考的爬行窗口。
 	double axis1_window_left_from_left_mm = 6.0;
 	double axis1_window_right_from_left_mm = 26.0;
 	double axis6_independent_window_size_mm = 20.0;
@@ -246,40 +302,49 @@ struct ControlConfig
 	double axis3_delivery_release_hysteresis_mm = 2.0;
 	double guidewire_entry_axis6_from_left_max_mm = 665.0;
 
-	// Crawl trigger / arrival thresholds.
+	// 爬行触发/到位阈值。
 	double crawl_trigger_deadband_mm = 0.3;
 	double crawl_rearm_threshold_mm = 0.3;
 	double crawl_arrive_tol_mm = 0.2;
 	double hold_recover_rearm_mm = 0.6;
 
-	// Clamp action timing in the upper computer state machine.
+	// 上位机状态机中的夹爪动作时序。
 	DWORD crawl_cylinder_action_delay_ms = 350;
 	DWORD crawl_both_clamp_settle_ms = 50;
 
-	// PLC-planned fast return tuning.
+	// PLC 规划快速回退参数。
 	double axis1_return_velocity_mm_s = 100.0;
 	double axis1_return_acc_mm_s2 = 400.0;
 	double axis1_return_dec_mm_s2 = 1200.0;
 	double axis1_return_jerk_mm_s3 = 2000.0;
-	DWORD axis1_return_settle_hold_ms = 80;
+	DWORD axis1_return_settle_hold_ms = 20;
+	DWORD axis1_return_transfer_settle_ms = 20;
+	double axis1_pretrigger_preclamp_mm = 3.0;
+	double axis1_preend_preclamp_mm = 3.0;
 	double axis6_return_velocity_mm_s = 50.0;
 	double axis6_return_acc_mm_s2 = 200.0;
 	double axis6_return_dec_mm_s2 = 200.0;
 	double axis6_return_jerk_mm_s3 = 2000.0;
-	DWORD axis6_return_settle_hold_ms = 80;
+	DWORD axis6_return_settle_hold_ms = 20;
+	DWORD axis6_return_transfer_settle_ms = 20;
+	double axis6_pretrigger_preclamp_mm = 3.0;
+	double axis6_preend_preclamp_mm = 3.0;
+	DWORD axis6_gate_log_interval_ms = 300;
 
-	// Axis4 manual velocity mode.
+	// Axis4 手动速度模式参数。
 	double axis4_manual_velocity_rad_s = 1.0;
 	double axis4_manual_acc_rad_s2 = 5.0;
 	double axis4_manual_dec_rad_s2 = 5.0;
 	double axis4_manual_jerk_rad_s3 = 20.0;
 
-	// Handle low-pass filtering.
+	// 手柄低通滤波。
 	double linear_handle_alpha = 0.25;
 	double rotational_handle_alpha = 0.20;
 	bool cooperative_debug_log = false;
+	// 力感记录周期：0=每循环记录；>0=按毫秒周期记录。
+	DWORD force_log_period_ms = 0;
 
-	// Startup preparation targets.
+	// 启动准备阶段目标。
 	DWORD startup_clamp_settle_delay_ms = 300;
 	double startup_motion_speed_scale = 0.5;
 	unsigned short startup_cyl3_open = 500;
@@ -288,23 +353,27 @@ struct ControlConfig
 	unsigned short startup_cyl4_clamp = 1000;
 	double startup_axis5_ready_from_left_mm = 290.0;
 	double startup_axis3_ready_from_left_mm = 635.0;
-	// Trigger cylinder2 clamp before axis3 is fully at target; tune on site to match ~0.5 s lead.
+	// 在 axis3 完全到达目标前提前触发 cylinder2 夹紧；现场调参使其领先约 0.5 s。
 	double startup_axis3_cyl2_clamp_advance_mm = 60.0;
 };
 
 struct CylinderPreset
 {
-	// The naming follows the current wiring:
-	// cyl1/cyl2 belong to the catheter-side crawl pair,
-	// cyl3/cyl4 belong to the guidewire-side crawl pair.
+	// 命名遵循当前接线方式：
+	// cyl1/cyl2 属于导管侧爬行夹爪对，
+	// cyl3/cyl4 属于导丝侧爬行夹爪对。
 	unsigned short cyl1_open = 1000;
 	unsigned short cyl1_clamp = 100;
+	unsigned short cyl1_preclamp = 200;
 	unsigned short cyl2_open = 0;
 	unsigned short cyl2_clamp = 1000;
+	unsigned short cyl2_preclamp = 700;
 	unsigned short cyl3_open = 500;
 	unsigned short cyl3_clamp = 0;
+	unsigned short cyl3_preclamp = 200;
 	unsigned short cyl4_open = 0;
 	unsigned short cyl4_clamp = 500;
+	unsigned short cyl4_preclamp = 300;
 	unsigned short cyl3_follow_release = 150;
 	unsigned short cyl4_follow_release = 100;
 };
@@ -316,7 +385,7 @@ enum class GuidewireMode
 	Cooperative
 };
 
-// Startup preparation is an explicit upper-computer sequence entered after self-check.
+// 启动准备是在自检后进入的显式上位机流程。
 enum class StartupPhase
 {
 	WaitForEnter,
@@ -330,8 +399,8 @@ enum class StartupPhase
 
 struct CrawlState
 {
-	// Follow: direct hand mapping inside the active window.
-	// Switch/Clamp/Restore: clamp timing wrapper around a fast retract/advance move.
+	// Follow：在激活窗口内直接映射手柄输入。
+	// Switch/Clamp/Restore：围绕快速回退/推进动作的夹爪时序封装。
 	enum class Phase
 	{
 		Follow,
@@ -363,8 +432,8 @@ struct CrawlState
 
 struct ForceFeedbackState
 {
-	// Keep filtering and validity state local so force can be disabled without
-	// polluting the motion control state.
+	// 将滤波与有效性状态保持在本地，这样禁用力反馈时无需
+	// 污染运动控制状态。
 	bool enabled = false;
 	short fn_raw = 0;
 	short ft_raw = 0;
@@ -398,10 +467,109 @@ struct ForceFeedbackState
 	}
 };
 
+struct ForceLogState
+{
+	// 力感记录默认开启；period_ms=0 表示每个主循环都记录。
+	bool enabled = true;
+	DWORD period_ms = 0;
+	DWORD last_sample_ms = 0;
+	DWORD last_buffer_flush_ms = 0;
+	std::ofstream file;
+	std::string filename;
+	std::string line_buffer;
+	size_t buffered_lines = 0;
+
+	bool open_file(const std::string& output_name)
+	{
+		filename = output_name;
+		file.open(filename.c_str(), std::ios::out | std::ios::trunc);
+		if (!file.is_open())
+		{
+			return false;
+		}
+
+		// 表头固定为 Force_sensor 约定字段顺序。
+		file << "timestamp,ft_1_value,fn_1_value,fn_2_value,ft_2_value\n";
+		last_sample_ms = 0;
+		last_buffer_flush_ms = GetTickCount();
+		return true;
+	}
+
+	bool should_sample(DWORD now_ms) const
+	{
+		if (!enabled || !file.is_open())
+		{
+			return false;
+		}
+		if (period_ms == 0)
+		{
+			return true;
+		}
+		return (last_sample_ms == 0) || ((now_ms - last_sample_ms) >= period_ms);
+	}
+
+	void append_sample(DWORD now_ms, short ft1, short fn1, short fn2, short ft2)
+	{
+		if (!file.is_open())
+		{
+			return;
+		}
+
+		// 先写入内存缓冲，减少每周期磁盘写入对控制环的影响。
+		line_buffer += build_force_log_timestamp();
+		line_buffer += ",";
+		line_buffer += std::to_string(static_cast<int>(ft1));
+		line_buffer += ",";
+		line_buffer += std::to_string(static_cast<int>(fn1));
+		line_buffer += ",";
+		line_buffer += std::to_string(static_cast<int>(fn2));
+		line_buffer += ",";
+		line_buffer += std::to_string(static_cast<int>(ft2));
+		line_buffer += "\n";
+
+		last_sample_ms = now_ms;
+		++buffered_lines;
+
+		// 行数达到阈值或超过时间间隔就刷入文件。
+		if (buffered_lines >= 100 || (now_ms - last_buffer_flush_ms) >= 500)
+		{
+			flush(false);
+		}
+	}
+
+	void flush(bool force_flush)
+	{
+		if (!file.is_open())
+		{
+			return;
+		}
+		if (!line_buffer.empty())
+		{
+			file << line_buffer;
+			line_buffer.clear();
+			buffered_lines = 0;
+		}
+		if (force_flush)
+		{
+			file.flush();
+		}
+		last_buffer_flush_ms = GetTickCount();
+	}
+
+	void close()
+	{
+		flush(true);
+		if (file.is_open())
+		{
+			file.close();
+		}
+	}
+};
+
 struct StartupState
 {
-	// Hold positions are captured once when the startup sequence begins.
-	// move_base_rel is the follow baseline for the second startup motion segment.
+	// 启动序列开始时一次性采集保持位姿。
+	// move_base_rel 是启动第二段运动的跟随基准。
 	StartupPhase phase = StartupPhase::WaitForEnter;
 	bool completed = false;
 	bool prompted = false;
@@ -427,7 +595,7 @@ struct StartupState
 	}
 };
 
-// Require the operator to re-apply motion in the same direction before the next crawl cycle.
+// 在进入下一次爬行循环前，要求操作者沿同方向重新施加运动。
 void check_crawl_rearm(CrawlState& crawl, double hand_delta_mm, double threshold_mm)
 {
 	if (!crawl.wait_rearm)
@@ -443,8 +611,8 @@ void check_crawl_rearm(CrawlState& crawl, double hand_delta_mm, double threshold
 	}
 }
 
-// Force feedback is intentionally independent from motion generation. When motion is frozen,
-// held or not yet active, the force output is forced back to zero without touching motion state.
+// 力反馈与运动生成有意解耦；当运动冻结、
+// 保持或尚未激活时，会在不改动运动状态的情况下将力输出归零。
 void process_force_feedback(
 	ForceFeedbackState& ff,
 	CADSComm& ads,
@@ -568,7 +736,7 @@ void process_force_feedback(
 	}
 }
 
-} // namespace
+} // 命名空间
 
 int main(int argc, char* argv[])
 {
@@ -576,7 +744,7 @@ int main(int argc, char* argv[])
 	const DWORD serial_axis6_handle = 587;
 	const char* hardcoded_ads_netid = "169.254.119.135.1.1";
 
-	// Utility mode: inspect button bit masks without opening the motion loop.
+	// 工具模式：不进入运动环前先查看按键位掩码。
 	if (argc > 1 && (std::string(argv[1]) == "--buttons" || std::string(argv[1]) == "--btn"))
 	{
 		DWORD test_serial = serial_axis1_handle;
@@ -629,7 +797,7 @@ int main(int argc, char* argv[])
 		return 0;
 	}
 
-	// Utility mode: dump raw handle state continuously for diagnostics.
+	// 工具模式：持续输出手柄原始状态用于诊断。
 	if (argc > 1 && (std::string(argv[1]) == "--monitor" || std::string(argv[1]) == "--mon"))
 	{
 		DWORD test_serial = serial_axis1_handle;
@@ -677,19 +845,23 @@ int main(int argc, char* argv[])
 	const unsigned char axis6_reverse_button_mask = cfg.btn_b7;
 	const unsigned char axis6_independent_button_mask = cfg.btn_b6;
 	const unsigned char axis6_cooperative_button_mask = cfg.btn_b0;
-	// Handle587 states with base 0x06:
-	// 0x07 -> cooperative mode entry
-	// 0x47 -> cooperative mode reverse
-	// Axis4 jog target states on handle 582:
-	// forward  ~= 0x86 (b7 on, b5 off, base 0x06)
-	// reverse  ~= 0x26 (b5 on, b7 off, base 0x06)
-	// release  ~= 0x06
-	// b0 can coexist (0x87/0x27) and should not block jog.
+	// Handle587（当前项目约定）：
+	// - b0: 协同模式请求（常见按钮值 0x07）
+	// - b6: 独立模式请求（常见按钮值 0x46）
+	// - b7: 反向判定键；在协同模式下与 b0 同时按下时表现为协同反向（常见 0x47）
+	// Handle587 在基值 0x06 下的状态：
+	// 0x07 -> 进入协同模式
+	// 0x47 -> 协同模式反向
+	// Handle 582 上 Axis4 点动目标状态：
+	// 正向  ~= 0x86（b7 开，b5 关，基值 0x06）
+	// 反向  ~= 0x26（b5 开，b7 关，基值 0x06）
+	// 释放  ~= 0x06
+	// b0 可共存（0x87/0x27），不应阻止点动。
 	const unsigned char axis4_buttons_base_mask = 0x06;
 	const unsigned char axis4_buttons_forward_mask = 0x80;
 	const unsigned char axis4_buttons_reverse_mask = 0x20;
 
-	// Long-running runtime objects.
+	// 长生命周期运行时对象。
 	Handle handle_axis1(serial_axis1_handle);
 	Handle handle_axis6(serial_axis6_handle);
 	CADSComm ads;
@@ -735,13 +907,13 @@ int main(int argc, char* argv[])
 		}
 	}
 
-	// Force is only rendered on the catheter-side handle.
+	// 仅在导管侧手柄输出力反馈。
 	auto apply_cmd_force = [&](double cmd_force)
 	{
 		handle_axis1.setforce_axis(cmd_force * cfg.axial_force_sign, cfg.axial_force_axis, 0.0);
 	};
 
-	// PLC-mirrored state arrays. These are refreshed from ADS before generating a new refer frame.
+	// PLC 镜像状态数组：在生成新的 refer 帧前会先通过 ADS 刷新。
 	double pos[7] = { 0 };
 	double plc_act_pos[7] = { 0 };
 	double plc_init_pos[7] = { 0 };
@@ -749,8 +921,9 @@ int main(int argc, char* argv[])
 	double plc_act_pos_from_left[7] = { 0 };
 	double plc_refer_from_left[7] = { 0 };
 	double plc_v_limit[7] = { 0 };
+	bool startup_smoothing_bypass = false;
 
-	// Read the minimum state required by the upper-computer motion loop.
+	// 读取上位机运动环所需的最小状态集合。
 	auto read_plc_state = [&]() -> bool
 	{
 		bool ok = true;
@@ -764,11 +937,13 @@ int main(int argc, char* argv[])
 
 	auto write_refer = [&]() -> bool
 	{
+		// 将当前 pos[7] 写回 PLC 参考位数组 G.refer。
 		return ads.ADSWrite(AdsSymbol::refer, sizeof(pos), pos);
 	};
 
 	auto read_v_limit = [&]() -> bool
 	{
+		// 读取 PLC 当前速度上限（用于启动准备阶段缩放/恢复）。
 		return ads.ADSRead(AdsSymbol::v_limit, sizeof(plc_v_limit), plc_v_limit);
 	};
 
@@ -779,21 +954,25 @@ int main(int argc, char* argv[])
 
 	auto load_pos_from_actual = [&]()
 	{
+		// 以当前实际位置为基线重建一帧 refer，避免直接使用旧参考引发跳变。
 		copy_positions(plc_act_pos, pos, 7);
 	};
 
 	auto from_left_to_abs = [&](int axis_index, double from_left_mm) -> double
 	{
+		// 左限位参考坐标 -> PLC 绝对坐标。
 		return plc_leftlimit[axis_index] + from_left_mm;
 	};
 
 	auto from_left_to_rel = [&](int axis_index, double from_left_mm) -> double
 	{
+		// 左限位参考坐标 -> 上位机相对坐标（refer 使用的坐标系）。
 		return from_left_to_abs(axis_index, from_left_mm) - plc_init_pos[axis_index];
 	};
 
 	auto read_axis_return_status = [&](const AxisReturnAdsSymbols& symbols, AxisReturnStatus& status) -> bool
 	{
+		// 轮询 PLC 计划回退命令状态位（Busy/Done/Error/ErrorId）。
 		bool ok = true;
 		ok = ads.ADSRead(symbols.busy, sizeof(status.busy), &status.busy) && ok;
 		ok = ads.ADSRead(symbols.done, sizeof(status.done), &status.done) && ok;
@@ -804,6 +983,7 @@ int main(int argc, char* argv[])
 
 	auto clear_axis_return_request = [&](const AxisReturnAdsSymbols& symbols) -> bool
 	{
+		// 清除单轴计划回退触发位 Req。
 		bool req = false;
 		return ads.ADSWrite(symbols.req, sizeof(req), &req);
 	};
@@ -815,6 +995,8 @@ int main(int argc, char* argv[])
 		double dec,
 		double jerk) -> bool
 	{
+		// 下发一次计划回退参数并置位 Req：
+		// target_abs(mm), velocity(mm/s), acc/dec(mm/s^2), jerk(mm/s^3)。
 		bool req = true;
 		bool ok = true;
 		ok = ads.ADSWrite(symbols.target_abs, sizeof(target_abs), &target_abs) && ok;
@@ -828,6 +1010,7 @@ int main(int argc, char* argv[])
 
 	auto clear_axis1_group_return_requests = [&]() -> bool
 	{
+		// axis1 相关轴群共用的回退请求清理（1/3/5/6）。
 		bool ok = true;
 		ok = clear_axis_return_request(AdsSymbol::axis1_return) && ok;
 		ok = clear_axis_return_request(AdsSymbol::axis3_return) && ok;
@@ -838,24 +1021,29 @@ int main(int argc, char* argv[])
 
 	auto write_axis4_manual_requests = [&](bool forward_req, bool reverse_req) -> bool
 	{
+		// Axis4 点动请求由 PLC 侧状态机执行，本处仅负责写入请求位。
 		bool ok = true;
 		ok = ads.ADSWrite(AdsSymbol::axis4_fwd_req, sizeof(forward_req), &forward_req) && ok;
 		ok = ads.ADSWrite(AdsSymbol::axis4_rev_req, sizeof(reverse_req), &reverse_req) && ok;
 		return ok;
 	};
 
-	// Follow baselines for the normal catheter mode.
+	// 常规导管模式的跟随基准。
 	double axis3_base_rel = 0.0;
 	double axis5_base_rel = 0.0;
 	double axis6_mirror_base_rel = 0.0;
+	// 回退流程“进入点/稳定点”缓存（用于回退全流程保持姿态一致）。
 	double axis1_return_entry_rel = 0.0;
 	double axis1_return_settle_rel = 0.0;
 	double axis6_return_entry_rel = 0.0;
 	double axis6_return_settle_rel = 0.0;
-	bool axis6_follow_recenter_required = false;
+	// axis6 回退后采用“同方向重入”门控，避免刚回退完就立刻重复触发。
+	DWORD axis6_gate_last_log_ms = 0;
+	// axis1 回退期间，镜像轴保持在回退触发时刻的值（防止回退段带动其它轴抖动）。
 	double axis1_return_hold_axis3_rel = 0.0;
 	double axis1_return_hold_axis5_rel = 0.0;
 	double axis1_return_hold_axis6_rel = 0.0;
+	// 旋转轴保持与“重新接管”参考。
 	double axis2_hold_rel = 0.0;
 	bool axis2_rot_reengage_required = false;
 	double axis2_rot_reengage_ref = 0.0;
@@ -863,14 +1051,18 @@ int main(int argc, char* argv[])
 	bool axis7_rot_reengage_required = false;
 	double axis7_rot_reengage_ref = 0.0;
 
+	// 导丝模式缓存：独立模式下冻结导管侧轴位。
 	GuidewireMode guidewire_mode = GuidewireMode::None;
 	double independent_axis1_hold_rel = 0.0;
 	double independent_axis2_hold_rel = 0.0;
 	double independent_axis3_hold_rel = 0.0;
 	double independent_axis5_hold_rel = 0.0;
+	// axis6 窗口锁定（协同/独立切换时保证窗口边界稳定）。
 	bool axis6_window_locked = false;
 	double axis6_locked_window_start_abs = 0.0;
 	double axis6_locked_window_end_abs = 0.0;
+	// 协同模式 axis6 速度前馈积分状态：
+	// axis6_coop_ff_offset_mm 表示由 v587+v1 积分得到的位移增量（mm）。
 	bool axis6_coop_ff_inited = false;
 	double axis6_coop_ff_offset_mm = 0.0;
 	double axis6_coop_prev_hand_delta_mm = 0.0;
@@ -879,11 +1071,12 @@ int main(int argc, char* argv[])
 
 	StartupState startup;
 	ForceFeedbackState ff;
+	ForceLogState force_log;
 	CrawlState axis1_crawl;
 	CrawlState axis6_crawl;
 	axis1_crawl.enabled = true;
 
-	// Axis1 uses a fixed left-limit referenced window. Axis6 captures its window dynamically.
+	// Axis1 使用固定左限位参考窗口；Axis6 动态捕获其窗口。
 	auto axis1_window_left_abs = [&]() -> double
 	{
 		return from_left_to_abs(0, cfg.axis1_window_left_from_left_mm);
@@ -894,6 +1087,8 @@ int main(int argc, char* argv[])
 		return from_left_to_abs(0, cfg.axis1_window_right_from_left_mm);
 	};
 
+	// 设置 axis6 独立/协同通用窗口：
+	// window_right_abs 为窗口右端，左端按窗口长度回推，并自动钳制到左限位。
 	auto set_axis6_independent_window = [&](double window_right_abs, bool log_clamp) -> bool
 	{
 		const double requested_left_abs = window_right_abs - cfg.axis6_independent_window_size_mm;
@@ -919,6 +1114,7 @@ int main(int argc, char* argv[])
 		return true;
 	};
 
+	// 锁定当前 axis6 窗口边界，避免模式切换期间窗口漂移。
 	auto lock_axis6_window_from_current = [&]()
 	{
 		axis6_window_locked = true;
@@ -926,13 +1122,14 @@ int main(int argc, char* argv[])
 		axis6_locked_window_end_abs = axis6_crawl.end_abs;
 	};
 
+	// 恢复已锁定的 axis6 窗口边界。
 	auto apply_locked_axis6_window = [&]()
 	{
 		axis6_crawl.start_abs = axis6_locked_window_start_abs;
 		axis6_crawl.end_abs = axis6_locked_window_end_abs;
 	};
 
-	// Resync only the catheter-side crawl state after a mode edge or a completed crawl cycle.
+	// 仅在模式边沿或一次爬行循环完成后，重同步导管侧爬行状态。
 	auto sync_axis1 = [&](int samples, bool wait_rearm, int rearm_dir) -> bool
 	{
 		const double preserved_axis2_hold_rel = axis2_hold_rel;
@@ -976,8 +1173,8 @@ int main(int argc, char* argv[])
 		return write_refer();
 	};
 
-	// Resync only the guidewire-side crawl state. The window can optionally be rebuilt from the
-	// current axis6 absolute position when entering independent mode.
+	// 仅重同步导丝侧爬行状态。进入独立模式时可选择基于
+	// 当前 axis6 绝对位置重建窗口。
 	auto sync_axis6 = [&](int samples, bool capture_window, bool wait_rearm, int rearm_dir) -> bool
 	{
 		const double preserved_axis7_hold_rel = axis7_hold_rel;
@@ -1026,7 +1223,7 @@ int main(int argc, char* argv[])
 		axis6_crawl.phase_t0 = GetTickCount();
 		axis6_crawl.wait_rearm = wait_rearm;
 		axis6_crawl.rearm_dir = rearm_dir;
-		axis6_follow_recenter_required = wait_rearm;
+		axis6_gate_last_log_ms = 0;
 		axis6_crawl.enabled = true;
 		axis6_coop_ff_inited = false;
 		axis6_coop_ff_offset_mm = 0.0;
@@ -1041,7 +1238,7 @@ int main(int argc, char* argv[])
 		return write_refer();
 	};
 
-	// Global resync aligns both handles and all mirrored baselines to the current PLC position.
+	// 全局重同步会将两个手柄及全部镜像基准对齐到当前 PLC 位置。
 	auto sync_all = [&](int samples) -> bool
 	{
 		const double preserved_axis2_hold_rel = axis2_hold_rel;
@@ -1124,7 +1321,7 @@ int main(int argc, char* argv[])
 		axis6_crawl.wait_rearm = false;
 		axis6_crawl.rearm_dir = 0;
 		axis6_crawl.enabled = false;
-		axis6_follow_recenter_required = false;
+		axis6_gate_last_log_ms = 0;
 		axis6_window_locked = false;
 		axis6_coop_ff_inited = false;
 		axis6_coop_ff_offset_mm = 0.0;
@@ -1145,7 +1342,7 @@ int main(int argc, char* argv[])
 		ads.ADSWrite(AdsSymbol::handle_reinit_req, sizeof(clear_val), &clear_val);
 	};
 
-	// Refresh the normal-mode follow baseline when axis1 first enters its crawl window.
+	// 当 axis1 首次进入爬行窗口时，刷新常规模式跟随基准。
 	auto capture_axis1_follow_baseline = [&]()
 	{
 		axis1_crawl.handle_ref = axis1_handle_filter.axis0_filtered;
@@ -1172,8 +1369,8 @@ int main(int argc, char* argv[])
 		}
 	};
 
-	// Enter independent guidewire mode while freezing the catheter-side axes at their current
-	// relative positions. Axis7 stays active and is resynced to the current hand twist.
+	// 进入导丝独立模式时冻结导管侧各轴在当前
+	// 相对位置；Axis7 保持可控并重同步到当前手柄扭转量。
 	auto enter_independent_guidewire_mode = [&]() -> bool
 	{
 		const double preserved_axis7_hold_rel = axis7_hold_rel;
@@ -1221,7 +1418,7 @@ int main(int argc, char* argv[])
 			axis6_crawl.max_abs(),
 			cfg.crawl_arrive_tol_mm);
 		axis6_crawl.enabled = true;
-		axis6_follow_recenter_required = false;
+		axis6_gate_last_log_ms = 0;
 		axis6_coop_ff_inited = false;
 		axis6_coop_ff_offset_mm = 0.0;
 		axis6_coop_prev_hand_delta_mm = 0.0;
@@ -1237,12 +1434,15 @@ int main(int argc, char* argv[])
 		return write_refer();
 	};
 
-	// Cooperative mode reuses the axis6 crawl state machine but keeps the catheter chain active.
+	// 协同模式复用 axis6 爬行状态机，同时保持导管轴链路激活。
+	// 协同模式入口：复用 axis6 的窗口化爬行状态机，不冻结导管轴链路。
 	auto enter_cooperative_guidewire_mode = [&]() -> bool
 	{
 		return sync_axis6(20, true, false, 0);
 	};
 
+	// 导丝模式入模门限检查：
+	// 仅在“尝试进入模式”瞬间检查 |axis6-leftlimit| < max，不在运行中强制退出。
 	auto check_axis6_guidewire_entry_gate = [&](double& axis6_from_left_mm) -> bool
 	{
 		if (!read_plc_state())
@@ -1266,8 +1466,10 @@ int main(int argc, char* argv[])
 		return sync_all(20);
 	};
 
-	// Startup preparation is an upper-computer sequence layered on top of PLC self-check.
-	// It temporarily scales down v_limit on axes 3/5/6 and restores it after completion.
+	// 启动准备是叠加在 PLC 自检之上的上位机流程。
+	// 它会临时降低 3/5/6 轴的 v_limit，并在完成后恢复。
+	// 启动准备流程（上位机侧）：
+	// 在 PLC 自检完成后执行，期间会临时缩放 3/5/6 速度上限并在结束时恢复。
 	auto start_startup_sequence = [&]() -> bool
 	{
 		if (!read_plc_state())
@@ -1308,7 +1510,7 @@ int main(int argc, char* argv[])
 
 		guidewire_mode = GuidewireMode::None;
 		axis6_crawl.enabled = false;
-		axis6_follow_recenter_required = false;
+		axis6_gate_last_log_ms = 0;
 		axis6_window_locked = false;
 		axis6_coop_ff_inited = false;
 		axis6_coop_ff_offset_mm = 0.0;
@@ -1333,7 +1535,7 @@ int main(int argc, char* argv[])
 		return true;
 	};
 
-	// Restore PLC motion limits after startup or after an interrupted startup path.
+	// 在启动完成或启动中断后恢复 PLC 运动限值。
 	auto restore_startup_v_limit = [&]() -> bool
 	{
 		if (!startup.v_limit_scaled)
@@ -1359,7 +1561,7 @@ int main(int argc, char* argv[])
 		}
 	};
 
-	// Initial PLC snapshot seeds the hold positions before the interactive loop begins.
+	// 在交互循环开始前，用初始 PLC 快照初始化各保持位姿。
 	if (!read_plc_state())
 	{
 		std::cout << "Failed to read PLC state." << std::endl;
@@ -1402,12 +1604,29 @@ int main(int argc, char* argv[])
 	AxisReturnStatus axis1_return_status;
 	AxisReturnStatus axis6_return_status;
 	int loop_count = 0;
+	DWORD force_log_warn_last_ms = 0;
+	startup_smoothing_bypass = false;
+	ads.ADSWrite(AdsSymbol::startup_smoothing_bypass, sizeof(startup_smoothing_bypass), &startup_smoothing_bypass);
 
 	unsigned char last_btn_axis1 = 0xFF;
 	unsigned char last_btn_axis6 = 0xFF;
 
 	std::cout << "Force feedback: OFF (press F to toggle)" << std::endl;
 	apply_cmd_force(0.0);
+
+	// 力感记录默认随 main 启动；文件名包含日期与 24 小时制时间（到秒）。
+	force_log.enabled = true;
+	force_log.period_ms = cfg.force_log_period_ms;
+	const std::string force_log_filename = build_force_log_filename();
+	if (force_log.open_file(force_log_filename))
+	{
+		std::cout << "Force sensor logging: ON -> " << force_log_filename
+			<< " (period_ms=" << force_log.period_ms << ")" << std::endl;
+	}
+	else
+	{
+		std::cout << "Force sensor logging: OFF (file open failed)." << std::endl;
+	}
 
 	if (!has_self_check_flag || self_check_done)
 	{
@@ -1423,7 +1642,7 @@ int main(int argc, char* argv[])
 
 	while (true)
 	{
-		// 1) Sample both handles and derive edge-triggered button states.
+		// 1) 采样两个手柄，并生成按键边沿触发状态。
 		handle_axis1.poll();
 		handle_axis6.poll();
 		axis1_handle_filter.update(
@@ -1458,6 +1677,11 @@ int main(int argc, char* argv[])
 			((axis1_buttons & axis4_buttons_reverse_mask) != 0) &&
 			((axis1_buttons & axis4_buttons_forward_mask) == 0);
 		const int axis4_jog_state = axis4_forward_pressed ? 1 : (axis4_reverse_pressed ? -1 : 0);
+
+		// 导丝模式请求解码（587）：
+		// - 仅 b6: 独立模式
+		// - 仅 b0: 协同模式
+		// - b0+b6: 按当前约定仍归入协同模式
 		GuidewireMode requested_guidewire_mode = GuidewireMode::None;
 		if (!guidewire_cooperative_pressed && guidewire_independent_pressed)
 		{
@@ -1471,6 +1695,9 @@ int main(int argc, char* argv[])
 		{
 			requested_guidewire_mode = GuidewireMode::Cooperative;
 		}
+		// 反向有效键按模式解释：
+		// - 协同：b0+b7 触发反向
+		// - 独立：使用 b7 作为反向键
 		const bool axis6_effective_reverse_pressed =
 			((requested_guidewire_mode == GuidewireMode::Cooperative) && guidewire_forced_reverse_pressed) ||
 			((requested_guidewire_mode == GuidewireMode::Independent) && axis6_reverse_pressed);
@@ -1536,7 +1763,7 @@ int main(int argc, char* argv[])
 		}
 		pause_pressed_prev = pause_pressed;
 
-		// 2) Resync crawl baselines when reverse-crawl buttons change state.
+		// 2) 反向爬行按键状态变化时重同步爬行基准。
 		if (!freeze_active && !estop_hold_active && !startup_sequence_active && control_active)
 		{
 			if (guidewire_mode == GuidewireMode::None && axis1_reverse_pressed != axis1_reverse_pressed_prev)
@@ -1567,7 +1794,7 @@ int main(int argc, char* argv[])
 		axis1_reverse_pressed_prev = axis1_reverse_pressed;
 		axis6_effective_reverse_prev = axis6_effective_reverse_pressed;
 
-		// 3) Poll PLC-side hold state and keep upper-computer force output disabled during holds.
+		// 3) 轮询 PLC 侧保持状态，并在保持期间禁用上位机力输出。
 		if ((loop_count % 10) == 0)
 		{
 			if (ads.ADSRead(AdsSymbol::estop_hold_req, sizeof(estop_hold_req), &estop_hold_req))
@@ -1601,7 +1828,7 @@ int main(int argc, char* argv[])
 			apply_cmd_force(0.0);
 		}
 
-		// 4) Keyboard side channel: choose direct control / startup preparation / force toggle.
+		// 4) 键盘侧通道：选择直接控制 / 启动准备 / 力反馈开关。
 		if (_kbhit())
 		{
 			const int ch = _getch();
@@ -1689,7 +1916,7 @@ int main(int argc, char* argv[])
 			}
 		}
 
-		// 5) Guidewire mode is edge-triggered from handle 587 (cooperative=b0, independent=b6) and re-synced on transitions.
+		// 5) 导丝模式由 handle 587 的边沿触发（协同=b0，独立=b6），并在切换时重同步。
 		if (requested_guidewire_mode != requested_guidewire_mode_prev)
 		{
 			if (requested_guidewire_mode == GuidewireMode::None)
@@ -1706,7 +1933,7 @@ int main(int argc, char* argv[])
 						{
 							guidewire_mode = GuidewireMode::None;
 							axis6_crawl.enabled = false;
-							axis6_follow_recenter_required = false;
+							axis6_gate_last_log_ms = 0;
 							axis6_window_locked = false;
 							axis6_coop_ff_inited = false;
 							axis6_coop_ff_offset_mm = 0.0;
@@ -1720,7 +1947,7 @@ int main(int argc, char* argv[])
 					{
 						guidewire_mode = GuidewireMode::None;
 						axis6_crawl.enabled = false;
-						axis6_follow_recenter_required = false;
+						axis6_gate_last_log_ms = 0;
 						axis6_window_locked = false;
 						axis6_coop_ff_inited = false;
 						axis6_coop_ff_offset_mm = 0.0;
@@ -1804,7 +2031,7 @@ int main(int argc, char* argv[])
 		}
 		requested_guidewire_mode_prev = requested_guidewire_mode;
 
-		// 6) Periodically react to PLC self-check completion and PLC-requested resync.
+		// 6) 周期性响应 PLC 自检完成与 PLC 请求的重同步。
 		if (has_self_check_flag && (loop_count % 50) == 0)
 		{
 			if (ads.ADSRead(AdsSymbol::self_check_done, sizeof(self_check_done), &self_check_done))
@@ -1817,7 +2044,7 @@ int main(int argc, char* argv[])
 					}
 					guidewire_mode = GuidewireMode::None;
 					axis6_crawl.enabled = false;
-					axis6_follow_recenter_required = false;
+					axis6_gate_last_log_ms = 0;
 					axis6_window_locked = false;
 					axis6_coop_ff_inited = false;
 					axis6_coop_ff_offset_mm = 0.0;
@@ -1861,7 +2088,7 @@ int main(int argc, char* argv[])
 			}
 		}
 
-		// 7) Human-readable button diagnostics stay on every buttons2 change.
+		// 7) 每次 buttons2 变化时输出可读的按键诊断信息。
 		if (handle_axis1.buttons2 != last_btn_axis1)
 		{
 			std::cout << "Handle582 Btns: 0x" << std::hex << static_cast<int>(handle_axis1.buttons2) << std::dec << std::endl;
@@ -1885,8 +2112,9 @@ int main(int argc, char* argv[])
 			cfg.axial_force_axis,
 			cfg.axial_force_sign);
 
-		// 8) When startup has already completed but control is not active, recover with a full resync.
+		// 8) 当启动已完成但控制未激活时，通过全量重同步恢复。
 		const bool motion_startup_active = startup.is_active();
+		startup_smoothing_bypass = motion_startup_active;
 		if (!control_active && !motion_startup_active && !freeze_active && !estop_hold_active && startup.completed)
 		{
 			if (sync_all(20))
@@ -1912,7 +2140,7 @@ int main(int argc, char* argv[])
 		bool axis4_manual_forward_req = axis4_reverse_request;
 		bool axis4_manual_reverse_req = axis4_forward_request;
 
-		// 9) Build one refer frame and one cylinder command set from the current top-level mode.
+		// 9) 根据当前顶层模式构建一帧 refer 和一组气缸指令。
 		if (!freeze_active && !estop_hold_active && (control_active || motion_startup_active) && read_plc_state())
 		{
 			load_pos_from_actual();
@@ -1954,8 +2182,8 @@ int main(int argc, char* argv[])
 
 			auto compute_axis7_cmd_rel = [&]() -> double
 			{
-				// After a resync or mode edge, ignore small hand twists until the operator
-				// intentionally exceeds the re-engage deadband.
+				// 在重同步或模式边沿后，先忽略小幅手柄扭转，直到操作者
+				// 有意超过重新接管死区。
 				if (axis7_rot_reengage_required)
 				{
 					const double axis7_rot_delta_deg =
@@ -1979,20 +2207,28 @@ int main(int argc, char* argv[])
 				(guidewire_mode == GuidewireMode::None) ? axis7_hold_rel : compute_axis7_cmd_rel();
 			pos[6] = axis7_cmd_rel;
 
-			// Shared axis6 crawl state machine used by both independent and cooperative guidewire modes.
+			// 独立与协同导丝模式共用的 axis6 爬行状态机。
+			// axis6 爬行状态机（独立/协同共用）。
+			// 参数说明：
+			// - axis6_raw_cmd_abs: 当前周期未裁剪的 axis6 绝对指令
+			// - axis6_delta_mm: 当前周期手柄/叠速综合增量（用于同方向重入判定）
+			// - axis6_push_request / axis6_pull_request: 方向判定结果（已含死区）
+			// - axis6_reverse_mode: 当前是否处于反向爬行判定
 			auto run_axis6_crawl_state = [&](double axis6_raw_cmd_abs, double axis6_delta_mm, bool axis6_push_request, bool axis6_pull_request, bool axis6_reverse_mode)
 			{
 				if (axis6_crawl.phase == CrawlState::Phase::Follow)
 				{
 					double axis6_cmd_abs = axis6_base_abs;
-
-					// After a planned return resync, require the operator to recenter the guidewire handle
-					// before allowing follow commands to affect axis6 again.
-					if (axis6_follow_recenter_required)
+					if (axis6_crawl.wait_rearm)
 					{
-						if (std::abs(axis6_delta_mm) <= cfg.crawl_trigger_deadband_mm)
+						if ((now_ms - axis6_gate_last_log_ms) >= cfg.axis6_gate_log_interval_ms)
 						{
-							axis6_follow_recenter_required = false;
+							std::cout
+								<< "Axis6 gate: waiting same-direction rearm (rearm_dir="
+								<< axis6_crawl.rearm_dir
+								<< ", delta_mm=" << axis6_delta_mm
+								<< ")" << std::endl;
+							axis6_gate_last_log_ms = now_ms;
 						}
 					}
 					else
@@ -2014,18 +2250,40 @@ int main(int argc, char* argv[])
 					cylinder3_cmd = cyl.cyl3_open;
 					cylinder4_cmd = cyl.cyl4_clamp;
 
-					if (!axis6_follow_recenter_required && !axis6_crawl.wait_rearm)
+					if (!axis6_crawl.wait_rearm)
 					{
+						if (!axis6_reverse_mode && axis6_push_request)
+						{
+							const double dist_to_trigger_mm = axis6_abs - axis6_window_left_abs_now;
+							if (dist_to_trigger_mm <= cfg.axis6_pretrigger_preclamp_mm &&
+								dist_to_trigger_mm >= -cfg.crawl_arrive_tol_mm)
+							{
+								cylinder3_cmd = cyl.cyl3_preclamp;
+							}
+						}
+						else if (axis6_reverse_mode && axis6_pull_request)
+						{
+							const double dist_to_trigger_mm = axis6_window_right_abs_now - axis6_abs;
+							if (dist_to_trigger_mm <= cfg.axis6_pretrigger_preclamp_mm &&
+								dist_to_trigger_mm >= -cfg.crawl_arrive_tol_mm)
+							{
+								cylinder3_cmd = cyl.cyl3_preclamp;
+							}
+						}
+
 						if (!axis6_reverse_mode &&
 							axis6_push_request &&
 							(std::abs(axis6_abs - axis6_window_left_abs_now) <= cfg.crawl_arrive_tol_mm))
 						{
 							axis6_crawl.target_abs = axis6_window_right_abs_now;
 							axis6_return_entry_rel = plc_act_pos[5];
-							axis6_crawl.phase = CrawlState::Phase::SwitchWait;
+							axis6_crawl.phase = CrawlState::Phase::FastMove;
 							axis6_crawl.phase_t0 = now_ms;
 							axis6_crawl.rearm_dir = -1;
 							axis6_crawl.plc_move_requested = false;
+							cylinder3_cmd = cyl.cyl3_clamp;
+							cylinder4_cmd = cyl.cyl4_open;
+							axis6_gate_last_log_ms = 0;
 						}
 						else if (axis6_reverse_mode &&
 							axis6_pull_request &&
@@ -2033,25 +2291,26 @@ int main(int argc, char* argv[])
 						{
 							axis6_crawl.target_abs = axis6_window_left_abs_now;
 							axis6_return_entry_rel = plc_act_pos[5];
-							axis6_crawl.phase = CrawlState::Phase::SwitchWait;
+							axis6_crawl.phase = CrawlState::Phase::FastMove;
 							axis6_crawl.phase_t0 = now_ms;
 							axis6_crawl.rearm_dir = 1;
 							axis6_crawl.plc_move_requested = false;
+							cylinder3_cmd = cyl.cyl3_clamp;
+							cylinder4_cmd = cyl.cyl4_open;
+							axis6_gate_last_log_ms = 0;
 						}
 					}
 				}
 				else if (axis6_crawl.phase == CrawlState::Phase::SwitchWait)
 				{
+					// 兼容旧状态，直接并入并行快退阶段。
 					axis6_fast_retract = true;
 					pos[5] = axis6_return_entry_rel;
 					cylinder3_cmd = cyl.cyl3_clamp;
 					cylinder4_cmd = cyl.cyl4_open;
-					if ((now_ms - axis6_crawl.phase_t0) >= cfg.crawl_cylinder_action_delay_ms)
-					{
-						axis6_crawl.phase = CrawlState::Phase::FastMove;
-						axis6_crawl.phase_t0 = now_ms;
-						axis6_crawl.plc_move_requested = false;
-					}
+					axis6_crawl.phase = CrawlState::Phase::FastMove;
+					axis6_crawl.phase_t0 = now_ms;
+					axis6_crawl.plc_move_requested = false;
 				}
 				else if (axis6_crawl.phase == CrawlState::Phase::FastMove)
 				{
@@ -2059,6 +2318,10 @@ int main(int argc, char* argv[])
 					cylinder3_cmd = cyl.cyl3_clamp;
 					cylinder4_cmd = cyl.cyl4_open;
 					axis6_fast_retract = true;
+					if (std::abs(axis6_abs - axis6_crawl.target_abs) <= cfg.axis6_preend_preclamp_mm)
+					{
+						cylinder4_cmd = cyl.cyl4_preclamp;
+					}
 
 					if (!axis6_crawl.plc_move_requested)
 					{
@@ -2084,7 +2347,7 @@ int main(int argc, char* argv[])
 							{
 								axis6_crawl.phase = CrawlState::Phase::Follow;
 								axis6_crawl.wait_rearm = true;
-								axis6_follow_recenter_required = true;
+								axis6_gate_last_log_ms = 0;
 							}
 						}
 						else if (axis6_return_status.done)
@@ -2102,7 +2365,7 @@ int main(int argc, char* argv[])
 					axis6_fast_retract = true;
 					pos[5] = axis6_return_settle_rel;
 					cylinder3_cmd = cyl.cyl3_clamp;
-					cylinder4_cmd = cyl.cyl4_open;
+					cylinder4_cmd = cyl.cyl4_preclamp;
 					if ((now_ms - axis6_crawl.phase_t0) >= cfg.axis6_return_settle_hold_ms)
 					{
 						axis6_crawl.phase = CrawlState::Phase::ClampWait;
@@ -2115,7 +2378,7 @@ int main(int argc, char* argv[])
 					pos[5] = axis6_return_settle_rel;
 					cylinder3_cmd = cyl.cyl3_clamp;
 					cylinder4_cmd = cyl.cyl4_clamp;
-					if ((now_ms - axis6_crawl.phase_t0) >= cfg.crawl_both_clamp_settle_ms)
+					if ((now_ms - axis6_crawl.phase_t0) >= cfg.axis6_return_transfer_settle_ms)
 					{
 						axis6_crawl.phase = CrawlState::Phase::RestoreWait;
 						axis6_crawl.phase_t0 = now_ms;
@@ -2127,14 +2390,14 @@ int main(int argc, char* argv[])
 					pos[5] = axis6_return_settle_rel;
 					cylinder3_cmd = cyl.cyl3_open;
 					cylinder4_cmd = cyl.cyl4_clamp;
-					if ((now_ms - axis6_crawl.phase_t0) >= cfg.crawl_cylinder_action_delay_ms)
+					if ((now_ms - axis6_crawl.phase_t0) >= cfg.axis6_return_transfer_settle_ms)
 					{
 						if (!sync_axis6(20, false, true, axis6_crawl.rearm_dir))
 						{
 							std::cout << "Axis6 resync after planned return failed." << std::endl;
 							axis6_crawl.phase = CrawlState::Phase::Follow;
 							axis6_crawl.wait_rearm = true;
-							axis6_follow_recenter_required = true;
+							axis6_gate_last_log_ms = 0;
 						}
 					}
 				}
@@ -2142,7 +2405,7 @@ int main(int argc, char* argv[])
 
 			if (motion_startup_active)
 			{
-				// Startup sequence keeps axis1/2/7 fixed and only moves 3/5/6 through the preparation stages.
+				// 启动序列会固定 axis1/2/7，仅在准备阶段移动 3/5/6。
 				pos[0] = startup.axis1_hold_rel;
 				pos[1] = startup.axis2_hold_rel;
 				pos[2] = startup.axis3_hold_rel;
@@ -2159,7 +2422,7 @@ int main(int argc, char* argv[])
 
 				if (startup.phase == StartupPhase::ReleaseClamps)
 				{
-					// Stage 1: open all clamps and wait for the mechanism to settle.
+					// 阶段 1：打开全部夹爪并等待机构稳定。
 					cylinder1_cmd = cyl.cyl1_open;
 					cylinder2_cmd = cyl.cyl2_open;
 					cylinder3_cmd = cfg.startup_cyl3_open;
@@ -2171,7 +2434,7 @@ int main(int argc, char* argv[])
 				}
 				else if (startup.phase == StartupPhase::MoveAxis56ToLeftReady)
 				{
-					// Stage 2: move axes 5/6 to their left-limit referenced preparation points.
+					// 阶段 2：将 5/6 轴移动到左限位参考的准备点。
 					cylinder1_cmd = cyl.cyl1_open;
 					cylinder2_cmd = cyl.cyl2_open;
 					cylinder3_cmd = cfg.startup_cyl3_open;
@@ -2187,7 +2450,7 @@ int main(int argc, char* argv[])
 				}
 				else if (startup.phase == StartupPhase::ClampCylinder34Wait)
 				{
-					// Stage 3: close the guidewire-side clamp pair before the coupled 3/5/6 move.
+					// 阶段 3：在 3/5/6 联动前先闭合导丝侧夹爪对。
 					cylinder1_cmd = cyl.cyl1_open;
 					cylinder2_cmd = cyl.cyl2_open;
 					cylinder3_cmd = cfg.startup_cyl3_clamp;
@@ -2204,7 +2467,7 @@ int main(int argc, char* argv[])
 				}
 				else if (startup.phase == StartupPhase::MoveAxis356BackToReady)
 				{
-					// Stage 4: axis3 moves to its ready point while axes 5/6 follow the same relative delta.
+					// 阶段 4：axis3 移动到准备点，同时 5/6 轴跟随相同相对增量。
 					cylinder1_cmd = cyl.cyl1_open;
 					cylinder2_cmd = cyl.cyl2_open;
 					cylinder3_cmd = cfg.startup_cyl3_clamp;
@@ -2257,7 +2520,7 @@ int main(int argc, char* argv[])
 			}
 			else if (guidewire_mode == GuidewireMode::Independent)
 			{
-				// Independent guidewire mode freezes the catheter-side axes and runs axis6/7 only.
+				// 导丝独立模式会冻结导管侧各轴，仅运行 axis6/7。
 				pos[0] = independent_axis1_hold_rel;
 				pos[1] = independent_axis2_hold_rel;
 				pos[2] = independent_axis3_hold_rel;
@@ -2279,11 +2542,11 @@ int main(int argc, char* argv[])
 			}
 			else
 			{
-				// Normal catheter mode:
-				// - axis1/2 are controlled by handle 582
-				// - axes 3/5 mirror the normal segment of axis1 translation
-				// - axis6 mirrors axis1 only when not in cooperative guidewire mode
-				// - fast retract phases are handled explicitly by the crawl state machine
+				// 常规导管模式：
+				// - axis1/2 由 handle 582 控制
+				// - 轴 3/5 镜像 axis1 平移的常规段
+				// - axis6 仅在非导丝协同模式下镜像 axis1
+				// - 快速回退阶段由爬行状态机显式处理
 				const bool cooperative_mode = (guidewire_mode == GuidewireMode::Cooperative);
 				const bool axis1_now_in_window = is_within_range(axis1_abs, axis1_min_abs, axis1_max_abs, cfg.crawl_arrive_tol_mm);
 				if (!axis1_crawl.window_active && axis1_now_in_window)
@@ -2371,6 +2634,19 @@ int main(int argc, char* argv[])
 						const double axis1_trigger_edge_abs = axis1_reverse_pressed
 							? axis1_window_right_abs_now
 							: axis1_window_left_abs_now;
+
+						if (axis1_drive_request && axis1_follow_enabled)
+						{
+							const double dist_to_trigger_mm = axis1_reverse_pressed
+								? (axis1_window_right_abs_now - axis1_abs)
+								: (axis1_abs - axis1_window_left_abs_now);
+							if (dist_to_trigger_mm <= cfg.axis1_pretrigger_preclamp_mm &&
+								dist_to_trigger_mm >= -cfg.crawl_arrive_tol_mm)
+							{
+								cylinder1_cmd = cyl.cyl1_preclamp;
+							}
+						}
+
 						const bool axis1_ready_to_trigger = axis1_drive_request &&
 							(axis1_reverse_pressed || (!axis1_push_rearm_after_hold && !axis1_delivery_stop_latched)) &&
 							(std::abs(axis1_abs - axis1_trigger_edge_abs) <= cfg.crawl_arrive_tol_mm);
@@ -2390,33 +2666,33 @@ int main(int argc, char* argv[])
 								axis1_crawl.target_abs = axis1_reverse_pressed
 									? axis1_window_left_abs_now
 									: axis1_window_right_abs_now;
-							axis1_return_entry_rel = plc_act_pos[0];
-							axis1_return_settle_rel = plc_act_pos[0];
-							axis1_return_hold_axis3_rel = plc_act_pos[2];
-							axis1_return_hold_axis5_rel = plc_act_pos[4];
-							axis1_return_hold_axis6_rel = plc_act_pos[5];
-							axis1_crawl.phase = CrawlState::Phase::SwitchWait;
-							axis1_crawl.phase_t0 = now_ms;
+								axis1_return_entry_rel = plc_act_pos[0];
+								axis1_return_settle_rel = plc_act_pos[0];
+								axis1_return_hold_axis3_rel = plc_act_pos[2];
+								axis1_return_hold_axis5_rel = plc_act_pos[4];
+								axis1_return_hold_axis6_rel = plc_act_pos[5];
+								axis1_crawl.phase = CrawlState::Phase::FastMove;
+								axis1_crawl.phase_t0 = now_ms;
 								axis1_crawl.rearm_dir = axis1_reverse_pressed ? 1 : -1;
-							axis1_crawl.plc_move_requested = false;
+								axis1_crawl.plc_move_requested = false;
+								cylinder1_cmd = cyl.cyl1_clamp;
+								cylinder2_cmd = cyl.cyl2_open;
+							}
 						}
 					}
 				}
-				}
 				else if (axis1_crawl.phase == CrawlState::Phase::SwitchWait)
 				{
+					// 兼容旧状态，直接并入并行快退阶段。
 					axis1_fast_return = true;
 					pos[0] = axis1_return_entry_rel;
 					hold_axis1_mirror_axes_for_return();
 					pos[1] = axis2_hold_rel;
 					cylinder1_cmd = cyl.cyl1_clamp;
 					cylinder2_cmd = cyl.cyl2_open;
-					if ((now_ms - axis1_crawl.phase_t0) >= cfg.crawl_cylinder_action_delay_ms)
-					{
-						axis1_crawl.phase = CrawlState::Phase::FastMove;
-						axis1_crawl.phase_t0 = now_ms;
-						axis1_crawl.plc_move_requested = false;
-					}
+					axis1_crawl.phase = CrawlState::Phase::FastMove;
+					axis1_crawl.phase_t0 = now_ms;
+					axis1_crawl.plc_move_requested = false;
 				}
 				else if (axis1_crawl.phase == CrawlState::Phase::FastMove)
 				{
@@ -2425,6 +2701,10 @@ int main(int argc, char* argv[])
 					pos[1] = axis2_hold_rel;
 					cylinder1_cmd = cyl.cyl1_clamp;
 					cylinder2_cmd = cyl.cyl2_open;
+					if (std::abs(axis1_abs - axis1_crawl.target_abs) <= cfg.axis1_preend_preclamp_mm)
+					{
+						cylinder2_cmd = cyl.cyl2_preclamp;
+					}
 					axis1_fast_return = true;
 					if (!axis1_crawl.plc_move_requested)
 					{
@@ -2475,13 +2755,13 @@ int main(int argc, char* argv[])
 				}
 				else if (axis1_crawl.phase == CrawlState::Phase::SettleHold)
 				{
-					// Hold a short stable window at return endpoint before switching clamp states.
+					// 在回退终点先保持短暂稳定窗口，再切换夹爪状态。
 					axis1_fast_return = true;
 					pos[0] = axis1_return_settle_rel;
 					hold_axis1_mirror_axes_for_return();
 					pos[1] = axis2_hold_rel;
 					cylinder1_cmd = cyl.cyl1_clamp;
-					cylinder2_cmd = cyl.cyl2_open;
+					cylinder2_cmd = cyl.cyl2_preclamp;
 					if ((now_ms - axis1_crawl.phase_t0) >= cfg.axis1_return_settle_hold_ms)
 					{
 						axis1_crawl.phase = CrawlState::Phase::ClampWait;
@@ -2496,7 +2776,7 @@ int main(int argc, char* argv[])
 					pos[1] = axis2_hold_rel;
 					cylinder1_cmd = cyl.cyl1_clamp;
 					cylinder2_cmd = cyl.cyl2_clamp;
-					if ((now_ms - axis1_crawl.phase_t0) >= cfg.crawl_both_clamp_settle_ms)
+					if ((now_ms - axis1_crawl.phase_t0) >= cfg.axis1_return_transfer_settle_ms)
 					{
 						axis1_crawl.phase = CrawlState::Phase::RestoreWait;
 						axis1_crawl.phase_t0 = now_ms;
@@ -2510,7 +2790,7 @@ int main(int argc, char* argv[])
 					pos[1] = axis2_hold_rel;
 					cylinder1_cmd = cyl.cyl1_open;
 					cylinder2_cmd = cyl.cyl2_clamp;
-					if ((now_ms - axis1_crawl.phase_t0) >= cfg.crawl_cylinder_action_delay_ms)
+					if ((now_ms - axis1_crawl.phase_t0) >= cfg.axis1_return_transfer_settle_ms)
 					{
 						if (!sync_axis1(20, true, axis1_crawl.rearm_dir))
 						{
@@ -2523,9 +2803,9 @@ int main(int argc, char* argv[])
 
 				if (cooperative_mode)
 				{
-					// Cooperative mode keeps catheter axes on the axis1 chain, while axis6 runs
-					// its own crawl state machine with velocity feedforward:
-					// v6 = v587 + v1 (v1 only in axis1 Follow phase).
+					// 协同模式保持导管侧各轴挂在 axis1 链路上，同时 axis6 运行
+					// 自身带速度前馈的爬行状态机：
+					// v6 = v587 + v1（v1 仅在 axis1 Follow 阶段生效）。
 					const double axis1_cmd_abs_for_ff = pos[0] + plc_init_pos[0];
 
 					if (axis6_crawl.phase == CrawlState::Phase::Follow)
@@ -2585,7 +2865,7 @@ int main(int argc, char* argv[])
 					}
 					else
 					{
-						// axis6 return phases ignore axis1 contribution by design.
+						// 按设计，axis6 回退阶段会忽略 axis1 的贡献。
 						axis6_coop_ff_inited = false;
 						run_axis6_crawl_state(
 							axis6_base_abs + axis6_coop_ff_offset_mm,
@@ -2626,7 +2906,7 @@ int main(int argc, char* argv[])
 			}
 		}
 
-		// 10) Cylinders are only driven while motion is active; the fast-return flags are always written.
+		// 10) 仅在运动激活时驱动气缸；快速回退标志始终会写入。
 		if (!freeze_active && (control_active || motion_startup_active))
 		{
 			ads.ADSWrite(AdsSymbol::cylinder1_value, sizeof(cylinder1_cmd), &cylinder1_cmd);
@@ -2636,10 +2916,38 @@ int main(int argc, char* argv[])
 		}
 
 		write_axis4_manual_requests(axis4_manual_forward_req, axis4_manual_reverse_req);
+		ads.ADSWrite(AdsSymbol::startup_smoothing_bypass, sizeof(startup_smoothing_bypass), &startup_smoothing_bypass);
 		ads.ADSWrite(AdsSymbol::axis1_fast_return, sizeof(axis1_fast_return), &axis1_fast_return);
 		ads.ADSWrite(AdsSymbol::axis6_fast_retract, sizeof(axis6_fast_retract), &axis6_fast_retract);
+
+		// 力感数据记录：默认启用，可通过 force_log_period_ms 控制频率。
+		const DWORD force_log_now_ms = GetTickCount();
+		if (force_log.should_sample(force_log_now_ms))
+		{
+			short ft_1_value = 0;
+			short fn_1_value = 0;
+			short fn_2_value = 0;
+			short ft_2_value = 0;
+			bool force_log_read_ok = true;
+			force_log_read_ok = ads.ADSRead(AdsSymbol::ft_1_value, sizeof(ft_1_value), &ft_1_value) && force_log_read_ok;
+			force_log_read_ok = ads.ADSRead(AdsSymbol::fn_1_value, sizeof(fn_1_value), &fn_1_value) && force_log_read_ok;
+			force_log_read_ok = ads.ADSRead(AdsSymbol::fn_2_value, sizeof(fn_2_value), &fn_2_value) && force_log_read_ok;
+			force_log_read_ok = ads.ADSRead(AdsSymbol::ft_2_value, sizeof(ft_2_value), &ft_2_value) && force_log_read_ok;
+			if (force_log_read_ok)
+			{
+				force_log.append_sample(force_log_now_ms, ft_1_value, fn_1_value, fn_2_value, ft_2_value);
+			}
+			else if ((force_log_now_ms - force_log_warn_last_ms) >= 1000)
+			{
+				std::cout << "Force sensor logging warning: ADS read failed." << std::endl;
+				force_log_warn_last_ms = force_log_now_ms;
+			}
+		}
 	}
 
+	startup_smoothing_bypass = false;
+	ads.ADSWrite(AdsSymbol::startup_smoothing_bypass, sizeof(startup_smoothing_bypass), &startup_smoothing_bypass);
+	force_log.close();
 	handle_axis1.close();
 	handle_axis6.close();
 	return 0;
