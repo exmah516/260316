@@ -21,27 +21,6 @@
 namespace
 {
 
-// 控制台关闭/中断请求标志：
-// - 仅由控制台回调置位
-// - 主循环轮询后执行“轴2/轴7回零”收尾动作
-volatile LONG g_console_close_requested = 0;
-
-BOOL WINAPI ConsoleCtrlHandler(DWORD ctrl_type)
-{
-	switch (ctrl_type)
-	{
-	case CTRL_C_EVENT:
-	case CTRL_BREAK_EVENT:
-	case CTRL_CLOSE_EVENT:
-	case CTRL_LOGOFF_EVENT:
-	case CTRL_SHUTDOWN_EVENT:
-		InterlockedExchange(&g_console_close_requested, 1);
-		return TRUE;
-	default:
-		return FALSE;
-	}
-}
-
 // 生成 Force_sensor 日志文件名：Force_sensor_YYYYMMDD_HHMMSS.csv
 std::string build_force_log_filename()
 {
@@ -298,8 +277,8 @@ namespace AdsSymbol
 struct ControlConfig
 {
 	// 手柄运动缩放系数与符号约定。
-	double k_handle_to_mm = 500.0 * (75.0 / 50.0);
-	double axis_push_sign = -1.0;
+	double k_handle_to_mm = 500.0 * (75.0 / 50.0); // 手柄线性位移差 -> 轴位移增量(mm)
+	double axis_push_sign = -1.0; // 手柄“推/拉”到轴“正/负”方向的映射符号
 	double axis_rot_scale_deg = Rad;
 	double axis2_rot_reengage_deadband_deg = 1.0;
 
@@ -325,8 +304,8 @@ struct ControlConfig
 	double axis6_window_cover_threshold_mm = 18.0;
 
 	// 爬行触发/到位阈值。
-	double crawl_trigger_deadband_mm = 0.3;
-	double crawl_rearm_threshold_mm = 0.3;
+	double crawl_trigger_deadband_mm = 0.3; // |delta| 小于此值视为无效输入（不触发 push/pull）
+	double crawl_rearm_threshold_mm = 0.3; // 快退后允许再次触发前需要越过的同向阈值
 	double crawl_arrive_tol_mm = 0.2;
 	double hold_recover_rearm_mm = 0.6;
 
@@ -440,13 +419,13 @@ struct CrawlState
 	bool wait_rearm = false;
 	bool window_active = false;
 	int rearm_dir = 0;
-	double handle_ref = 0.0;
-	double rot_ref = 0.0;
-	double base_rel = 0.0;
-	double rot_base_rel = 0.0;
-	double start_abs = 0.0;
-	double end_abs = 0.0;
-	double target_abs = 0.0;
+	double handle_ref = 0.0; // 当前控制段的手柄线性基准（重同步/重建基线时更新）
+	double rot_ref = 0.0; // 当前控制段的手柄旋转基准
+	double base_rel = 0.0; // 当前控制段的轴相对基线（PLC Act_pos 坐标）
+	double rot_base_rel = 0.0; // 当前控制段的旋转轴相对基线
+	double start_abs = 0.0; // 窗口起点绝对坐标(mm)
+	double end_abs = 0.0; // 窗口终点绝对坐标(mm)
+	double target_abs = 0.0; // 本次快退目标绝对坐标(mm)
 	bool plc_move_requested = false;
 	DWORD phase_t0 = 0;
 
@@ -764,8 +743,6 @@ void process_force_feedback(
 
 int main(int argc, char* argv[])
 {
-	SetConsoleCtrlHandler(ConsoleCtrlHandler, TRUE);
-
 	const DWORD serial_axis1_handle = 582;
 	const DWORD serial_axis6_handle = 587;
 	const char* hardcoded_ads_netid = "169.254.119.135.1.1";
@@ -941,10 +918,10 @@ int main(int argc, char* argv[])
 	};
 
 	// PLC 镜像状态数组：在生成新的 refer 帧前会先通过 ADS 刷新。
-	double pos[7] = { 0 };
-	double plc_act_pos[7] = { 0 };
-	double plc_init_pos[7] = { 0 };
-	double plc_leftlimit[7] = { 0 };
+	double pos[7] = { 0 }; // 上位机本周期目标（将写入 G.refer，坐标系：相对 init_pos）
+	double plc_act_pos[7] = { 0 }; // PLC 当前相对位置（G.Act_pos）
+	double plc_init_pos[7] = { 0 }; // PLC 相对零点偏置（G.init_pos）
+	double plc_leftlimit[7] = { 0 }; // 左限位绝对位置（G.leftlimit）
 	double plc_act_pos_from_left[7] = { 0 };
 	double plc_refer_from_left[7] = { 0 };
 	double plc_v_limit[7] = { 0 };
@@ -992,35 +969,6 @@ int main(int argc, char* argv[])
 	{
 		// 以当前实际位置为基线重建一帧 refer，避免直接使用旧参考引发跳变。
 		copy_positions(plc_act_pos, pos, 7);
-	};
-
-	auto move_axis2_axis7_to_zero_on_shutdown = [&](DWORD timeout_ms) -> bool
-	{
-		const DWORD t0 = GetTickCount();
-		while ((GetTickCount() - t0) < timeout_ms)
-		{
-			if (!read_plc_state())
-			{
-				return false;
-			}
-
-			load_pos_from_actual();
-			pos[1] = 0.0;
-			pos[6] = 0.0;
-			if (!write_refer())
-			{
-				return false;
-			}
-
-			if ((std::abs(plc_act_pos[1]) <= cfg.crawl_arrive_tol_mm) &&
-				(std::abs(plc_act_pos[6]) <= cfg.crawl_arrive_tol_mm))
-			{
-				return true;
-			}
-
-			Sleep(10);
-		}
-		return false;
 	};
 
 	auto from_left_to_abs = [&](int axis_index, double from_left_mm) -> double
@@ -1733,8 +1681,8 @@ int main(int argc, char* argv[])
 	bool axis4_manual_error_prev = false;
 	unsigned long axis4_manual_error_id_prev = 0;
 	GuidewireMode requested_guidewire_mode_prev = GuidewireMode::None;
-	bool axis1_fast_return = false;
-	bool axis6_fast_retract = false;
+	bool axis1_fast_return = false; // 轴1快退旁路标志（写入 G.axis1_fast_return）
+	bool axis6_fast_retract = false; // 轴6快退旁路标志（写入 G.axis6_fast_retract）
 	AxisReturnStatus axis1_return_status;
 	AxisReturnStatus axis6_return_status;
 	int loop_count = 0;
@@ -1791,22 +1739,8 @@ int main(int argc, char* argv[])
 			cfg.rotational_handle_alpha);
 
 		++loop_count;
-		axis1_fast_return = false;
-		axis6_fast_retract = false;
-		if (InterlockedCompareExchange(&g_console_close_requested, 0, 0) != 0)
-		{
-			std::cout << "Console close detected: moving axis2/axis7 to zero..." << std::endl;
-			apply_cmd_force(0.0);
-			startup_smoothing_bypass = false;
-			ads.ADSWrite(AdsSymbol::startup_smoothing_bypass, sizeof(startup_smoothing_bypass), &startup_smoothing_bypass);
-			write_axis4_manual_requests(false, false);
-			const bool shutdown_move_ok = move_axis2_axis7_to_zero_on_shutdown(2000);
-			std::cout << (shutdown_move_ok
-				? "Axis2/Axis7 zeroing request completed."
-				: "Axis2/Axis7 zeroing request timeout or ADS error.")
-				<< std::endl;
-			break;
-		}
+		axis1_fast_return = false; // 每周期先清零，仅在快退状态机阶段置 TRUE
+		axis6_fast_retract = false; // 每周期先清零，仅在快退状态机阶段置 TRUE
 
 		// from-left 观测量仅用于监测/门控，不需要每帧刷新。
 		// 降频到每 5 帧读取一次，减少 ADS 通信负担。
@@ -2320,11 +2254,11 @@ int main(int argc, char* argv[])
 			const double axis6_linear_filtered = axis6_handle_filter.axis0_filtered;
 			const double axis6_rot_filtered = axis6_handle_filter.axis1_filtered;
 
-			const double axis1_abs = plc_act_pos[0] + plc_init_pos[0];
+			const double axis1_abs = plc_act_pos[0] + plc_init_pos[0]; // 轴1绝对位置(mm)
 			const double axis3_abs = plc_act_pos[2] + plc_init_pos[2];
-			const double axis1_base_abs = axis1_crawl.base_rel + plc_init_pos[0];
+			const double axis1_base_abs = axis1_crawl.base_rel + plc_init_pos[0]; // 当前控制段的轴1绝对基线
 			const double axis1_hand_delta_mm =
-				(axis1_linear_filtered - axis1_crawl.handle_ref) * cfg.k_handle_to_mm * cfg.axis_push_sign;
+				(axis1_linear_filtered - axis1_crawl.handle_ref) * cfg.k_handle_to_mm * cfg.axis_push_sign; // 手柄相对基线增量(mm)
 			const double axis1_window_left_abs_now = axis1_crawl.start_abs;
 			const double axis1_window_right_abs_now = axis1_crawl.end_abs;
 			const double axis1_min_abs = axis1_crawl.min_abs();
@@ -2333,10 +2267,10 @@ int main(int argc, char* argv[])
 			const bool axis3_delivery_stop_active =
 				axis3_from_left_mm <= (cfg.axis3_delivery_stop_from_left_mm + cfg.crawl_arrive_tol_mm);
 
-			const double axis6_abs = plc_act_pos[5] + plc_init_pos[5];
-			const double axis6_base_abs = axis6_crawl.base_rel + plc_init_pos[5];
+			const double axis6_abs = plc_act_pos[5] + plc_init_pos[5]; // 轴6绝对位置(mm)
+			const double axis6_base_abs = axis6_crawl.base_rel + plc_init_pos[5]; // 当前控制段的轴6绝对基线
 			const double axis6_hand_delta_mm =
-				(axis6_linear_filtered - axis6_crawl.handle_ref) * cfg.k_handle_to_mm * cfg.axis_push_sign;
+				(axis6_linear_filtered - axis6_crawl.handle_ref) * cfg.k_handle_to_mm * cfg.axis_push_sign; // 手柄相对基线增量(mm)
 			const double axis6_window_left_abs_now = axis6_crawl.start_abs;
 			const double axis6_window_right_abs_now = axis6_crawl.end_abs;
 
@@ -2729,9 +2663,9 @@ int main(int argc, char* argv[])
 
 				if (axis1_crawl.phase == CrawlState::Phase::Follow)
 				{
-					const double axis1_raw_cmd_abs = axis1_base_abs + axis1_hand_delta_mm;
-					const bool axis1_push_request = axis1_hand_delta_mm < -cfg.crawl_trigger_deadband_mm;
-					const bool axis1_pull_request = axis1_hand_delta_mm > cfg.crawl_trigger_deadband_mm;
+					const double axis1_raw_cmd_abs = axis1_base_abs + axis1_hand_delta_mm; // 手柄映射得到的未裁剪绝对目标
+					const bool axis1_push_request = axis1_hand_delta_mm < -cfg.crawl_trigger_deadband_mm; // 超过死区的“推”请求
+					const bool axis1_pull_request = axis1_hand_delta_mm > cfg.crawl_trigger_deadband_mm; // 超过死区的“拉”请求
 					const bool axis1_drive_request = axis1_reverse_pressed ? axis1_pull_request : axis1_push_request;
 					const bool axis1_follow_enabled =
 						axis1_reverse_pressed || (!axis1_push_rearm_after_hold && !axis1_delivery_stop_latched);
@@ -2753,7 +2687,7 @@ int main(int argc, char* argv[])
 						axis1_delivery_stop_prompted = false;
 					}
 
-					double axis1_cmd_abs = axis1_base_abs;
+					double axis1_cmd_abs = axis1_base_abs; // 经过方向门控/窗口裁剪后的最终绝对目标
 					if (axis1_drive_request && axis1_follow_enabled)
 					{
 						axis1_cmd_abs = axis1_crawl.window_active
@@ -2773,7 +2707,7 @@ int main(int argc, char* argv[])
 						axis1_cmd_abs = axis1_window_left_abs_now;
 					}
 
-					pos[0] = axis1_cmd_abs - plc_init_pos[0];
+					pos[0] = axis1_cmd_abs - plc_init_pos[0]; // 绝对目标 -> refer相对坐标（相对 init_pos）
 
 					if (axis2_rot_reengage_required)
 					{
@@ -3087,8 +3021,8 @@ int main(int argc, char* argv[])
 
 		write_axis4_manual_requests(axis4_manual_forward_req, axis4_manual_reverse_req);
 		ads.ADSWrite(AdsSymbol::startup_smoothing_bypass, sizeof(startup_smoothing_bypass), &startup_smoothing_bypass);
-		ads.ADSWrite(AdsSymbol::axis1_fast_return, sizeof(axis1_fast_return), &axis1_fast_return);
-		ads.ADSWrite(AdsSymbol::axis6_fast_retract, sizeof(axis6_fast_retract), &axis6_fast_retract);
+		ads.ADSWrite(AdsSymbol::axis1_fast_return, sizeof(axis1_fast_return), &axis1_fast_return); // 轴1快退平滑旁路
+		ads.ADSWrite(AdsSymbol::axis6_fast_retract, sizeof(axis6_fast_retract), &axis6_fast_retract); // 轴6快退平滑旁路
 
 		// 力感数据记录：默认启用，可通过 force_log_period_ms 控制频率。
 		const DWORD force_log_now_ms = GetTickCount();

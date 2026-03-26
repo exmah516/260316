@@ -1,0 +1,747 @@
+项目详细说明文档
+更新日期：2026-03-23
+
+一、文档目的与适用范围
+本文件用于说明当前工程中“PLC + C++ 上位机”这一主控制链路的实际结构、功能、状态流和接口关系。
+
+本文档对应的当前有效代码路径为：
+- PLC：`250902\250902\Untitled2`
+- 上位机：`64位ADS - 相对路径 - 传数组 - 加上手柄\main.cpp`
+
+需要特别说明：
+- 本文档以“当前代码实际实现”为准，而不是以历史需求讨论或旧版本文档为准。
+- 工程中仍保留一些历史文件，如 `main(备份).cpp`、旧版注释、旧版状态枚举项、Qt 工程目录等；这些内容不一定反映当前主控制链路。
+- 当前系统已切换为“左限位模式”，后续所有主链路几何基准均以 `G.leftlimit` 和“距离左限位”的表达为核心。
+
+
+二、项目整体结构
+
+1. PLC 控制工程
+目录：`250902\250902\Untitled2`
+
+关键文件：
+- `GVLs\G.TcGVL`
+  全局变量表，定义轴对象、ADS 交换变量、气缸控制量、限位记录、状态标志等。
+- `POUs\MAIN.TcPOU`
+  PLC 顶层主程序，负责状态机调度。
+- `POUs\SelfCheck.TcPOU`
+  上电自检与左限位寻参逻辑。
+- `POUs\handle.TcPOU`
+  正常跟随阶段的 PLC 侧位置缓动、软限位与设定点输出逻辑。
+- `POUs\init.TcPOU`
+  上电初始化逻辑。
+- `POUs\reset.TcPOU`
+  错误复位逻辑。
+- `POUs\err.TcPOU`
+  错误态处理逻辑。
+- `POUs\clear_err.TcPOU`
+  清错辅助逻辑。
+- `DUTs\state.TcDUT`
+  顶层状态枚举定义。
+
+2. C++ 上位机主程序
+目录：`64位ADS - 相对路径 - 传数组 - 加上手柄`
+
+关键文件：
+- `main.cpp`
+  当前主控制程序。负责：
+  - 打开并轮询两个手柄
+  - 通过 ADS 读写 PLC 变量
+  - 生成 `G.refer` 参考位置
+  - 管理启动准备流程
+  - 管理普通导管模式与独立导丝模式
+  - 管理手柄暂停、重同步、力反馈等
+- `ADSComm.cpp`
+  ADS 通信封装。
+- `手柄\Handle.h`
+- `手柄\手柄.cpp`
+  手柄 SDK 封装。
+- `main(备份).cpp`
+  历史备份版本，不是当前运行主版本。
+
+3. 辅助/旁路工程
+- `CatheterRobotUI`
+  Qt 图形界面工程。当前不是主控制链路的权威实现来源。
+- `按钮说明.txt`
+  记录 `buttons2` 位图与物理按键 bit 的对应关系。
+- `运动模式.txt`
+  保存多轮需求讨论和历史逻辑描述，可作背景参考，但不应直接视作当前代码真值。
+
+
+三、系统架构与数据流
+
+当前系统由三层组成：
+
+1. 执行层：Beckhoff PLC + 7 个 EtherCAT 伺服轴
+- PLC 持有轴对象 `G.axis[1..7]`
+- PLC 负责轴使能、设定点发生器使能、自检寻参、软限位、错误处理
+- PLC 最终通过 `MC_ExtSetPointGenFeed` 向轴下发绝对位置设定点
+
+2. 上位控制层：C++ 上位机
+- 读取两个手柄的推拉、旋转和按钮状态
+- 将当前操作意图转换为 `G.refer[1..7]`
+- 通过 ADS 写入气缸控制量、快速回退标志、速度限制等
+- 通过读取 `G.self_check_done`、`G.handle_reinit_req`、`G.estop_hold_req` 等状态与 PLC 同步
+
+3. 交互输入层：两个手柄
+- 手柄 582：主导管控制
+- 手柄 587：独立导丝控制
+
+数据流可概括为：
+手柄输入 -> C++ 上位机 `main.cpp` -> ADS 写入 `G.refer / 气缸 / 状态标志` -> PLC `handle` 进行缓动与限位约束 -> EtherCAT 轴执行
+
+同时，PLC 也会反向提供状态：
+PLC `G.leftlimit / G.Act_pos / G.init_pos / G.self_check_done / G.handle_reinit_req / G.estop_hold_req`
+-> C++ 上位机据此决定是否允许控制、是否需要重同步、是否进入启动准备等。
+
+
+四、机械对象与控制对象映射
+
+1. 轴映射
+- 轴1：平移轴，导管主推进轴
+- 轴2：旋转轴，与手柄 582 的旋转对应
+- 轴3：平移轴，普通导管模式下跟随轴1的正常段位移
+- 轴4：旋转轴
+- 轴5：平移轴，普通导管模式下跟随轴1的正常段位移
+- 轴6：平移轴
+  - 普通导管模式下镜像跟随轴1正常段
+  - 独立导丝模式下由手柄 587 独立控制
+- 轴7：旋转轴，与手柄 587 的旋转对应
+
+2. 电缸控制量
+定义于 `G.TcGVL`：
+- `G.cylinder1_value`
+  安装在夹持机构上
+- `G.cylinder2_value`
+  安装在轴1机构上
+- `G.cylinder3_value`
+  安装在轴5机构上
+- `G.cylinder4_value`
+  安装在轴6机构上
+
+说明：
+- 物理“张开/夹紧”的含义取决于电缸 wiring 与机构定义。
+- 当前文档只记录代码中的变量与赋值逻辑，不强行重新定义现场机械语义。
+
+3. 力传感器
+- `G.fn_value`
+  法向力原始值
+- `G.ft_value`
+  扭矩/切向力原始值
+
+当前仅由上位机用于手柄 582 的力反馈。
+
+
+五、PLC 工程详细说明
+
+5.1 顶层状态机
+状态枚举定义于 `state.TcDUT`：
+- `_init`
+- `_jog1`
+- `_jog2`
+- `_jog3`
+- `_trans`
+- `_trans_wait`
+- `_handle`
+- `_self_check`
+- `_clear_err`
+- `_err`
+- `_reset`
+
+其中，当前 `MAIN.TcPOU` 实际使用的主路径为：
+- `_init`
+- `_self_check`
+- `_handle`
+- `_clear_err`
+- `_err`
+- `_reset`
+
+`_jog1/_jog2/_jog3/_trans/_trans_wait` 属于历史或保留状态，当前主程序未在顶层 `CASE` 中使用。
+
+5.2 MAIN 的实际职责
+`MAIN.TcPOU` 每个 PLC 周期主要做四件事：
+
+1. 调用全部轴对象
+- `FOR i:=1 TO 7 DO G.axis[i](); END_FOR`
+
+2. 首周期复位全局状态
+- 置 `G.gen_state := _init`
+- 清 `G.self_check_done`
+- 清 `G.handle_reinit_req / G.handle_reinit_done`
+- 置 `G.estop_hold_req := TRUE`
+- 置 `G.selfcheck_reset_req := TRUE`
+
+3. 执行基础 Action
+- `POWERED()`
+- `SETPOSITIONGEN()`
+- `RESETED()`
+
+4. 按状态调度 POU
+- `_init -> init_()`
+- `_self_check -> self_check_()`
+- `_handle -> handle1_()`
+- `_clear_err -> clear_err_()`
+- `_err -> err_()`
+- `_reset -> reset_()`
+
+5.3 GVL 关键变量
+`G.TcGVL` 中当前主链路最重要的变量如下。
+
+轴/功能块：
+- `G.axis[1..7]`
+- `G.power_[1..7]`
+- `G.power_output[1..7]`
+- `G.axis_Reset[1..7]`
+- `G.SetPointGenEnable[1..7]`
+- `G.SetPointGenDisable[1..7]`
+
+位置与基准：
+- `G.init_pos[1..7]`
+  当前相对坐标零点对应的绝对位置
+- `G.refer[1..7]`
+  上位机写入的目标相对位置
+- `G.Act_pos[1..7]`
+  当前实际相对位置
+- `G.act_h[1..7]`
+  PLC 侧平滑后的相对位置
+- `G.act_hf[1..7]`
+  当前最终输出到设定点发生器之前的平滑位置
+- `G.leftlimit[1..7]`
+  自检记录的左限位绝对位置
+
+流程协同标志：
+- `G.self_check_done`
+- `G.handle_reinit_req`
+- `G.handle_reinit_done`
+- `G.estop_hold_req`
+- `G.selfcheck_reset_req`
+- `G.selfcheck_stu[1..7]`
+- `G.selfcheck_all_reach_limit`
+
+快速阶段标志：
+- `G.axis1_fast_return`
+- `G.axis6_fast_retract`
+
+速度/缓动：
+- `G.v_limit[1..7] := [7.5, 7.5, 1.5, 1.5, 1.5, 7.5, 1.5]`
+- `G.ref_slow[1..7]`
+
+保留/历史变量：
+- `G.move_jog[1..7]`
+  当前主控制链路中未使用
+- PID 参数 `Kp/Ki/Kd/pid_i/pid_e_prev/pid_i_limit`
+  当前 `handle.TcPOU` 实现中未参与实际设定点计算，属于遗留参数
+
+5.4 SelfCheck 当前实现
+`SelfCheck.TcPOU` 是当前左限位模式下的上电自检与寻参逻辑。
+
+当前关键参数：
+- `vel_scan := 10.0`
+- `vel_back := 50.0`
+- `target_axes := [TRUE,FALSE,TRUE,FALSE,TRUE,TRUE,FALSE]`
+  即目标平移轴为 1、3、5、6
+- `init_target_from_left := [96,0,280,0,530,685,0]`
+  表示自检后各目标轴应回到距左限位的固定工作位
+- `stagger_delay := [3s,0ms,2s,0ms,1s,0ms,0ms]`
+
+当前流程：
+
+1. 目标平移轴 1/3/5/6
+- 禁用 `SetPointGen`
+- 以 `MC_MoveVelocity` 向负方向低速逼近左限位
+- 通过“速度近零 + 指令仍在推进”的判据识别到限位/堵转
+- 记录 `G.leftlimit[i] := G.axis[i].NcToPlc.ActPos`
+- 停止、必要时复位错误
+- 全部到位后执行 `MC_SetPosition(ActPos -> SetPos)` 消除跳变
+- 再以 `MC_MoveAbsolute` 回到 `G.leftlimit[i] + init_target_from_left[i]`
+
+2. 非目标旋转轴 2/4/7
+- 同样禁用 `SetPointGen`
+- 直接以 `MC_MoveAbsolute` 回到绝对位置 0
+
+3. 错峰回位节奏
+当前实际逻辑不是全部同时回位，而是：
+- 轴6立即启动
+- 1 秒后轴5启动
+- 再 1 秒后轴3启动
+- 再 1 秒后轴1启动
+
+4. 完成后的收尾动作
+- 写入一组固定气缸值：
+  - `cylinder1_value := 1000`
+  - `cylinder2_value := 0`
+  - `cylinder3_value := 1000`
+  - `cylinder4_value := 0`
+- `G.self_check_done := TRUE`
+- `G.handle_reinit_req := TRUE`
+- 刷新 `Act_pos / refer / ref_slow / act_h / act_hf`
+- `G.gen_state := _handle`
+
+5.5 handle 当前实现
+`handle.TcPOU` 是 PLC 正常跟随阶段的核心，不再是旧文档描述的“PID 闭环输出主导”结构，而是以下三部分：
+
+1. SetPointGen 使能与重初始化
+- 当 `G.handle_reinit_req = TRUE` 时：
+  - `init_done := FALSE`
+  - 清 `G.handle_reinit_done`
+  - 清 `G.handle_reinit_req`
+  - 置 `G.estop_hold_req := TRUE`
+- 在 `init_done = FALSE` 阶段：
+  - 对全部轴执行 `SetPointGenEnable`
+  - 启用成功后，用当前实际位置刷新：
+    - `G.Act_pos`
+    - `G.refer`
+    - `G.ref_slow`
+    - `G.act_h`
+    - `G.act_hf`
+    - 平滑队列 `act_hh`
+  - 初始化右软限位
+  - 置 `G.handle_reinit_done := TRUE`
+
+2. 掉使能/错误保持逻辑
+- 如果并非所有轴都 `power_output.Done`
+  - PLC 会拉起 `G.estop_hold_req := TRUE`
+  - 并把所有缓冲参考重置到当前实际位置
+  - 如果同时检测到错误，则跳转 `_err`
+- 如果从 hold 恢复
+  - 会再次请求 `handle_reinit_req`
+  - 由上位机重新同步
+
+3. 参考位置平滑与设定点输出
+当前 `handle.TcPOU` 的有效算法是：
+- 速度限幅：`G.refer -> G.ref_slow`
+- 滑动平均：`G.ref_slow -> G.act_h`
+- 绝对位置重建：
+  - `pos_abs := G.act_h[i] + G.init_pos[i]`
+- 最终通过 `MC_ExtSetPointGenFeed(Position := pos_abs)` 输出
+
+注意：
+- 当前 `handle.TcPOU` 中虽然仍声明了 `err / value_f / Kp / Ki / Kd` 等 PID 变量，
+  但在当前实现里并没有把这些 PID 量真正参与到设定点输出。
+- 因此，现行 PLC 跟随行为应理解为“速率限制 + 滑动平均 + 外部设定点输出”，而不是旧版 PID 位置补偿控制。
+
+5.6 当前 PLC 软限位逻辑
+软限位在 `handle.TcPOU` 中实现，且当前是“左限位基准下的右软限位”：
+
+参数：
+- `rslimit_distance := [99.0, 0.0, 666.0, 0.0, 688.0, 688.0, 0.0]`
+- `slimit_enable := [TRUE, FALSE, TRUE, FALSE, TRUE, TRUE, FALSE]`
+
+即：
+- 轴1：右软限位 = `leftlimit[1] + 99`
+- 轴3：右软限位 = `leftlimit[3] + 666`
+- 轴5：右软限位 = `leftlimit[5] + 688`
+- 轴6：右软限位 = `leftlimit[6] + 688`
+
+当前语义为：
+- 当轴已到右软限位，且 `G.refer[j] > G.ref_slow[j]` 时，禁止继续增大参考值
+- 也就是禁止继续“远离左限位”方向运动
+
+5.7 快速阶段直通逻辑
+为避免上位机快速回退阶段仍被 PLC 平滑层拖慢：
+- 当 `G.axis1_fast_return = TRUE`
+  - `v_step := 1000.0`
+  - `avg_window := 1`
+- 当 `G.axis6_fast_retract = TRUE`
+  - 同样执行快速直通
+
+
+六、上位机 `main.cpp` 详细说明
+
+6.1 基本角色
+当前 `main.cpp` 是系统的主动控制核心，负责：
+- 打开两个手柄并轮询
+- 打开 ADS 通信并连接 PLC
+- 生成各模式下的 `pos[7]` 参考位置
+- 写入 `G.refer`
+- 写入四个电缸控制量
+- 写入 `G.axis1_fast_return / G.axis6_fast_retract`
+- 处理启动准备、导丝模式切换、暂停、重同步与力反馈
+
+6.2 支持的运行入口
+1. 正常控制模式
+- 直接运行 `main.cpp` 对应程序
+
+2. 按钮测试模式
+- `--buttons` 或 `--btn`
+- 可选带串号
+- 只打印按钮位图变化，不进入主控制循环
+
+3. 手柄监视模式
+- `--monitor` 或 `--mon`
+- 持续输出手柄原始状态
+
+6.3 ADS 连接策略
+程序优先尝试：
+1. `ads.OpenComm_inside()`
+2. 若失败，再尝试 `ads.OpenComm()`
+
+当前远程兜底 NetId：
+- `169.254.119.135.1.1`
+
+6.4 当前上位机所用 ADS 符号
+`main.cpp` 当前直接读写以下 PLC 符号：
+- `G.refer`
+- `G.Act_pos`
+- `G.init_pos`
+- `G.leftlimit`
+- `G.v_limit`
+- `G.cylinder1_value`
+- `G.cylinder2_value`
+- `G.cylinder3_value`
+- `G.cylinder4_value`
+- `G.self_check_done`
+- `G.handle_reinit_req`
+- `G.estop_hold_req`
+- `G.fn_value`
+- `G.ft_value`
+- `G.axis1_fast_return`
+- `G.axis6_fast_retract`
+
+6.5 当前手柄与按键映射
+根据 `按钮说明.txt`，`buttons2` 常见空闲值为 `0x06`，按位映射为：
+- `b0 = 0x01`
+- `b5 = 0x20`
+- `b6 = 0x40`
+- `b7 = 0x80`
+
+但“按键在当前程序中的语义”以 `main.cpp` 为准：
+
+手柄 582：
+- 直线轴 -> 轴1平移
+- 旋转轴 -> 轴2旋转
+- `b6`
+  当前用于“暂停/恢复控制”
+- `b0`
+  当前用于“轴1反向蠕动”
+
+手柄 587：
+- 直线轴 -> 轴6平移
+- 旋转轴 -> 轴7旋转
+- `b6`
+  当前用于“独立导丝模式”
+- `b0`
+  当前用于“轴6反向蠕动”
+- `b7`
+  当前程序中未使用
+
+6.6 当前几何与窗口参数
+定义于 `ControlConfig`：
+
+手柄比例：
+- `k_handle_to_mm = 500 * (75/50) = 750`
+- `axis_push_sign = -1`
+
+意义：
+- 手柄推拉与机器人正方向之间存在符号反转
+- 当前程序统一通过 `axis_push_sign` 处理该方向关系
+
+轴1固定蠕动窗口：
+- 左端：`leftlimit[1] + 5`
+- 右端：`leftlimit[1] + 27`
+
+轴6独立导丝窗口：
+- 进入独立模式时，以当前轴6绝对位置为窗口右端
+- 窗口长度固定 `20 mm`
+- 左端 = `entry_abs - 20`
+- 若越过左限位，则钳制到 `leftlimit[6]`
+
+通用阈值：
+- `crawl_trigger_deadband_mm = 0.3`
+- `crawl_rearm_threshold_mm = 0.3`
+- `crawl_arrive_tol_mm = 0.2`
+
+6.7 启动入口与准备流程
+在 PLC 自检完成并完成一次 `sync_all()` 后，程序不会直接放行控制，而是提示：
+- `C`：Direct control
+- `S`：Startup preparation
+
+即：
+
+1. `C` 模式
+- 直接完成同步
+- 不执行启动准备
+- `control_active := true`
+
+2. `S` 模式
+- 执行上位机启动准备序列
+- 启动准备期间仅移动轴3/5/6
+- 轴1/2/7保持在进入准备前的位置
+
+当前启动准备阶段定义于 `StartupPhase`：
+- `ReleaseClamps`
+- `MoveAxis56ToReady`
+- `ClampCylinder34Wait`
+- `MoveAxis356ToReady`
+
+当前启动准备参数：
+- `startup_motion_speed_scale = 0.5`
+  仅对 PLC 的 `v_limit` 中轴3/5/6做降速
+- `startup_cyl3_open = 2000`
+  启动准备阶段对 `cylinder3` 使用更大张开值
+- `startup_axis5_ready_from_left_mm = 290`
+- `startup_axis6_ready_from_left_mm = 310`
+- `startup_axis3_ready_from_left_mm = 658`
+
+当前启动准备步骤：
+
+步骤1：ReleaseClamps
+- `cylinder1 = cyl1_open`
+- `cylinder2 = cyl2_open`
+- `cylinder3 = startup_cyl3_open`
+- `cylinder4 = cyl4_open`
+- 等待 `startup_clamp_settle_delay_ms = 300 ms`
+
+步骤2：MoveAxis56ToReady
+- 轴5目标绝对位：`leftlimit[5] + 290`
+- 轴6目标绝对位：`leftlimit[6] + 310`
+- 到位后进入下一步
+
+步骤3：ClampCylinder34Wait
+- `cylinder3 = cyl3_clamp`
+- `cylinder4 = cyl4_clamp`
+- 固定保持轴5/6在准备位
+- 等待 300 ms
+- 并记录：
+  - `startup.axis3_move_base_rel`
+  - `startup.axis5_move_base_rel`
+  - `startup.axis6_move_base_rel`
+
+步骤4：MoveAxis356ToReady
+- 轴3目标绝对位：`leftlimit[3] + 658`
+- 轴5、轴6不去固定点，而是按“与轴3相同的相对增量”一起移动
+- 到位后：
+  - `cylinder1 = cyl1_open`
+  - `cylinder2 = cyl2_clamp`
+  - `cylinder3 = startup_cyl3_open`
+  - `cylinder4 = cyl4_clamp`
+- 恢复 PLC `v_limit`
+- 执行一次 `sync_all(30)`
+- 启动准备完成，`control_active := true`
+
+6.8 当前普通导管模式
+当 `guidewire_mode == None` 时，程序进入普通导管模式。
+
+主要行为：
+
+1. 轴1跟随
+- 手柄 582 的直线轴控制轴1平移
+- 手柄 582 的旋转轴控制轴2
+
+2. 轴2重接管保护
+- 当经历重同步后，轴2不会立即跟着手柄旋转变化
+- 只有手柄旋转超过 `axis2_rot_reengage_deadband_deg = 1.0`
+  才重新进入实时跟随
+
+3. 轴1窗口激活
+- 轴1首次进入 `[leftlimit+5, leftlimit+27]` 窗口时
+  - 捕获当前基线
+  - 置 `axis1_crawl.window_active := true`
+
+4. 正常段镜像跟随
+在 `axis1_crawl.phase == Follow` 时：
+- 轴3跟随轴1正常段位移
+- 轴5跟随轴1正常段位移
+- 轴6也跟随轴1正常段位移
+
+注意：
+- 这里只镜像“正常段”
+- 轴1到窗口边缘后的快速回退阶段，轴3/5/6不会自动复刻同样的蠕动回退逻辑
+
+5. 正向与反向蠕动
+- 默认方向：由 `axis1_push_request` 驱动
+- 当按住 582 的 `b0` 时，允许使用窗口反向方向控制
+
+6. 蠕动状态机
+轴1当前使用独立的显式状态机：
+- `Follow`
+- `SwitchWait`
+- `FastMove`
+- `ClampWait`
+- `RestoreWait`
+
+时序含义：
+- `SwitchWait`
+  - `cylinder1 = clamp`
+  - `cylinder2 = open`
+  - 等待 `crawl_cylinder_action_delay_ms = 350 ms`
+- `FastMove`
+  - `axis1_fast_return = true`
+  - 轴1快速移动到另一端
+- `ClampWait`
+  - 前后都夹紧
+  - 等待 `crawl_both_clamp_settle_ms = 50 ms`
+- `RestoreWait`
+  - 恢复正常夹持组合
+  - 延时后执行 `sync_axis1(...)`
+
+7. Re-arm 机制
+- 每次蠕动完成后不会立即接受下一次边界触发
+- 需要操作者在同一方向重新推动手柄超过 `crawl_rearm_threshold_mm`
+- 这样可抑制边界附近的回弹和误触发
+
+6.9 当前独立导丝模式
+当前上位机只保留 `GuidewireMode::Independent`，没有协同导丝模式。
+
+进入方式：
+- 当手柄 587 的 `b6` 从未按到按下时，发起模式切换
+- 当 `b6` 释放时，退出独立导丝模式并回到普通模式
+
+进入独立导丝模式后的行为：
+
+1. 冻结轴
+- 轴1、轴2、轴3、轴5固定在进入该模式时的位置
+
+2. 可控轴
+- 轴6：由手柄 587 的直线轴控制
+- 轴7：由手柄 587 的旋转轴控制
+
+3. 轴7重接管保护
+- 与轴2类似，重同步后需超过一定手柄旋转死区才恢复实时跟随
+
+4. 动态窗口
+- 以进入独立模式瞬间的轴6绝对位置为右端
+- 左端 = 右端 - 20 mm
+- 若越过左限位则钳制
+- 若窗口不足一个到位容差，模式切换会被拒绝
+
+5. 轴6蠕动状态机
+轴6使用公共辅助函数 `process_crawl_settle_phases()` 管理：
+- `Follow`
+- `SwitchWait`
+- `FastMove`
+- `ClampWait`
+- `RestoreWait`
+
+其时序与轴1类似：
+- 默认方向由 `axis6_push_request` 驱动
+- 按住 587 的 `b0` 则允许反向窗口运动
+- 快速回退阶段会置 `axis6_fast_retract = true`
+- 恢复阶段结束后执行 `sync_axis6(...)`
+
+6.10 暂停、保持与重同步
+当前主程序有三种不同来源的“冻结/重新同步”：
+
+1. 手柄暂停
+- 582 的 `b6`
+- 按下：
+  - `freeze_active := true`
+  - `control_active := false`
+  - 力反馈清零
+- 松开：
+  - 若启动准备尚未完成，回到等待 `C/S` 选择
+  - 若启动准备已完成，则执行 `sync_all(20)` 后恢复控制
+
+2. PLC 保持
+- 通过 `G.estop_hold_req` 通知上位机
+- 上位机轮询该标志
+- 为真时：
+  - 不再继续正常控制
+  - 力反馈强制清零
+
+3. PLC 请求重同步
+- 通过 `G.handle_reinit_req`
+- 上位机检测到后：
+  - 在允许条件下执行 `sync_all(30)`
+  - 然后清除该标志
+
+6.11 自检完成后的上位机行为
+上位机轮询 `G.self_check_done`：
+- 若检测到它从 `FALSE -> TRUE`
+  - 恢复启动阶段可能缩放过的 `v_limit`
+  - 清空导丝模式
+  - 置 `startup.phase = WaitForEnter`
+  - 执行 `sync_all(30)`
+  - 然后提示用户选择 `C` 或 `S`
+
+因此，PLC 自检完成并不代表立即开始手柄控制。
+当前实际逻辑是：
+- PLC 自检完成
+- 上位机同步当前位置与手柄零位
+- 用户选择直接控制或启动准备
+
+6.12 力反馈逻辑
+当前上位机支持按键 `F` 切换力反馈开关。
+
+特点：
+- 只对手柄 582 生效
+- 从 PLC 读取 `fn_value` 与 `ft_value`
+- 对法向力做零偏自适应和低通滤波
+- 对扭矩通道做区间映射与限幅
+- 当控制冻结、PLC hold、或未进入有效控制时，强制输出 0
+
+
+七、当前关键参数汇总
+
+1. PLC 自检
+- `vel_scan = 10.0`
+- `vel_back = 50.0`
+- `init_target_from_left = [96, 0, 280, 0, 530, 685, 0]`
+
+2. PLC 软限位
+- 轴1：`leftlimit + 99`
+- 轴3：`leftlimit + 666`
+- 轴5：`leftlimit + 688`
+- 轴6：`leftlimit + 688`
+
+3. 上位机蠕动与时序
+- `crawl_trigger_deadband_mm = 0.3`
+- `crawl_rearm_threshold_mm = 0.3`
+- `crawl_arrive_tol_mm = 0.2`
+- `crawl_cylinder_action_delay_ms = 350`
+- `crawl_both_clamp_settle_ms = 50`
+
+4. 上位机启动准备
+- `startup_clamp_settle_delay_ms = 300`
+- `startup_motion_speed_scale = 0.5`
+- `startup_cyl3_open = 2000`
+- `startup_axis5_ready_from_left_mm = 290`
+- `startup_axis6_ready_from_left_mm = 310`
+- `startup_axis3_ready_from_left_mm = 658`
+
+
+八、项目中需要特别注意的历史遗留点
+
+1. 旧文档仍存在右限位表述
+例如旧版 `Project_Documentation.txt`、部分注释与历史需求记录中，仍会写：
+- `rightlimit`
+- “距离右限位”
+- 旧版回退/窗口逻辑
+
+但当前主链路代码已经切换为：
+- `leftlimit`
+- 左限位参考窗口
+- 左限位参考启动准备目标
+- 左限位基准下的右软限位
+
+2. PLC `handle` 中 PID 变量仍保留
+这不代表当前控制仍采用旧版 PID 主导逻辑。
+当前有效路径已经简化为：
+- 限速
+- 滑动平均
+- 直接喂给 `MC_ExtSetPointGenFeed`
+
+3. 项目中仍保留历史备份和 Qt 工程
+这些内容对理解演进有帮助，但当前实际运行逻辑应优先以：
+- `main.cpp`
+- `SelfCheck.TcPOU`
+- `handle.TcPOU`
+- `G.TcGVL`
+为准。
+
+
+九、当前主链路总结
+
+一句话概括当前系统：
+
+这是一个“PLC 负责轴底层使能、自检、设定点发生器输出；C++ 上位机负责双手柄交互、模式管理、蠕动窗口、启动准备和 ADS 协调”的双层控制系统。
+
+当前版本的核心特点是：
+- 以左限位为统一几何基准
+- PLC 自检后不会自动放行控制，而是交由上位机做一次交互式启动选择
+- 普通导管模式下，轴1为主推进轴，轴3/5/6在正常段镜像跟随
+- 独立导丝模式下，轴6/7从普通模式中解耦出来单独控制
+- PLC 通过 `estop_hold_req` 与 `handle_reinit_req` 控制上位机的冻结与重同步
+- 快速回退阶段通过 `axis1_fast_return / axis6_fast_retract` 临时绕开 PLC 平滑限制
+
+以上内容反映的是当前代码状态，而不是历史需求草案。
