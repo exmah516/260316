@@ -292,7 +292,10 @@ FOR j:=1 TO 7 DO
 	G.refer_from_left[j] := (G.refer[j] + G.init_pos[j]) - G.leftlimit[j];
 
 	v_step := G.v_limit[j];
-	return_handoff_bypass := ((j = 1) AND G.axis1_fast_return) OR ((j = 6) AND G.axis6_fast_retract);
+	// 回退接管旁路：除上位机快退标志外，叠加 PLC 回退 Busy 状态兜底，
+	// 避免个别周期标志抖动导致回退末端重新进入慢斜坡/均值链路。
+	return_handoff_bypass := ((j = 1) AND (G.axis1_fast_return OR G.axis1_return_cmd.Busy))
+		OR ((j = 6) AND (G.axis6_fast_retract OR G.axis6_return_cmd.Busy));
 	IF return_handoff_bypass THEN
 		avg_window := 1;
 		ramp_counter[j] := 0;

@@ -1053,10 +1053,19 @@ int main(int argc, char* argv[])
 	double axis6_return_settle_rel = 0.0;
 	// axis6 回退后采用“同方向重入”门控，避免刚回退完就立刻重复触发。
 	DWORD axis6_gate_last_log_ms = 0;
-	// axis1 回退期间，镜像轴保持在回退触发时刻的值（防止回退段带动其它轴抖动）。
+	// axis1 回退期间，镜像轴(3/5)保持在回退触发时刻的值。
 	double axis1_return_hold_axis3_rel = 0.0;
 	double axis1_return_hold_axis5_rel = 0.0;
-	double axis1_return_hold_axis6_rel = 0.0;
+	// 导管模式下 axis1 快退联动 axis6 并行快进状态。
+	double axis1_fast_entry_abs = 0.0;
+	double axis6_fast_entry_abs = 0.0;
+	double axis6_coupled_target_abs = 0.0;
+	double axis6_coupled_settle_rel = 0.0;
+	bool axis6_coupled_active = false;
+	bool axis6_coupled_requested = false;
+	bool axis6_coupled_done = false;
+	bool axis6_coupled_error = false;
+	unsigned long axis6_coupled_error_id = 0;
 	// 旋转轴保持与“重新接管”参考。
 	double axis2_hold_rel = 0.0;
 	bool axis2_rot_reengage_required = false;
@@ -1225,6 +1234,11 @@ int main(int argc, char* argv[])
 		axis3_base_rel = plc_act_pos[2];
 		axis5_base_rel = plc_act_pos[4];
 		axis6_mirror_base_rel = plc_act_pos[5];
+		axis6_coupled_active = false;
+		axis6_coupled_requested = false;
+		axis6_coupled_done = false;
+		axis6_coupled_error = false;
+		axis6_coupled_error_id = 0;
 
 		return write_refer();
 	};
@@ -1399,6 +1413,11 @@ int main(int argc, char* argv[])
 		axis6_coop_prev_hand_delta_mm = 0.0;
 		axis6_coop_prev_axis1_cmd_abs = 0.0;
 		axis6_coop_prev_t_ms = 0;
+		axis6_coupled_active = false;
+		axis6_coupled_requested = false;
+		axis6_coupled_done = false;
+		axis6_coupled_error = false;
+		axis6_coupled_error_id = 0;
 
 		axis7_hold_rel = preserved_axis7_hold_rel;
 		axis7_rot_reengage_required = true;
@@ -2279,7 +2298,6 @@ int main(int argc, char* argv[])
 			{
 				pos[2] = axis1_return_hold_axis3_rel;
 				pos[4] = axis1_return_hold_axis5_rel;
-				pos[5] = axis1_return_hold_axis6_rel;
 			};
 
 			auto compute_axis7_cmd_rel = [&]() -> double
@@ -2654,9 +2672,9 @@ int main(int argc, char* argv[])
 			{
 				// 常规导管模式：
 				// - axis1/2 由 handle 582 控制
-				// - 轴 3/5 镜像 axis1 平移的常规段
-				// - axis6 仅在非导丝协同模式下镜像 axis1
-				// - 快速回退阶段由爬行状态机显式处理
+				// - 轴 3/5 在 Follow 阶段镜像 axis1 平移
+				// - axis6 在导管模式 Follow 阶段保持不动
+				// - axis1 触发快退时，axis6 按等距并行快进
 				const bool cooperative_mode = (guidewire_mode == GuidewireMode::Cooperative);
 				const bool axis1_now_in_window = is_within_range(axis1_abs, axis1_min_abs, axis1_max_abs, cfg.crawl_arrive_tol_mm);
 				if (!axis1_crawl.window_active && axis1_now_in_window)
@@ -2735,9 +2753,19 @@ int main(int argc, char* argv[])
 						axis2_hold_rel = pos[1];
 					}
 
-					apply_axis1_mirror_from_abs(axis1_cmd_abs, !cooperative_mode);
-					cylinder3_cmd = cyl.cyl3_follow_release;
-					cylinder4_cmd = cyl.cyl4_follow_release;
+					apply_axis1_mirror_from_abs(axis1_cmd_abs, false);
+					if (!cooperative_mode)
+					{
+						// 导管模式下 axis6 不再随 axis1 跟随，保持在导管基准位。
+						pos[5] = axis6_mirror_base_rel;
+						cylinder3_cmd = cyl.cyl3_open;
+						cylinder4_cmd = cyl.cyl4_clamp;
+					}
+					else
+					{
+						cylinder3_cmd = cyl.cyl3_follow_release;
+						cylinder4_cmd = cyl.cyl4_follow_release;
+					}
 
 					if (axis1_crawl.window_active && !axis1_crawl.wait_rearm)
 					{
@@ -2755,6 +2783,11 @@ int main(int argc, char* argv[])
 							{
 								cylinder1_cmd = cyl.cyl1_preclamp;
 								cylinder2_cmd = cyl.cyl2_preopen;
+								if (!cooperative_mode)
+								{
+									cylinder3_cmd = cyl.cyl3_preclamp;
+									cylinder4_cmd = cyl.cyl4_preopen;
+								}
 							}
 						}
 
@@ -2779,15 +2812,42 @@ int main(int argc, char* argv[])
 									: axis1_window_right_abs_now;
 								axis1_return_entry_rel = plc_act_pos[0];
 								axis1_return_settle_rel = plc_act_pos[0];
+								axis1_fast_entry_abs = axis1_abs;
+								axis6_fast_entry_abs = axis6_abs;
 								axis1_return_hold_axis3_rel = plc_act_pos[2];
 								axis1_return_hold_axis5_rel = plc_act_pos[4];
-								axis1_return_hold_axis6_rel = plc_act_pos[5];
+								axis6_coupled_settle_rel = plc_act_pos[5];
+								if (!cooperative_mode)
+								{
+									// 导管模式：axis6 联动方向与 axis1 快退位移取反（按工艺要求镜像反向）。
+									axis6_coupled_target_abs =
+										axis6_fast_entry_abs - (axis1_crawl.target_abs - axis1_fast_entry_abs);
+									axis6_return_entry_rel = plc_act_pos[5];
+									axis6_coupled_active = true;
+									axis6_coupled_requested = false;
+									axis6_coupled_done = false;
+									axis6_coupled_error = false;
+									axis6_coupled_error_id = 0;
+								}
+								else
+								{
+									axis6_coupled_active = false;
+									axis6_coupled_requested = false;
+									axis6_coupled_done = false;
+									axis6_coupled_error = false;
+									axis6_coupled_error_id = 0;
+								}
 								axis1_crawl.phase = CrawlState::Phase::FastMove;
 								axis1_crawl.phase_t0 = now_ms;
 								axis1_crawl.rearm_dir = axis1_reverse_pressed ? 1 : -1;
 								axis1_crawl.plc_move_requested = false;
 								cylinder1_cmd = cyl.cyl1_clamp;
 								cylinder2_cmd = cyl.cyl2_open;
+								if (!cooperative_mode)
+								{
+									cylinder3_cmd = cyl.cyl3_clamp;
+									cylinder4_cmd = cyl.cyl4_open;
+								}
 							}
 						}
 					}
@@ -2801,6 +2861,13 @@ int main(int argc, char* argv[])
 					pos[1] = axis2_hold_rel;
 					cylinder1_cmd = cyl.cyl1_clamp;
 					cylinder2_cmd = cyl.cyl2_open;
+					if (axis6_coupled_active)
+					{
+						axis6_fast_retract = true;
+						pos[5] = axis6_return_entry_rel;
+						cylinder3_cmd = cyl.cyl3_clamp;
+						cylinder4_cmd = cyl.cyl4_open;
+					}
 					axis1_crawl.phase = CrawlState::Phase::FastMove;
 					axis1_crawl.phase_t0 = now_ms;
 					axis1_crawl.plc_move_requested = false;
@@ -2817,6 +2884,18 @@ int main(int argc, char* argv[])
 						cylinder2_cmd = cyl.cyl2_preclamp;
 					}
 					axis1_fast_return = true;
+					if (axis6_coupled_active)
+					{
+						axis6_fast_retract = true;
+						// 回退联动阶段持续覆盖为“联动目标点”，避免接管前后端点注入。
+						pos[5] = axis6_coupled_target_abs - plc_init_pos[5];
+						cylinder3_cmd = cyl.cyl3_clamp;
+						cylinder4_cmd = cyl.cyl4_open;
+						if (std::abs(axis6_abs - axis6_coupled_target_abs) <= cfg.axis6_preend_preclamp_mm)
+						{
+							cylinder4_cmd = cyl.cyl4_preclamp;
+						}
+					}
 					if (!axis1_crawl.plc_move_requested)
 					{
 						const bool request_ok = request_axis_return(
@@ -2835,25 +2914,104 @@ int main(int argc, char* argv[])
 							clear_axis_return_request(AdsSymbol::axis1_return);
 						}
 					}
-					else
+					if (axis6_coupled_active &&
+						axis1_crawl.plc_move_requested &&
+						!axis6_coupled_requested &&
+						!axis6_coupled_error)
 					{
-						if (read_axis_return_status(AdsSymbol::axis1_return, axis1_return_status))
+						if (request_axis_return(
+							AdsSymbol::axis6_return,
+							axis6_coupled_target_abs,
+							cfg.axis1_return_velocity_mm_s,
+							cfg.axis1_return_acc_mm_s2,
+							cfg.axis1_return_dec_mm_s2,
+							cfg.axis1_return_jerk_mm_s3))
 						{
-							if (axis1_return_status.error)
+							axis6_coupled_requested = true;
+						}
+						else
+						{
+							clear_axis_return_request(AdsSymbol::axis6_return);
+							axis6_coupled_error = true;
+							axis6_coupled_error_id = 0;
+						}
+					}
+					if (axis6_coupled_active && axis6_coupled_requested && !axis6_coupled_done && !axis6_coupled_error)
+					{
+						if (read_axis_return_status(AdsSymbol::axis6_return, axis6_return_status))
+						{
+							if (axis6_return_status.error)
 							{
-								clear_axis_return_request(AdsSymbol::axis1_return);
-								axis1_crawl.plc_move_requested = false;
-								std::cout
-									<< "Axis1 planned return error: "
-									<< axis1_return_status.error_id
-									<< std::endl;
-								if (!sync_axis1(20, true, axis1_crawl.rearm_dir))
+								clear_axis_return_request(AdsSymbol::axis6_return);
+								axis6_coupled_error = true;
+								axis6_coupled_error_id = axis6_return_status.error_id;
+							}
+							else if (axis6_return_status.done)
+							{
+								clear_axis_return_request(AdsSymbol::axis6_return);
+								axis6_coupled_done = true;
+								axis6_coupled_settle_rel = axis6_coupled_target_abs - plc_init_pos[5];
+							}
+						}
+					}
+					if (axis1_crawl.plc_move_requested &&
+						read_axis_return_status(AdsSymbol::axis1_return, axis1_return_status))
+					{
+						if (axis1_return_status.error)
+						{
+							clear_axis_return_request(AdsSymbol::axis1_return);
+							axis1_crawl.plc_move_requested = false;
+							std::cout
+								<< "Axis1 planned return error: "
+								<< axis1_return_status.error_id
+								<< std::endl;
+							clear_axis_return_request(AdsSymbol::axis6_return);
+							axis6_coupled_active = false;
+							axis6_coupled_requested = false;
+							axis6_coupled_done = false;
+							axis6_coupled_error = false;
+							axis6_coupled_error_id = 0;
+							if (!sync_axis1(20, true, axis1_crawl.rearm_dir))
+							{
+								axis1_crawl.phase = CrawlState::Phase::Follow;
+								axis1_crawl.wait_rearm = true;
+							}
+						}
+						else if (axis1_return_status.done)
+						{
+							if (axis6_coupled_active)
+							{
+								if (axis6_coupled_error)
 								{
-									axis1_crawl.phase = CrawlState::Phase::Follow;
-									axis1_crawl.wait_rearm = true;
+									std::cout
+										<< "Axis6 coupled fast-forward error: "
+										<< axis6_coupled_error_id
+										<< std::endl;
+									clear_axis_return_request(AdsSymbol::axis1_return);
+									clear_axis_return_request(AdsSymbol::axis6_return);
+									axis1_crawl.plc_move_requested = false;
+									axis6_coupled_active = false;
+									axis6_coupled_requested = false;
+									axis6_coupled_done = false;
+									axis6_coupled_error = false;
+									axis6_coupled_error_id = 0;
+									if (!sync_axis1(20, true, axis1_crawl.rearm_dir))
+									{
+										axis1_crawl.phase = CrawlState::Phase::Follow;
+										axis1_crawl.wait_rearm = true;
+									}
+								}
+								else if (axis6_coupled_done)
+								{
+									clear_axis_return_request(AdsSymbol::axis1_return);
+									axis1_crawl.plc_move_requested = false;
+									axis1_return_settle_rel = axis1_crawl.target_abs - plc_init_pos[0];
+									axis6_return_settle_rel = axis6_coupled_settle_rel;
+									axis1_crawl.phase = CrawlState::Phase::SettleHold;
+									axis1_crawl.phase_t0 = now_ms;
 								}
 							}
-							else if (axis1_return_status.done)
+							else
 							{
 								clear_axis_return_request(AdsSymbol::axis1_return);
 								axis1_crawl.plc_move_requested = false;
@@ -2867,13 +3025,26 @@ int main(int argc, char* argv[])
 				else if (axis1_crawl.phase == CrawlState::Phase::SettleHold)
 				{
 					// 在回退终点先保持短暂稳定窗口，再切换夹爪状态。
+					const DWORD coupled_settle_hold_ms =
+						axis6_coupled_active
+						? ((cfg.axis1_return_settle_hold_ms > cfg.axis6_return_settle_hold_ms)
+							? cfg.axis1_return_settle_hold_ms
+							: cfg.axis6_return_settle_hold_ms)
+						: cfg.axis1_return_settle_hold_ms;
 					axis1_fast_return = true;
 					pos[0] = axis1_return_settle_rel;
 					hold_axis1_mirror_axes_for_return();
 					pos[1] = axis2_hold_rel;
 					cylinder1_cmd = cyl.cyl1_clamp;
 					cylinder2_cmd = cyl.cyl2_preclamp;
-					if ((now_ms - axis1_crawl.phase_t0) >= cfg.axis1_return_settle_hold_ms)
+					if (axis6_coupled_active)
+					{
+						axis6_fast_retract = true;
+						pos[5] = axis6_return_settle_rel;
+						cylinder3_cmd = cyl.cyl3_clamp;
+						cylinder4_cmd = cyl.cyl4_preclamp;
+					}
+					if ((now_ms - axis1_crawl.phase_t0) >= coupled_settle_hold_ms)
 					{
 						axis1_crawl.phase = CrawlState::Phase::ClampWait;
 						axis1_crawl.phase_t0 = now_ms;
@@ -2881,13 +3052,26 @@ int main(int argc, char* argv[])
 				}
 				else if (axis1_crawl.phase == CrawlState::Phase::ClampWait)
 				{
+					const DWORD coupled_transfer_settle_ms =
+						axis6_coupled_active
+						? ((cfg.axis1_return_transfer_settle_ms > cfg.axis6_return_transfer_settle_ms)
+							? cfg.axis1_return_transfer_settle_ms
+							: cfg.axis6_return_transfer_settle_ms)
+						: cfg.axis1_return_transfer_settle_ms;
 					axis1_fast_return = true;
 					pos[0] = axis1_return_settle_rel;
 					hold_axis1_mirror_axes_for_return();
 					pos[1] = axis2_hold_rel;
 					cylinder1_cmd = cyl.cyl1_clamp;
 					cylinder2_cmd = cyl.cyl2_clamp;
-					if ((now_ms - axis1_crawl.phase_t0) >= cfg.axis1_return_transfer_settle_ms)
+					if (axis6_coupled_active)
+					{
+						axis6_fast_retract = true;
+						pos[5] = axis6_return_settle_rel;
+						cylinder3_cmd = cyl.cyl3_clamp;
+						cylinder4_cmd = cyl.cyl4_clamp;
+					}
+					if ((now_ms - axis1_crawl.phase_t0) >= coupled_transfer_settle_ms)
 					{
 						axis1_crawl.phase = CrawlState::Phase::RestoreWait;
 						axis1_crawl.phase_t0 = now_ms;
@@ -2895,13 +3079,26 @@ int main(int argc, char* argv[])
 				}
 				else if (axis1_crawl.phase == CrawlState::Phase::RestoreWait)
 				{
+					const DWORD coupled_transfer_settle_ms =
+						axis6_coupled_active
+						? ((cfg.axis1_return_transfer_settle_ms > cfg.axis6_return_transfer_settle_ms)
+							? cfg.axis1_return_transfer_settle_ms
+							: cfg.axis6_return_transfer_settle_ms)
+						: cfg.axis1_return_transfer_settle_ms;
 					axis1_fast_return = true;
 					pos[0] = axis1_return_settle_rel;
 					hold_axis1_mirror_axes_for_return();
 					pos[1] = axis2_hold_rel;
 					cylinder1_cmd = cyl.cyl1_open;
 					cylinder2_cmd = cyl.cyl2_clamp;
-					if ((now_ms - axis1_crawl.phase_t0) >= cfg.axis1_return_transfer_settle_ms)
+					if (axis6_coupled_active)
+					{
+						axis6_fast_retract = true;
+						pos[5] = axis6_return_settle_rel;
+						cylinder3_cmd = cyl.cyl3_open;
+						cylinder4_cmd = cyl.cyl4_clamp;
+					}
+					if ((now_ms - axis1_crawl.phase_t0) >= coupled_transfer_settle_ms)
 					{
 						if (!sync_axis1(20, true, axis1_crawl.rearm_dir))
 						{
@@ -2909,6 +3106,11 @@ int main(int argc, char* argv[])
 							axis1_crawl.phase = CrawlState::Phase::Follow;
 							axis1_crawl.wait_rearm = true;
 						}
+						axis6_coupled_active = false;
+						axis6_coupled_requested = false;
+						axis6_coupled_done = false;
+						axis6_coupled_error = false;
+						axis6_coupled_error_id = 0;
 					}
 				}
 
