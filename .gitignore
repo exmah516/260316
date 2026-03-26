@@ -31,3 +31,11 @@ unsuccessfulbuild
 # Python cache
 __pycache__/
 *.pyc
+*.log
+*.csv
+*.zip
+*.dll
+*.exe
+*.lib
+*(备份).*
+备份.*
