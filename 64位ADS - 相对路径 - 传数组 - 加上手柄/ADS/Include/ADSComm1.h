@@ -22,6 +22,7 @@ public:
 	bool CloseComm();
 	bool ADSWrite(const char * paraName, unsigned long length, void * data);
 	bool ADSRead(const char * paraName, unsigned long length, void * data);
+	bool ADSReadSum(const char* const* symbols, const unsigned long* lengths, void* const* outputs, unsigned long count);
 	bool ADSWrite(unsigned long addr, unsigned long length, void * data);
 	bool ADSRead(unsigned long addr, unsigned long length, void * data);
 	unsigned long ADSGetAddr(const char * paraName);

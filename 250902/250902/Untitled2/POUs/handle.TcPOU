@@ -11,9 +11,8 @@ VAR
 	v_step		: LREAL;
 	avg_window	: INT;
 	return_handoff_bypass : BOOL;
-	avg_window_follow : INT := 10;
+	avg_window_follow : INT := 20;
 	avg_window_legacy : INT := 20;
-	ema_alpha : LREAL := 0.08;
 
 	Kp			:	LREAL:=0.14;
 	Ki			:	LREAL:=0.016;
@@ -76,7 +75,6 @@ VAR
 	refer_interval  : ARRAY[1..7] OF INT;
 	refer_tick      : ARRAY[1..7] OF INT;
 	refer_progress  : ARRAY[1..7] OF INT;
-	frac            : LREAL;
 END_VAR
 
 ]]></Declaration>
@@ -327,13 +325,13 @@ FOR j:=1 TO 7 DO
 			G.ref_slow[j] := G.refer[j];
 		END_IF
 	ELSE
-		frac := G.ref_slow[j] + ema_alpha * (G.refer[j] - G.ref_slow[j]);
-		IF (frac - G.ref_slow[j]) > v_step THEN
+		// EMA disabled in follow path: keep legacy v_step ramp behavior.
+		IF (G.refer[j] - G.ref_slow[j]) > v_step THEN
 			G.ref_slow[j] := G.ref_slow[j] + v_step;
-		ELSIF (frac - G.ref_slow[j]) < -v_step THEN
+		ELSIF (G.refer[j] - G.ref_slow[j]) < -v_step THEN
 			G.ref_slow[j] := G.ref_slow[j] - v_step;
 		ELSE
-			G.ref_slow[j] := frac;
+			G.ref_slow[j] := G.refer[j];
 		END_IF
 	END_IF
 

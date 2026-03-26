@@ -1,4 +1,5 @@
 #include <ADSComm1.h>
+#include <vector>
 
 // ADS 通讯封装说明：
 // - 对外提供“按符号名”和“按句柄”两类读写接口。
@@ -83,6 +84,126 @@ bool CADSComm::ADSRead(unsigned long addr, unsigned long length, void* data)
 	return true;
 }
 
+// 鎸夌鍙峰悕鎵归噺璇伙紙Sum Read锛夛細
+// - 涓€娆″彂璧?ADSIGRP_SUMUP_READ锛屽噺灏戠綉缁滃線杩旀鏁般€?
+// - 鍏堣В鏋愬苟缂撳瓨鍙ユ焺锛屽啀鎸夋枃妗?request table 鎵归噺璇汇€?
+// - 杩斿洖鍖洪娈典负姣忛」閿欒鐮侊紙ULONG[count]锛夛紝鍚庢涓烘嫾鎺ユ暟鎹尯銆?
+bool CADSComm::ADSReadSum(const char* const* symbols, const unsigned long* lengths, void* const* outputs, unsigned long count)
+{
+	if (!m_bOpen)
+	{
+		sprintf_s(m_lastError, sizeof(m_lastError), "Error: Ads not Open\n");
+		return false;
+	}
+
+	if (symbols == NULL || lengths == NULL || outputs == NULL || count == 0)
+	{
+		sprintf_s(m_lastError, sizeof(m_lastError), "Error: ADSReadSum invalid arguments\n");
+		return false;
+	}
+
+	struct ST_SumReadReq
+	{
+		ULONG index_group;
+		ULONG index_offset;
+		ULONG read_length;
+	};
+
+	std::vector<ST_SumReadReq> requests(count);
+	std::vector<ULONG> item_errors(count, 0);
+	unsigned long total_data_bytes = 0;
+
+	for (unsigned long i = 0; i < count; ++i)
+	{
+		if (symbols[i] == NULL || outputs[i] == NULL || lengths[i] == 0)
+		{
+			sprintf_s(m_lastError, sizeof(m_lastError), "Error: ADSReadSum invalid item at index %lu\n", i);
+			return false;
+		}
+
+		const unsigned long handle = ADSGetAddr(symbols[i]);
+		if (handle == 0)
+		{
+			return false;
+		}
+
+		requests[i].index_group = ADSIGRP_SYM_VALBYHND;
+		requests[i].index_offset = handle;
+		requests[i].read_length = lengths[i];
+
+		if (total_data_bytes > (0xFFFFFFFFUL - lengths[i]))
+		{
+			sprintf_s(m_lastError, sizeof(m_lastError), "Error: ADSReadSum size overflow\n");
+			return false;
+		}
+		total_data_bytes += lengths[i];
+	}
+
+	const unsigned long errors_bytes = count * sizeof(ULONG);
+	if (errors_bytes > (0xFFFFFFFFUL - total_data_bytes))
+	{
+		sprintf_s(m_lastError, sizeof(m_lastError), "Error: ADSReadSum response size overflow\n");
+		return false;
+	}
+	const unsigned long response_bytes = errors_bytes + total_data_bytes;
+	std::vector<unsigned char> response(response_bytes, 0);
+
+	unsigned long cb_return = 0;
+	const long nErr = AdsSyncReadWriteReqEx2(
+		m_adsPort,
+		m_PAmsAddr,
+		ADSIGRP_SUMUP_READ,
+		count,
+		response_bytes,
+		response.data(),
+		static_cast<unsigned long>(requests.size() * sizeof(ST_SumReadReq)),
+		requests.data(),
+		&cb_return);
+	if (nErr)
+	{
+		sprintf_s(m_lastError, sizeof(m_lastError), "Error: AdsSyncReadWriteReqEx2(SUMUP_READ): %ld\n", nErr);
+		return false;
+	}
+
+	if (cb_return < errors_bytes)
+	{
+		sprintf_s(m_lastError, sizeof(m_lastError), "Error: ADSReadSum short response (%lu)\n", cb_return);
+		return false;
+	}
+
+	memcpy(item_errors.data(), response.data(), errors_bytes);
+	for (unsigned long i = 0; i < count; ++i)
+	{
+		if (item_errors[i] != 0)
+		{
+			sprintf_s(
+				m_lastError,
+				sizeof(m_lastError),
+				"Error: ADSReadSum item %lu failed (code=%lu, symbol=%s)\n",
+				i,
+				static_cast<unsigned long>(item_errors[i]),
+				symbols[i]);
+			return false;
+		}
+	}
+
+	unsigned long data_offset = errors_bytes;
+	for (unsigned long i = 0; i < count; ++i)
+	{
+		const unsigned long next_offset = data_offset + lengths[i];
+		if (next_offset > cb_return || next_offset > response_bytes)
+		{
+			sprintf_s(m_lastError, sizeof(m_lastError), "Error: ADSReadSum payload truncated at item %lu\n", i);
+			return false;
+		}
+
+		memcpy(outputs[i], response.data() + data_offset, lengths[i]);
+		data_offset = next_offset;
+	}
+
+	return true;
+}
+
 // 句柄获取流程：
 // - 先查缓存；
 // - 缓存未命中时通过 ADSIGRP_SYM_HNDBYNAME 向 PLC 申请；
@@ -148,6 +269,7 @@ bool CADSComm::OpenComm()
 	m_PAmsAddr->port = 851;
 
 	m_adsPort = AdsPortOpenEx();
+
 	if (m_adsPort <= 0)
 	{
 		sprintf_s(m_lastError, sizeof(m_lastError), "Error: AdsPortOpenEx failed\n");
@@ -191,6 +313,7 @@ bool CADSComm::OpenComm_inside()
 	USHORT nAdsState;
 
 	m_adsPort = AdsPortOpenEx();
+
 	if (m_adsPort <= 0)
 	{
 		sprintf_s(m_lastError, sizeof(m_lastError), "Error: AdsPortOpenEx failed\n");
