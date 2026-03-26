@@ -1,0 +1,79 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<TcPlcObject Version="1.1.0.1" ProductVersion="3.1.4024.15">
+  <GVL Name="G" Id="{ccabbda2-7ae2-40eb-8293-a1b7a36c29fa}">
+    <Declaration><![CDATA[{attribute 'qualified_only'}
+VAR_GLOBAL
+	//专有变量
+	gen_state			:	state := _init;
+	axis				:	ARRAY[1..7] OF axis_REF;
+	power_				:	ARRAY[1..7] OF MC_Power;
+	power_output		:	ARRAY[1..7] OF ST_McOutputs;
+	axis_Reset			:	ARRAY[1..7] OF MC_Reset;
+	reset_output		:	ARRAY[1..7] OF ST_McOutputs;
+	SetPointGenEnable	:	ARRAY[1..7] OF MC_ExtSetPointGenEnable;
+	SetPointGenDisable	:	ARRAY[1..7] OF MC_ExtSetPointGenDisable;
+	SetPointGenEnable_output,	SetPointGenDisable_output	: ARRAY[1..7] OF ST_McOutputs;
+	move_jog			: 	ARRAY [1..7] OF MC_Jog;
+	enable,	disable		:	BOOL;	//跟随运动变量
+	flag:INT:=0;
+	flagpos:LREAL:=0;
+    //其他变量
+    init_pos			: ARRAY[1..7] OF LREAL := [30, 9, 0, 0, 0, 30, 13];
+    refer,Act_pos,act_h,act_hf	: ARRAY[1..7] OF LREAL;
+    
+	// 自检相关变量
+    leftlimit           : ARRAY[1..7] OF LREAL;
+	act_pos_from_left	: ARRAY[1..7] OF LREAL;
+	refer_from_left		: ARRAY[1..7] OF LREAL;
+    self_check_done     : BOOL := FALSE;
+	handle_reinit_req	: BOOL := FALSE;
+	handle_reinit_done	: BOOL := FALSE;
+	selfcheck_reset_req : BOOL := FALSE;
+	selfcheck_stu		: ARRAY[1..7] OF INT;
+	selfcheck_all_reach_limit : BOOL := FALSE;
+
+	// 急停/掉使能冻结：用于通知上位机停止写 refer，并在恢复时触发重同步
+	estop_hold_req		: BOOL := FALSE;
+
+	axis6_fast_retract	: BOOL := FALSE;
+	axis1_fast_return	: BOOL := FALSE;
+	startup_smoothing_bypass : BOOL := FALSE;
+	axis1_return_cmd	: ST_AxisPlannedReturnCmd;
+	axis3_return_cmd	: ST_AxisPlannedReturnCmd;
+	axis5_return_cmd	: ST_AxisPlannedReturnCmd;
+	axis6_return_cmd	: ST_AxisPlannedReturnCmd;
+	axis4_fwd_req		: BOOL := FALSE;
+	axis4_rev_req		: BOOL := FALSE;
+	axis4_manual_busy	: BOOL := FALSE;
+	axis4_manual_done	: BOOL := FALSE;
+	axis4_manual_error	: BOOL := FALSE;
+	axis4_manual_error_id : UDINT := 0;
+
+
+	// 速度门限与参考缓动（参考“方式10-仿真”风格）
+	v_limit				: ARRAY[1..7] OF LREAL := [7.5,7.5,1.5,1.5,1.5,7.5,1.5];
+	ref_slow			: ARRAY[1..7] OF LREAL := [0,0,0,0,0,0,0];
+
+	// PID 参数（可按轴整定）及状态量
+	Kp					: ARRAY[1..7] OF LREAL := [0.14,0.14,0.14,0.14,0.14,0.14,0.14];
+	Ki					: ARRAY[1..7] OF LREAL := [0.016,0.016,0.016,0.016,0.016,0.016,0.016];
+	Kd					: ARRAY[1..7] OF LREAL := [0.1,0.1,0.1,0.1,0.1,0.1,0.1];
+	pid_i				: ARRAY[1..7] OF LREAL := [0,0,0,0,0,0,0];
+	pid_e_prev			: ARRAY[1..7] OF LREAL := [0,0,0,0,0,0,0];
+	pid_i_limit			: ARRAY[1..7] OF LREAL := [100,100,100,100,100,100,100];
+
+	// ========== 电缸控制变量 ==========
+	cylinder1_value		AT %Q* : WORD;		// 电缸1控制值 (安装在夹持机构上)
+	cylinder2_value		AT %Q* : WORD;		// 电缸2控制值 (安装在轴1机构上)
+	cylinder3_value		AT %Q* : WORD;		// 电缸3控制值 (安装在轴5机构上)
+	cylinder4_value		AT %Q* : WORD;		// 电缸4控制值 (安装在轴6机构上)
+
+	ft_1_value			AT %I* : INT;
+	fn_1_value			AT %I* : INT;
+	fn_2_value			AT %I* : INT;
+	ft_2_value			AT %I* : INT;
+
+
+END_VAR]]></Declaration>
+  </GVL>
+</TcPlcObject>

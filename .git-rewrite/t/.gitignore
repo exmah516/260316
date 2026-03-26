@@ -1,0 +1,41 @@
+# Visual Studio workspace state
+.vs/
+**/.vs/
+*.suo
+*.user
+*.~u
+*.tsproj.bak
+*.VC.db
+*.VC.opendb
+*.opendb
+*.db-shm
+*.db-wal
+*.ipch
+
+# MSVC intermediate files and build outputs
+**/x64/Debug/
+**/x64/Release/
+*.obj
+*.iobj
+*.ipdb
+*.idb
+*.ilk
+*.pdb
+*.recipe
+*.lastbuildstate
+*.vcxproj.FileListAbsolute.txt
+*.tlog
+**/*.tlog/
+unsuccessfulbuild
+
+# Python cache
+__pycache__/
+*.pyc
+*.log
+*.csv
+*.zip
+*.dll
+*.exe
+*.lib
+*(备份).*
+备份.*
