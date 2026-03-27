@@ -75,6 +75,19 @@ VAR
 	refer_interval  : ARRAY[1..7] OF INT;
 	refer_tick      : ARRAY[1..7] OF INT;
 	refer_progress  : ARRAY[1..7] OF INT;
+	// 2nd-order critically damped tracking filter (per-axis)
+	traj_pos     : ARRAY[1..7] OF LREAL;  // filter output: smoothed position (relative coords, same frame as G.refer)
+	traj_vel     : ARRAY[1..7] OF LREAL;  // filter output: velocity (mm/s or deg/s)
+	traj_acc     : ARRAY[1..7] OF LREAL;  // filter output: acceleration (mm/s² or deg/s²)
+	acc_raw      : LREAL;                  // scratch variable for unclipped acceleration
+
+	// Filter tuning parameters
+	traj_wn      : LREAL := 60.0;         // natural frequency (rad/s); shared across all filter-enabled axes
+	traj_vmax    : ARRAY[1..7] OF LREAL := [80, 0, 80, 0, 80, 80, 0];   // velocity clamp (mm/s); 0 = unused axis
+	traj_amax    : ARRAY[1..7] OF LREAL := [2000, 0, 2000, 0, 2000, 2000, 0]; // acceleration clamp (mm/s²)
+
+	// Per-axis filter enable (TRUE = use traj filter output; FALSE = use legacy act_h path)
+	traj_enable  : ARRAY[1..7] OF BOOL := [TRUE, FALSE, TRUE, FALSE, TRUE, TRUE, FALSE];
 END_VAR
 
 ]]></Declaration>
@@ -105,6 +118,9 @@ END_VAR
 		refer_interval[i] := 50;
 		refer_tick[i] := 0;
 		refer_progress[i] := 50;
+		traj_pos[i] := 0.0;
+		traj_vel[i] := 0.0;
+		traj_acc[i] := 0.0;
 	END_FOR
 
 	axis4_manual_state := 0;
@@ -177,6 +193,9 @@ IF NOT init_done THEN
 			refer_interval[j] := 50;
 			refer_tick[j] := 0;
 			refer_progress[j] := 50;
+			traj_pos[j] := G.Act_pos[j];
+			traj_vel[j] := 0.0;
+			traj_acc[j] := 0.0;
 			IF slimit_enable[j] THEN
 				right_slimit[j] := G.leftlimit[j] + rslimit_distance[j];
 			END_IF
@@ -244,6 +263,9 @@ IF NOT all_powered THEN
 			refer_step_to[j] := G.Act_pos[j];
 			refer_progress[j] := refer_interval[j];
 			act_h_prev[j] := G.Act_pos[j];
+			traj_pos[j] := G.Act_pos[j];
+			traj_vel[j] := 0.0;
+			traj_acc[j] := 0.0;
 		END_FOR
 	END_FOR
 
@@ -351,6 +373,50 @@ FOR j:=1 TO 7 DO
 			G.act_h[j] := G.act_h[j] + act_hh[j][i] / TO_LREAL(avg_window);
 		END_FOR
 	END_IF
+
+	// ===== 2nd-order critically damped tracking filter =====
+	// Input: G.refer[j] (raw target from C++)
+	// Output: traj_pos[j], traj_vel[j], traj_acc[j] (smooth trajectory)
+	// Only active for traj_enable axes in normal follow mode.
+	// Bypass/startup/non-filter axes snap to act_h with zero vel/acc.
+	IF traj_enable[j] AND NOT return_handoff_bypass AND NOT G.startup_smoothing_bypass THEN
+		// Critically damped 2nd-order: acc = wn² * (target - pos) - 2*wn * vel
+		acc_raw := traj_wn * traj_wn * (G.refer[j] - traj_pos[j]) - 2.0 * traj_wn * traj_vel[j];
+
+		// Clamp acceleration to traj_amax
+		IF acc_raw > traj_amax[j] THEN
+			acc_raw := traj_amax[j];
+		ELSIF acc_raw < -traj_amax[j] THEN
+			acc_raw := -traj_amax[j];
+		END_IF
+
+		// Forward-Euler integration: acc -> vel (dt = 0.001s = 1ms PLC cycle)
+		traj_acc[j] := acc_raw;
+		traj_vel[j] := traj_vel[j] + 0.001 * traj_acc[j];
+
+		// Clamp velocity to traj_vmax
+		IF traj_vel[j] > traj_vmax[j] THEN
+			traj_vel[j] := traj_vmax[j];
+		ELSIF traj_vel[j] < -traj_vmax[j] THEN
+			traj_vel[j] := -traj_vmax[j];
+		END_IF
+
+		// Forward-Euler integration: vel -> pos (dt = 0.001s)
+		traj_pos[j] := traj_pos[j] + 0.001 * traj_vel[j];
+
+		// Deadband: suppress micro-oscillation when effectively stationary
+		IF ABS(G.refer[j] - traj_pos[j]) < 0.001 AND ABS(traj_vel[j]) < 0.01 THEN
+			traj_pos[j] := G.refer[j];
+			traj_vel[j] := 0.0;
+			traj_acc[j] := 0.0;
+		END_IF
+	ELSE
+		// Non-filter axis, bypass, or startup: snap filter state to current act_h
+		traj_pos[j] := G.act_h[j];
+		traj_vel[j] := 0.0;
+		traj_acc[j] := 0.0;
+	END_IF
+	// ===== end tracking filter =====
 END_FOR
 
 IF return_state[1] = 0 THEN
@@ -427,6 +493,9 @@ CASE return_state[1] OF
 		refer_step_to[1] := G.Act_pos[1];
 		refer_progress[1] := refer_interval[1];
 		act_h_prev[1] := G.Act_pos[1];
+		traj_pos[1] := G.Act_pos[1];
+		traj_vel[1] := 0.0;
+		traj_acc[1] := 0.0;
         spg_enable_exec[1] := TRUE;
         IF G.SetPointGenEnable[1].Done THEN
             ext_setpoint_enabled[1] := TRUE;
@@ -521,6 +590,9 @@ CASE return_state[3] OF
 		refer_step_to[3] := G.Act_pos[3];
 		refer_progress[3] := refer_interval[3];
 		act_h_prev[3] := G.Act_pos[3];
+		traj_pos[3] := G.Act_pos[3];
+		traj_vel[3] := 0.0;
+		traj_acc[3] := 0.0;
         spg_enable_exec[3] := TRUE;
         IF G.SetPointGenEnable[3].Done THEN
             ext_setpoint_enabled[3] := TRUE;
@@ -615,6 +687,9 @@ CASE return_state[5] OF
 		refer_step_to[5] := G.Act_pos[5];
 		refer_progress[5] := refer_interval[5];
 		act_h_prev[5] := G.Act_pos[5];
+		traj_pos[5] := G.Act_pos[5];
+		traj_vel[5] := 0.0;
+		traj_acc[5] := 0.0;
         spg_enable_exec[5] := TRUE;
         IF G.SetPointGenEnable[5].Done THEN
             ext_setpoint_enabled[5] := TRUE;
@@ -709,6 +784,9 @@ CASE return_state[6] OF
 		refer_step_to[6] := G.Act_pos[6];
 		refer_progress[6] := refer_interval[6];
 		act_h_prev[6] := G.Act_pos[6];
+		traj_pos[6] := G.Act_pos[6];
+		traj_vel[6] := 0.0;
+		traj_acc[6] := 0.0;
         spg_enable_exec[6] := TRUE;
         IF G.SetPointGenEnable[6].Done THEN
             ext_setpoint_enabled[6] := TRUE;
@@ -825,6 +903,9 @@ CASE axis4_manual_state OF
 	refer_step_to[4] := G.Act_pos[4];
 	refer_progress[4] := refer_interval[4];
 	act_h_prev[4] := G.Act_pos[4];
+	traj_pos[4] := G.Act_pos[4];
+	traj_vel[4] := 0.0;
+	traj_acc[4] := 0.0;
 	spg_enable_exec[4] := TRUE;
 	IF G.SetPointGenEnable[4].Done THEN
 		ext_setpoint_enabled[4] := TRUE;
@@ -853,20 +934,30 @@ FOR i:=1 TO 7 DO
 END_FOR
 
 FOR i:=1 TO 7 DO
-    IF ext_setpoint_enabled[i] THEN
-        pos_abs := G.act_h[i] + G.init_pos[i];
-
-        MC_ExtSetPointGenFeed(
-            Position:=pos_abs,
-            Velocity:=0,
-            Acceleration:=0,
-            Direction:=1,
-            Axis:=G.axis[i]);
-
-        G.act_hf[i] := G.act_h[i];
-    ELSE
-        G.act_hf[i] := G.axis[i].NcToPlc.ActPos - G.init_pos[i];
-    END_IF
+	IF ext_setpoint_enabled[i] THEN
+		IF traj_enable[i] AND NOT G.startup_smoothing_bypass THEN
+			// Filtered path: feed smooth pos + vel + acc to NC
+			pos_abs := traj_pos[i] + G.init_pos[i];
+			MC_ExtSetPointGenFeed(
+				Position     := pos_abs,
+				Velocity     := traj_vel[i],
+				Acceleration := traj_acc[i],
+				Direction    := 1,
+				Axis         := G.axis[i]);
+		ELSE
+			// Legacy path: axes 2/4/7 or startup bypass
+			pos_abs := G.act_h[i] + G.init_pos[i];
+			MC_ExtSetPointGenFeed(
+				Position     := pos_abs,
+				Velocity     := 0,
+				Acceleration := 0,
+				Direction    := 1,
+				Axis         := G.axis[i]);
+		END_IF
+		G.act_hf[i] := G.act_h[i];
+	ELSE
+		G.act_hf[i] := G.axis[i].NcToPlc.ActPos - G.init_pos[i];
+	END_IF
 END_FOR
 
 FOR i:=1 TO 7 DO
