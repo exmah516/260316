@@ -58,10 +58,10 @@ VAR
 	axis4_stop_exec : BOOL := FALSE;
 	axis4_finish_error : BOOL := FALSE;
 	axis4_error_id_pending : UDINT := 0;
-	axis4_manual_velocity : LREAL := 1.0;
-	axis4_manual_acc : LREAL := 5.0;
-	axis4_manual_dec : LREAL := 5.0;
-	axis4_manual_jerk : LREAL := 20.0;
+	axis4_manual_velocity : LREAL := 30;
+	axis4_manual_acc : LREAL := 100;
+	axis4_manual_dec : LREAL := 100;
+	axis4_manual_jerk : LREAL := 500.0;
 	axis4_manual_direction : MC_Direction := MC_Direction.MC_Positive_Direction;
 	fb_axis4_move_velocity : MC_MoveVelocity;
 	fb_axis4_stop : MC_Stop;
@@ -861,6 +861,7 @@ CASE axis4_manual_state OF
 	IF fb_axis4_move_velocity.Error OR fb_axis4_move_velocity.CommandAborted THEN
 		axis4_finish_error := TRUE;
 		axis4_error_id_pending := fb_axis4_move_velocity.ErrorID;
+		G.axis4_manual_error_id := fb_axis4_move_velocity.ErrorID;
 		axis4_pending_dir := 0;
 		axis4_manual_state := 40;
 	END_IF
@@ -874,17 +875,23 @@ CASE axis4_manual_state OF
 		axis4_finish_error := TRUE;
 		axis4_error_id_pending := fb_axis4_stop.ErrorID;
 		axis4_pending_dir := 0;
-		axis4_manual_state := 40;
+		axis4_manual_state := 39;
 	ELSIF fb_axis4_stop.Done OR (ABS(G.axis[4].NcToPlc.ActVelo) <= 0.05) THEN
 		IF axis4_pending_dir <> 0 THEN
 			axis4_requested_dir := axis4_pending_dir;
 			axis4_manual_state := 20;
 		ELSE
 			axis4_requested_dir := 0;
-			axis4_manual_state := 40;
+			axis4_manual_state := 39;
 		END_IF
 	END_IF
 
+39:
+G.axis4_manual_busy := TRUE;
+// One-cycle gap: let MC_Stop FB release the axis (Execute goes FALSE at top of loop)
+// Next cycle, state 40 will give SetPointGenEnable a clean rising edge
+axis4_manual_state := 40;
+	
 40:
 	G.axis4_manual_busy := TRUE;
 	G.Act_pos[4] := G.axis[4].NcToPlc.ActPos - G.init_pos[4];
@@ -1069,9 +1076,17 @@ fb_axis4_stop(
       <LineId Id="536" Count="92" />
       <LineId Id="2214" Count="4" />
       <LineId Id="629" Count="27" />
-      <LineId Id="2090" Count="17" />
-      <LineId Id="671" Count="31" />
+      <LineId Id="2090" Count="9" />
+      <LineId Id="2315" Count="0" />
+      <LineId Id="2100" Count="7" />
+      <LineId Id="671" Count="14" />
+      <LineId Id="2316" Count="4" />
+      <LineId Id="686" Count="0" />
+      <LineId Id="2321" Count="0" />
+      <LineId Id="687" Count="15" />
       <LineId Id="1712" Count="0" />
+      <LineId Id="813" Count="87" />
+      <LineId Id="2225" Count="0" />
     </LineIds>
   </POU>
 </TcPlcObject>
