@@ -325,7 +325,6 @@ struct ControlConfig
 	DWORD axis6_return_transfer_settle_ms = 20;
 	double axis6_pretrigger_preclamp_mm = 3.0;
 	double axis6_preend_preclamp_mm = 3.0;
-	DWORD axis6_gate_log_interval_ms = 300;
 
 	// 手柄低通滤波。
 	double linear_handle_alpha = 0.25;
@@ -1041,7 +1040,6 @@ int main(int argc, char* argv[])
 	double axis6_return_entry_rel = 0.0;
 	double axis6_return_settle_rel = 0.0;
 	// axis6 回退后采用“同方向重入”门控，避免刚回退完就立刻重复触发。
-	DWORD axis6_gate_last_log_ms = 0;
 	// axis1 回退期间，镜像轴(3/5)保持在回退触发时刻的值。
 	double axis1_return_hold_axis3_rel = 0.0;
 	double axis1_return_hold_axis5_rel = 0.0;
@@ -1294,7 +1292,6 @@ int main(int argc, char* argv[])
 		axis6_crawl.phase_t0 = GetTickCount();
 		axis6_crawl.wait_rearm = wait_rearm;
 		axis6_crawl.rearm_dir = rearm_dir;
-		axis6_gate_last_log_ms = 0;
 		axis6_crawl.enabled = true;
 		axis6_coop_ff_inited = false;
 		axis6_coop_ff_offset_mm = 0.0;
@@ -1395,7 +1392,6 @@ int main(int argc, char* argv[])
 		axis6_crawl.wait_rearm = false;
 		axis6_crawl.rearm_dir = 0;
 		axis6_crawl.enabled = false;
-		axis6_gate_last_log_ms = 0;
 		axis6_window_locked = false;
 		axis6_coop_ff_inited = false;
 		axis6_coop_ff_offset_mm = 0.0;
@@ -1498,10 +1494,9 @@ int main(int argc, char* argv[])
 		axis6_crawl.window_active = is_within_range(
 			plc_act_pos[5] + plc_init_pos[5],
 			axis6_crawl.min_abs(),
-			axis6_crawl.max_abs(),
-			cfg.crawl_arrive_tol_mm);
+		axis6_crawl.max_abs(),
+		cfg.crawl_arrive_tol_mm);
 		axis6_crawl.enabled = true;
-		axis6_gate_last_log_ms = 0;
 		axis6_coop_ff_inited = false;
 		axis6_coop_ff_offset_mm = 0.0;
 		axis6_coop_prev_hand_delta_mm = 0.0;
@@ -1601,7 +1596,6 @@ int main(int argc, char* argv[])
 
 		guidewire_mode = GuidewireMode::None;
 		axis6_crawl.enabled = false;
-		axis6_gate_last_log_ms = 0;
 		axis6_window_locked = false;
 		axis6_coop_ff_inited = false;
 		axis6_coop_ff_offset_mm = 0.0;
@@ -2043,7 +2037,6 @@ int main(int argc, char* argv[])
 						{
 							guidewire_mode = GuidewireMode::None;
 							axis6_crawl.enabled = false;
-							axis6_gate_last_log_ms = 0;
 							axis6_window_locked = false;
 							axis6_coop_ff_inited = false;
 							axis6_coop_ff_offset_mm = 0.0;
@@ -2057,7 +2050,6 @@ int main(int argc, char* argv[])
 					{
 						guidewire_mode = GuidewireMode::None;
 						axis6_crawl.enabled = false;
-						axis6_gate_last_log_ms = 0;
 						axis6_window_locked = false;
 						axis6_coop_ff_inited = false;
 						axis6_coop_ff_offset_mm = 0.0;
@@ -2154,7 +2146,6 @@ int main(int argc, char* argv[])
 					}
 					guidewire_mode = GuidewireMode::None;
 					axis6_crawl.enabled = false;
-					axis6_gate_last_log_ms = 0;
 					axis6_window_locked = false;
 					axis6_coop_ff_inited = false;
 					axis6_coop_ff_offset_mm = 0.0;
@@ -2320,27 +2311,14 @@ int main(int argc, char* argv[])
 			// axis6 爬行状态机（独立/协同共用）。
 			// 参数说明：
 			// - axis6_raw_cmd_abs: 当前周期未裁剪的 axis6 绝对指令
-			// - axis6_delta_mm: 当前周期手柄/叠速综合增量（用于同方向重入判定）
 			// - axis6_push_request / axis6_pull_request: 方向判定结果（已含死区）
 			// - axis6_reverse_mode: 当前是否处于反向爬行判定
-			auto run_axis6_crawl_state = [&](double axis6_raw_cmd_abs, double axis6_delta_mm, bool axis6_push_request, bool axis6_pull_request, bool axis6_reverse_mode)
+			auto run_axis6_crawl_state = [&](double axis6_raw_cmd_abs, bool axis6_push_request, bool axis6_pull_request, bool axis6_reverse_mode)
 			{
 				if (axis6_crawl.phase == CrawlState::Phase::Follow)
 				{
 					double axis6_cmd_abs = axis6_base_abs;
-					if (axis6_crawl.wait_rearm)
-					{
-						if ((now_ms - axis6_gate_last_log_ms) >= cfg.axis6_gate_log_interval_ms)
-						{
-							std::cout
-								<< "Axis6 gate: waiting same-direction rearm (rearm_dir="
-								<< axis6_crawl.rearm_dir
-								<< ", delta_mm=" << axis6_delta_mm
-								<< ")" << std::endl;
-							axis6_gate_last_log_ms = now_ms;
-						}
-					}
-					else
+					if (!axis6_crawl.wait_rearm)
 					{
 						if (axis6_reverse_mode)
 						{
@@ -2394,7 +2372,6 @@ int main(int argc, char* argv[])
 							axis6_crawl.plc_move_requested = false;
 							cylinder3_cmd = cyl.cyl3_clamp;
 							cylinder4_cmd = cyl.cyl4_open;
-							axis6_gate_last_log_ms = 0;
 						}
 						else if (axis6_reverse_mode &&
 							axis6_pull_request &&
@@ -2408,7 +2385,6 @@ int main(int argc, char* argv[])
 							axis6_crawl.plc_move_requested = false;
 							cylinder3_cmd = cyl.cyl3_clamp;
 							cylinder4_cmd = cyl.cyl4_open;
-							axis6_gate_last_log_ms = 0;
 						}
 					}
 				}
@@ -2458,7 +2434,6 @@ int main(int argc, char* argv[])
 							{
 								axis6_crawl.phase = CrawlState::Phase::Follow;
 								axis6_crawl.wait_rearm = true;
-								axis6_gate_last_log_ms = 0;
 							}
 						}
 						else if (axis6_return_status.done)
@@ -2508,7 +2483,6 @@ int main(int argc, char* argv[])
 							std::cout << "Axis6 resync after planned return failed." << std::endl;
 							axis6_crawl.phase = CrawlState::Phase::Follow;
 							axis6_crawl.wait_rearm = true;
-							axis6_gate_last_log_ms = 0;
 						}
 					}
 				}
@@ -2652,7 +2626,6 @@ int main(int argc, char* argv[])
 				const bool axis6_pull_request = axis6_hand_delta_mm > cfg.crawl_trigger_deadband_mm;
 				run_axis6_crawl_state(
 					axis6_raw_cmd_abs,
-					axis6_hand_delta_mm,
 					axis6_push_request,
 					axis6_pull_request,
 					axis6_effective_reverse_pressed);
@@ -3160,7 +3133,6 @@ int main(int argc, char* argv[])
 
 						run_axis6_crawl_state(
 							axis6_raw_cmd_abs,
-							axis6_combined_delta_mm,
 							axis6_push_request,
 							axis6_pull_request,
 							axis6_effective_reverse_pressed);
@@ -3171,7 +3143,6 @@ int main(int argc, char* argv[])
 						axis6_coop_ff_inited = false;
 						run_axis6_crawl_state(
 							axis6_base_abs + axis6_coop_ff_offset_mm,
-							axis6_coop_ff_offset_mm,
 							false,
 							false,
 							axis6_effective_reverse_pressed);
