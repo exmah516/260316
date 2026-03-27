@@ -217,7 +217,6 @@ namespace AdsSymbol
 	const char* axis4_fwd_req = "G.axis4_fwd_req";
 	const char* axis4_rev_req = "G.axis4_rev_req";
 	const char* axis4_manual_busy = "G.axis4_manual_busy";
-	const char* axis4_manual_done = "G.axis4_manual_done";
 	const char* axis4_manual_error = "G.axis4_manual_error";
 	const char* axis4_manual_error_id = "G.axis4_manual_error_id";
 
@@ -309,34 +308,24 @@ struct ControlConfig
 	double crawl_arrive_tol_mm = 0.2;
 	double hold_recover_rearm_mm = 0.6;
 
-	// 上位机状态机中的夹爪动作时序。
-	DWORD crawl_cylinder_action_delay_ms = 350;
-	DWORD crawl_both_clamp_settle_ms = 50;
-
 	// PLC 规划快速回退参数。
 	double axis1_return_velocity_mm_s = 200.0;
-	double axis1_return_acc_mm_s2 = 800.0;
-	double axis1_return_dec_mm_s2 = 1200.0;
-	double axis1_return_jerk_mm_s3 = 2000.0;
+	double axis1_return_acc_mm_s2 = 2400.0;
+	double axis1_return_dec_mm_s2 = 2400.0;
+	double axis1_return_jerk_mm_s3 = 35000.0;
 	DWORD axis1_return_settle_hold_ms = 20;
 	DWORD axis1_return_transfer_settle_ms = 20;
 	double axis1_pretrigger_preclamp_mm = 3.0;
 	double axis1_preend_preclamp_mm = 3.0;
-	double axis6_return_velocity_mm_s = 50.0;
-	double axis6_return_acc_mm_s2 = 200.0;
-	double axis6_return_dec_mm_s2 = 200.0;
-	double axis6_return_jerk_mm_s3 = 2000.0;
+	double axis6_return_velocity_mm_s = 200.0;
+	double axis6_return_acc_mm_s2 = 2400.0;
+	double axis6_return_dec_mm_s2 = 2400.0;
+	double axis6_return_jerk_mm_s3 = 35000.0;
 	DWORD axis6_return_settle_hold_ms = 20;
 	DWORD axis6_return_transfer_settle_ms = 20;
 	double axis6_pretrigger_preclamp_mm = 3.0;
 	double axis6_preend_preclamp_mm = 3.0;
 	DWORD axis6_gate_log_interval_ms = 300;
-
-	// Axis4 手动速度模式参数。
-	double axis4_manual_velocity_rad_s = 1.0;
-	double axis4_manual_acc_rad_s2 = 5.0;
-	double axis4_manual_dec_rad_s2 = 5.0;
-	double axis4_manual_jerk_rad_s3 = 20.0;
 
 	// 手柄低通滤波。
 	double linear_handle_alpha = 0.25;
@@ -356,7 +345,7 @@ struct ControlConfig
 	double startup_axis5_ready_from_left_mm = 290.0;
 	double startup_axis3_ready_from_left_mm = 635.0;
 	// 在 axis3 完全到达目标前提前触发 cylinder2 夹紧；现场调参使其领先约 0.5 s。
-	double startup_axis3_cyl2_clamp_advance_mm = 0.0;
+	double startup_axis3_cyl2_clamp_advance_mm = 50.0;
 };
 
 struct CylinderPreset
@@ -365,13 +354,13 @@ struct CylinderPreset
 	// cyl1/cyl2 属于导管侧爬行夹爪对，
 	// cyl3/cyl4 属于导丝侧爬行夹爪对。
 	unsigned short cyl1_open = 400;
-	unsigned short cyl1_clamp = 100;
+	unsigned short cyl1_clamp = 00;
 	unsigned short cyl1_preclamp = 320;
 	unsigned short cyl2_open = 0;
 	unsigned short cyl2_clamp = 600;
 	unsigned short cyl2_preopen = 300;
 	unsigned short cyl2_preclamp = 400;
-	unsigned short cyl3_open = 500;
+	unsigned short cyl3_open = 320;
 	unsigned short cyl3_clamp = 0;
 	unsigned short cyl3_preclamp = 200;
 	unsigned short cyl4_open = 0;
@@ -862,8 +851,8 @@ int main(int argc, char* argv[])
 	// 释放  ~= 0x06
 	// b0 可共存（0x87/0x27），不应阻止点动。
 	const unsigned char axis4_buttons_base_mask = 0x06;
-	const unsigned char axis4_buttons_forward_mask = 0x80;
-	const unsigned char axis4_buttons_reverse_mask = 0x20;
+	const unsigned char axis4_buttons_forward_mask = cfg.btn_b7;
+	const unsigned char axis4_buttons_reverse_mask = cfg.btn_b5;
 
 	// 长生命周期运行时对象。
 	Handle handle_axis1(serial_axis1_handle);
