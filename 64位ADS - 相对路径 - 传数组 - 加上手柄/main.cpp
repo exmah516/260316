@@ -313,6 +313,10 @@ struct ControlConfig
 	double axis1_return_acc_mm_s2 = 2400.0;
 	double axis1_return_dec_mm_s2 = 2400.0;
 	double axis1_return_jerk_mm_s3 = 35000.0;
+	// 快退前先切缸等待（轴1主链路）。
+	DWORD axis1_pre_move_cylinder_wait_ms = 100;
+	// 快退完成后切回最终缸态等待（轴1主链路）。
+	DWORD axis1_post_return_cylinder_wait_ms = 100;
 	DWORD axis1_return_settle_hold_ms = 20;
 	DWORD axis1_return_transfer_settle_ms = 20;
 	double axis1_pretrigger_preclamp_mm = 3.0;
@@ -321,6 +325,10 @@ struct ControlConfig
 	double axis6_return_acc_mm_s2 = 2400.0;
 	double axis6_return_dec_mm_s2 = 2400.0;
 	double axis6_return_jerk_mm_s3 = 35000.0;
+	// 快退前先切缸等待（轴6链路）。
+	DWORD axis6_pre_move_cylinder_wait_ms = 80;
+	// 快退完成后切回最终缸态等待（轴6链路）。
+	DWORD axis6_post_return_cylinder_wait_ms = 80;
 	DWORD axis6_return_settle_hold_ms = 20;
 	DWORD axis6_return_transfer_settle_ms = 20;
 	double axis6_pretrigger_preclamp_mm = 3.0;
@@ -2339,34 +2347,13 @@ int main(int argc, char* argv[])
 
 					if (!axis6_crawl.wait_rearm)
 					{
-						if (!axis6_reverse_mode && axis6_push_request)
-						{
-							const double dist_to_trigger_mm = axis6_abs - axis6_window_left_abs_now;
-							if (dist_to_trigger_mm <= cfg.axis6_pretrigger_preclamp_mm &&
-								dist_to_trigger_mm >= -cfg.crawl_arrive_tol_mm)
-							{
-								cylinder3_cmd = cyl.cyl3_preclamp;
-								cylinder4_cmd = cyl.cyl4_preopen;
-							}
-						}
-						else if (axis6_reverse_mode && axis6_pull_request)
-						{
-							const double dist_to_trigger_mm = axis6_window_right_abs_now - axis6_abs;
-							if (dist_to_trigger_mm <= cfg.axis6_pretrigger_preclamp_mm &&
-								dist_to_trigger_mm >= -cfg.crawl_arrive_tol_mm)
-							{
-								cylinder3_cmd = cyl.cyl3_preclamp;
-								cylinder4_cmd = cyl.cyl4_preopen;
-							}
-						}
-
 						if (!axis6_reverse_mode &&
 							axis6_push_request &&
 							(std::abs(axis6_abs - axis6_window_left_abs_now) <= cfg.crawl_arrive_tol_mm))
 						{
 							axis6_crawl.target_abs = axis6_window_right_abs_now;
 							axis6_return_entry_rel = plc_act_pos[5];
-							axis6_crawl.phase = CrawlState::Phase::FastMove;
+							axis6_crawl.phase = CrawlState::Phase::SwitchWait;
 							axis6_crawl.phase_t0 = now_ms;
 							axis6_crawl.rearm_dir = -1;
 							axis6_crawl.plc_move_requested = false;
@@ -2379,7 +2366,7 @@ int main(int argc, char* argv[])
 						{
 							axis6_crawl.target_abs = axis6_window_left_abs_now;
 							axis6_return_entry_rel = plc_act_pos[5];
-							axis6_crawl.phase = CrawlState::Phase::FastMove;
+							axis6_crawl.phase = CrawlState::Phase::SwitchWait;
 							axis6_crawl.phase_t0 = now_ms;
 							axis6_crawl.rearm_dir = 1;
 							axis6_crawl.plc_move_requested = false;
@@ -2395,9 +2382,12 @@ int main(int argc, char* argv[])
 					pos[5] = axis6_return_entry_rel;
 					cylinder3_cmd = cyl.cyl3_clamp;
 					cylinder4_cmd = cyl.cyl4_open;
-					axis6_crawl.phase = CrawlState::Phase::FastMove;
-					axis6_crawl.phase_t0 = now_ms;
-					axis6_crawl.plc_move_requested = false;
+					if ((now_ms - axis6_crawl.phase_t0) >= cfg.axis6_pre_move_cylinder_wait_ms)
+					{
+						axis6_crawl.phase = CrawlState::Phase::FastMove;
+						axis6_crawl.phase_t0 = now_ms;
+						axis6_crawl.plc_move_requested = false;
+					}
 				}
 				else if (axis6_crawl.phase == CrawlState::Phase::FastMove)
 				{
@@ -2405,10 +2395,6 @@ int main(int argc, char* argv[])
 					cylinder3_cmd = cyl.cyl3_clamp;
 					cylinder4_cmd = cyl.cyl4_open;
 					axis6_fast_retract = true;
-					if (std::abs(axis6_abs - axis6_crawl.target_abs) <= cfg.axis6_preend_preclamp_mm)
-					{
-						cylinder4_cmd = cyl.cyl4_preclamp;
-					}
 
 					if (!axis6_crawl.plc_move_requested)
 					{
@@ -2430,7 +2416,7 @@ int main(int argc, char* argv[])
 							clear_axis_return_request(AdsSymbol::axis6_return);
 							axis6_crawl.plc_move_requested = false;
 							std::cout << "Axis6 planned return error: " << axis6_return_status.error_id << std::endl;
-							if (!sync_axis6(20, false, true, axis6_crawl.rearm_dir, false, false))
+							if (!sync_axis6(3, false, true, axis6_crawl.rearm_dir, false, false))
 							{
 								axis6_crawl.phase = CrawlState::Phase::Follow;
 								axis6_crawl.wait_rearm = true;
@@ -2441,33 +2427,9 @@ int main(int argc, char* argv[])
 							clear_axis_return_request(AdsSymbol::axis6_return);
 							axis6_crawl.plc_move_requested = false;
 							axis6_return_settle_rel = axis6_crawl.target_abs - plc_init_pos[5];
-							axis6_crawl.phase = CrawlState::Phase::SettleHold;
+							axis6_crawl.phase = CrawlState::Phase::RestoreWait;
 							axis6_crawl.phase_t0 = now_ms;
 						}
-					}
-				}
-				else if (axis6_crawl.phase == CrawlState::Phase::SettleHold)
-				{
-					axis6_fast_retract = true;
-					pos[5] = axis6_return_settle_rel;
-					cylinder3_cmd = cyl.cyl3_clamp;
-					cylinder4_cmd = cyl.cyl4_preclamp;
-					if ((now_ms - axis6_crawl.phase_t0) >= cfg.axis6_return_settle_hold_ms)
-					{
-						axis6_crawl.phase = CrawlState::Phase::ClampWait;
-						axis6_crawl.phase_t0 = now_ms;
-					}
-				}
-				else if (axis6_crawl.phase == CrawlState::Phase::ClampWait)
-				{
-					axis6_fast_retract = true;
-					pos[5] = axis6_return_settle_rel;
-					cylinder3_cmd = cyl.cyl3_clamp;
-					cylinder4_cmd = cyl.cyl4_clamp;
-					if ((now_ms - axis6_crawl.phase_t0) >= cfg.axis6_return_transfer_settle_ms)
-					{
-						axis6_crawl.phase = CrawlState::Phase::RestoreWait;
-						axis6_crawl.phase_t0 = now_ms;
 					}
 				}
 				else if (axis6_crawl.phase == CrawlState::Phase::RestoreWait)
@@ -2476,9 +2438,9 @@ int main(int argc, char* argv[])
 					pos[5] = axis6_return_settle_rel;
 					cylinder3_cmd = cyl.cyl3_open;
 					cylinder4_cmd = cyl.cyl4_clamp;
-					if ((now_ms - axis6_crawl.phase_t0) >= cfg.axis6_return_transfer_settle_ms)
+					if ((now_ms - axis6_crawl.phase_t0) >= cfg.axis6_post_return_cylinder_wait_ms)
 					{
-						if (!sync_axis6(20, false, true, axis6_crawl.rearm_dir, false, false))
+						if (!sync_axis6(3, false, true, axis6_crawl.rearm_dir, false, false))
 						{
 							std::cout << "Axis6 resync after planned return failed." << std::endl;
 							axis6_crawl.phase = CrawlState::Phase::Follow;
@@ -2735,24 +2697,6 @@ int main(int argc, char* argv[])
 							? axis1_window_right_abs_now
 							: axis1_window_left_abs_now;
 
-						if (axis1_drive_request && axis1_follow_enabled)
-						{
-							const double dist_to_trigger_mm = axis1_reverse_pressed
-								? (axis1_window_right_abs_now - axis1_abs)
-								: (axis1_abs - axis1_window_left_abs_now);
-							if (dist_to_trigger_mm <= cfg.axis1_pretrigger_preclamp_mm &&
-								dist_to_trigger_mm >= -cfg.crawl_arrive_tol_mm)
-							{
-								cylinder1_cmd = cyl.cyl1_preclamp;
-								cylinder2_cmd = cyl.cyl2_preopen;
-								if (!cooperative_mode)
-								{
-									cylinder3_cmd = cyl.cyl3_preclamp;
-									cylinder4_cmd = cyl.cyl4_preopen;
-								}
-							}
-						}
-
 						const bool axis1_ready_to_trigger = axis1_drive_request &&
 							(axis1_reverse_pressed || (!axis1_push_rearm_after_hold && !axis1_delivery_stop_latched)) &&
 							(std::abs(axis1_abs - axis1_trigger_edge_abs) <= cfg.crawl_arrive_tol_mm);
@@ -2799,7 +2743,7 @@ int main(int argc, char* argv[])
 									axis6_coupled_error = false;
 									axis6_coupled_error_id = 0;
 								}
-								axis1_crawl.phase = CrawlState::Phase::FastMove;
+								axis1_crawl.phase = CrawlState::Phase::SwitchWait;
 								axis1_crawl.phase_t0 = now_ms;
 								axis1_crawl.rearm_dir = axis1_reverse_pressed ? 1 : -1;
 								axis1_crawl.plc_move_requested = false;
@@ -2816,7 +2760,12 @@ int main(int argc, char* argv[])
 				}
 				else if (axis1_crawl.phase == CrawlState::Phase::SwitchWait)
 				{
-					// 兼容旧状态，直接并入并行快退阶段。
+					const DWORD coupled_pre_move_wait_ms =
+						axis6_coupled_active
+						? ((cfg.axis1_pre_move_cylinder_wait_ms > cfg.axis6_pre_move_cylinder_wait_ms)
+							? cfg.axis1_pre_move_cylinder_wait_ms
+							: cfg.axis6_pre_move_cylinder_wait_ms)
+						: cfg.axis1_pre_move_cylinder_wait_ms;
 					axis1_fast_return = true;
 					pos[0] = axis1_return_entry_rel;
 					hold_axis1_mirror_axes_for_return();
@@ -2830,9 +2779,12 @@ int main(int argc, char* argv[])
 						cylinder3_cmd = cyl.cyl3_clamp;
 						cylinder4_cmd = cyl.cyl4_open;
 					}
-					axis1_crawl.phase = CrawlState::Phase::FastMove;
-					axis1_crawl.phase_t0 = now_ms;
-					axis1_crawl.plc_move_requested = false;
+					if ((now_ms - axis1_crawl.phase_t0) >= coupled_pre_move_wait_ms)
+					{
+						axis1_crawl.phase = CrawlState::Phase::FastMove;
+						axis1_crawl.phase_t0 = now_ms;
+						axis1_crawl.plc_move_requested = false;
+					}
 				}
 				else if (axis1_crawl.phase == CrawlState::Phase::FastMove)
 				{
@@ -2841,10 +2793,6 @@ int main(int argc, char* argv[])
 					pos[1] = axis2_hold_rel;
 					cylinder1_cmd = cyl.cyl1_clamp;
 					cylinder2_cmd = cyl.cyl2_open;
-					if (std::abs(axis1_abs - axis1_crawl.target_abs) <= cfg.axis1_preend_preclamp_mm)
-					{
-						cylinder2_cmd = cyl.cyl2_preclamp;
-					}
 					axis1_fast_return = true;
 					if (axis6_coupled_active)
 					{
@@ -2853,10 +2801,6 @@ int main(int argc, char* argv[])
 						pos[5] = axis6_coupled_target_abs - plc_init_pos[5];
 						cylinder3_cmd = cyl.cyl3_clamp;
 						cylinder4_cmd = cyl.cyl4_open;
-						if (std::abs(axis6_abs - axis6_coupled_target_abs) <= cfg.axis6_preend_preclamp_mm)
-						{
-							cylinder4_cmd = cyl.cyl4_preclamp;
-						}
 					}
 					if (!axis1_crawl.plc_move_requested)
 					{
@@ -2933,7 +2877,7 @@ int main(int argc, char* argv[])
 							axis6_coupled_done = false;
 							axis6_coupled_error = false;
 							axis6_coupled_error_id = 0;
-							if (!sync_axis1(20, true, axis1_crawl.rearm_dir))
+							if (!sync_axis1(3, true, axis1_crawl.rearm_dir))
 							{
 								axis1_crawl.phase = CrawlState::Phase::Follow;
 								axis1_crawl.wait_rearm = true;
@@ -2957,7 +2901,7 @@ int main(int argc, char* argv[])
 									axis6_coupled_done = false;
 									axis6_coupled_error = false;
 									axis6_coupled_error_id = 0;
-									if (!sync_axis1(20, true, axis1_crawl.rearm_dir))
+									if (!sync_axis1(3, true, axis1_crawl.rearm_dir))
 									{
 										axis1_crawl.phase = CrawlState::Phase::Follow;
 										axis1_crawl.wait_rearm = true;
@@ -2969,7 +2913,7 @@ int main(int argc, char* argv[])
 									axis1_crawl.plc_move_requested = false;
 									axis1_return_settle_rel = axis1_crawl.target_abs - plc_init_pos[0];
 									axis6_return_settle_rel = axis6_coupled_settle_rel;
-									axis1_crawl.phase = CrawlState::Phase::SettleHold;
+									axis1_crawl.phase = CrawlState::Phase::RestoreWait;
 									axis1_crawl.phase_t0 = now_ms;
 								}
 							}
@@ -2978,75 +2922,20 @@ int main(int argc, char* argv[])
 								clear_axis_return_request(AdsSymbol::axis1_return);
 								axis1_crawl.plc_move_requested = false;
 								axis1_return_settle_rel = axis1_crawl.target_abs - plc_init_pos[0];
-								axis1_crawl.phase = CrawlState::Phase::SettleHold;
+								axis1_crawl.phase = CrawlState::Phase::RestoreWait;
 								axis1_crawl.phase_t0 = now_ms;
 							}
 						}
 					}
 				}
-				else if (axis1_crawl.phase == CrawlState::Phase::SettleHold)
-				{
-					// 在回退终点先保持短暂稳定窗口，再切换夹爪状态。
-					const DWORD coupled_settle_hold_ms =
-						axis6_coupled_active
-						? ((cfg.axis1_return_settle_hold_ms > cfg.axis6_return_settle_hold_ms)
-							? cfg.axis1_return_settle_hold_ms
-							: cfg.axis6_return_settle_hold_ms)
-						: cfg.axis1_return_settle_hold_ms;
-					axis1_fast_return = true;
-					pos[0] = axis1_return_settle_rel;
-					hold_axis1_mirror_axes_for_return();
-					pos[1] = axis2_hold_rel;
-					cylinder1_cmd = cyl.cyl1_clamp;
-					cylinder2_cmd = cyl.cyl2_preclamp;
-					if (axis6_coupled_active)
-					{
-						axis6_fast_retract = true;
-						pos[5] = axis6_return_settle_rel;
-						cylinder3_cmd = cyl.cyl3_clamp;
-						cylinder4_cmd = cyl.cyl4_preclamp;
-					}
-					if ((now_ms - axis1_crawl.phase_t0) >= coupled_settle_hold_ms)
-					{
-						axis1_crawl.phase = CrawlState::Phase::ClampWait;
-						axis1_crawl.phase_t0 = now_ms;
-					}
-				}
-				else if (axis1_crawl.phase == CrawlState::Phase::ClampWait)
-				{
-					const DWORD coupled_transfer_settle_ms =
-						axis6_coupled_active
-						? ((cfg.axis1_return_transfer_settle_ms > cfg.axis6_return_transfer_settle_ms)
-							? cfg.axis1_return_transfer_settle_ms
-							: cfg.axis6_return_transfer_settle_ms)
-						: cfg.axis1_return_transfer_settle_ms;
-					axis1_fast_return = true;
-					pos[0] = axis1_return_settle_rel;
-					hold_axis1_mirror_axes_for_return();
-					pos[1] = axis2_hold_rel;
-					cylinder1_cmd = cyl.cyl1_clamp;
-					cylinder2_cmd = cyl.cyl2_clamp;
-					if (axis6_coupled_active)
-					{
-						axis6_fast_retract = true;
-						pos[5] = axis6_return_settle_rel;
-						cylinder3_cmd = cyl.cyl3_clamp;
-						cylinder4_cmd = cyl.cyl4_clamp;
-					}
-					if ((now_ms - axis1_crawl.phase_t0) >= coupled_transfer_settle_ms)
-					{
-						axis1_crawl.phase = CrawlState::Phase::RestoreWait;
-						axis1_crawl.phase_t0 = now_ms;
-					}
-				}
 				else if (axis1_crawl.phase == CrawlState::Phase::RestoreWait)
 				{
-					const DWORD coupled_transfer_settle_ms =
+					const DWORD coupled_post_return_wait_ms =
 						axis6_coupled_active
-						? ((cfg.axis1_return_transfer_settle_ms > cfg.axis6_return_transfer_settle_ms)
-							? cfg.axis1_return_transfer_settle_ms
-							: cfg.axis6_return_transfer_settle_ms)
-						: cfg.axis1_return_transfer_settle_ms;
+						? ((cfg.axis1_post_return_cylinder_wait_ms > cfg.axis6_post_return_cylinder_wait_ms)
+							? cfg.axis1_post_return_cylinder_wait_ms
+							: cfg.axis6_post_return_cylinder_wait_ms)
+						: cfg.axis1_post_return_cylinder_wait_ms;
 					axis1_fast_return = true;
 					pos[0] = axis1_return_settle_rel;
 					hold_axis1_mirror_axes_for_return();
@@ -3060,9 +2949,9 @@ int main(int argc, char* argv[])
 						cylinder3_cmd = cyl.cyl3_open;
 						cylinder4_cmd = cyl.cyl4_clamp;
 					}
-					if ((now_ms - axis1_crawl.phase_t0) >= coupled_transfer_settle_ms)
+					if ((now_ms - axis1_crawl.phase_t0) >= coupled_post_return_wait_ms)
 					{
-						if (!sync_axis1(20, true, axis1_crawl.rearm_dir))
+						if (!sync_axis1(3, true, axis1_crawl.rearm_dir))
 						{
 							std::cout << "Axis1 resync after planned return failed." << std::endl;
 							axis1_crawl.phase = CrawlState::Phase::Follow;
