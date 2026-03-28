@@ -279,7 +279,6 @@ struct ControlConfig
 	double k_handle_to_mm = 500.0 * (75.0 / 50.0); // 手柄线性位移差 -> 轴位移增量(mm)
 	double axis_push_sign = -1.0; // 手柄“推/拉”到轴“正/负”方向的映射符号
 	double axis_rot_scale_deg = Rad;
-	double axis2_rot_reengage_deadband_deg = 1.0;
 
 	// 力反馈仅作用于 582 手柄。
 	int axial_force_axis = 1;
@@ -307,6 +306,10 @@ struct ControlConfig
 	double crawl_rearm_threshold_mm = 0.3; // 快退后允许再次触发前需要越过的同向阈值
 	double crawl_arrive_tol_mm = 0.2;
 	double hold_recover_rearm_mm = 0.6;
+	// 线性增量抗噪死区：仅用于抑制差分噪声，不承担方向门控。
+	double linear_increment_noise_deadband_mm = 0.02;
+	// 正反切换一次性触发保护距离（离开该距离后重新允许触发）。
+	double reverse_switch_trigger_guard_mm = 2.0;
 
 	// PLC 规划快速回退参数。
 	double axis1_return_velocity_mm_s = 200.0;
@@ -594,22 +597,6 @@ struct StartupState
 		return phase != StartupPhase::WaitForEnter && phase != StartupPhase::Done;
 	}
 };
-
-// 在进入下一次爬行循环前，要求操作者沿同方向重新施加运动。
-void check_crawl_rearm(CrawlState& crawl, double hand_delta_mm, double threshold_mm)
-{
-	if (!crawl.wait_rearm)
-	{
-		return;
-	}
-
-	const bool same_dir_push = (crawl.rearm_dir > 0) && (hand_delta_mm > threshold_mm);
-	const bool same_dir_pull = (crawl.rearm_dir < 0) && (hand_delta_mm < -threshold_mm);
-	if (same_dir_push || same_dir_pull)
-	{
-		crawl.wait_rearm = false;
-	}
-}
 
 // 力反馈与运动生成有意解耦；当运动冻结、
 // 保持或尚未激活时，会在不改动运动状态的情况下将力输出归零。
@@ -1061,13 +1048,22 @@ int main(int argc, char* argv[])
 	bool axis6_coupled_done = false;
 	bool axis6_coupled_error = false;
 	unsigned long axis6_coupled_error_id = 0;
-	// 旋转轴保持与“重新接管”参考。
+	// 旋转轴保持值（不再使用重接管门控）。
 	double axis2_hold_rel = 0.0;
-	bool axis2_rot_reengage_required = false;
-	double axis2_rot_reengage_ref = 0.0;
 	double axis7_hold_rel = 0.0;
-	bool axis7_rot_reengage_required = false;
-	double axis7_rot_reengage_ref = 0.0;
+	// 线性增量控制：上一拍滤波值与当前累计目标（绝对坐标）。
+	double axis1_prev_linear_filtered = 0.0;
+	double axis6_prev_linear_filtered = 0.0;
+	double axis1_follow_cmd_abs = 0.0;
+	double axis6_follow_cmd_abs = 0.0;
+	// 正反切换一次性触发保护：仅在同模式内切换正反时拉起。
+	bool axis1_reverse_switch_guard_active = false;
+	bool axis6_reverse_switch_guard_active = false;
+	// 触发边“入边触发”判定使用的上一拍实际位置。
+	double axis1_prev_abs_for_trigger = 0.0;
+	double axis6_prev_abs_for_trigger = 0.0;
+	bool axis1_prev_abs_valid = false;
+	bool axis6_prev_abs_valid = false;
 
 	// 导丝模式缓存：独立模式下冻结导管侧轴位。
 	GuidewireMode guidewire_mode = GuidewireMode::None;
@@ -1079,13 +1075,9 @@ int main(int argc, char* argv[])
 	bool axis6_window_locked = false;
 	double axis6_locked_window_start_abs = 0.0;
 	double axis6_locked_window_end_abs = 0.0;
-	// 协同模式 axis6 速度前馈积分状态：
-	// axis6_coop_ff_offset_mm 表示由 v587+v1 积分得到的位移增量（mm）。
+	// 协同模式 axis6 增量叠加状态。
 	bool axis6_coop_ff_inited = false;
-	double axis6_coop_ff_offset_mm = 0.0;
-	double axis6_coop_prev_hand_delta_mm = 0.0;
 	double axis6_coop_prev_axis1_cmd_abs = 0.0;
-	DWORD axis6_coop_prev_t_ms = 0;
 
 	StartupState startup;
 	ForceFeedbackState ff;
@@ -1192,6 +1184,8 @@ int main(int argc, char* argv[])
 	// 仅在模式边沿或一次爬行循环完成后，重同步导管侧爬行状态。
 	auto sync_axis1 = [&](int samples, bool wait_rearm, int rearm_dir) -> bool
 	{
+		(void)wait_rearm;
+		(void)rearm_dir;
 		const double preserved_axis2_hold_rel = axis2_hold_rel;
 		clear_axis1_group_return_requests();
 
@@ -1206,8 +1200,10 @@ int main(int argc, char* argv[])
 
 		get_average_handle_pose(handle_axis1, samples, axis1_crawl.handle_ref, axis1_crawl.rot_ref);
 		axis1_handle_filter.reset(axis1_crawl.handle_ref, axis1_crawl.rot_ref);
+		axis1_prev_linear_filtered = axis1_handle_filter.axis0_filtered;
 		axis1_crawl.base_rel = plc_act_pos[0];
 		axis1_crawl.rot_base_rel = preserved_axis2_hold_rel;
+		axis1_follow_cmd_abs = plc_act_pos[0] + plc_init_pos[0];
 		axis1_crawl.start_abs = axis1_window_left_abs();
 		axis1_crawl.end_abs = axis1_window_right_abs();
 		axis1_crawl.target_abs = axis1_crawl.end_abs;
@@ -1215,16 +1211,17 @@ int main(int argc, char* argv[])
 		axis1_crawl.window_active = is_within_range(
 			plc_act_pos[0] + plc_init_pos[0],
 			axis1_crawl.min_abs(),
-			axis1_crawl.max_abs(),
+		axis1_crawl.max_abs(),
 			cfg.crawl_arrive_tol_mm);
 		axis1_crawl.phase = CrawlState::Phase::Follow;
 		axis1_crawl.phase_t0 = GetTickCount();
-		axis1_crawl.wait_rearm = wait_rearm;
-		axis1_crawl.rearm_dir = rearm_dir;
+		axis1_crawl.wait_rearm = false;
+		axis1_crawl.rearm_dir = 0;
 
 		axis2_hold_rel = preserved_axis2_hold_rel;
-		axis2_rot_reengage_required = wait_rearm;
-		axis2_rot_reengage_ref = axis1_handle_filter.axis1_filtered;
+		axis1_reverse_switch_guard_active = false;
+		axis1_prev_abs_for_trigger = plc_act_pos[0] + plc_init_pos[0];
+		axis1_prev_abs_valid = true;
 
 		axis3_base_rel = plc_act_pos[2];
 		axis5_base_rel = plc_act_pos[4];
@@ -1247,6 +1244,8 @@ int main(int argc, char* argv[])
 		bool check_window_cover,
 		bool log_window_cover) -> bool
 	{
+		(void)wait_rearm;
+		(void)rearm_dir;
 		const double preserved_axis7_hold_rel = axis7_hold_rel;
 		clear_axis_return_request(AdsSymbol::axis6_return);
 
@@ -1261,8 +1260,10 @@ int main(int argc, char* argv[])
 
 		get_average_handle_pose(handle_axis6, samples, axis6_crawl.handle_ref, axis6_crawl.rot_ref);
 		axis6_handle_filter.reset(axis6_crawl.handle_ref, axis6_crawl.rot_ref);
+		axis6_prev_linear_filtered = axis6_handle_filter.axis0_filtered;
 		axis6_crawl.base_rel = plc_act_pos[5];
 		axis6_crawl.rot_base_rel = preserved_axis7_hold_rel;
+		axis6_follow_cmd_abs = plc_act_pos[5] + plc_init_pos[5];
 		if (capture_window || !axis6_crawl.enabled)
 		{
 			if (!axis6_window_locked)
@@ -1294,22 +1295,20 @@ int main(int argc, char* argv[])
 		axis6_crawl.window_active = is_within_range(
 			plc_act_pos[5] + plc_init_pos[5],
 			axis6_crawl.min_abs(),
-			axis6_crawl.max_abs(),
+		axis6_crawl.max_abs(),
 			cfg.crawl_arrive_tol_mm);
 		axis6_crawl.phase = CrawlState::Phase::Follow;
 		axis6_crawl.phase_t0 = GetTickCount();
-		axis6_crawl.wait_rearm = wait_rearm;
-		axis6_crawl.rearm_dir = rearm_dir;
+		axis6_crawl.wait_rearm = false;
+		axis6_crawl.rearm_dir = 0;
 		axis6_crawl.enabled = true;
 		axis6_coop_ff_inited = false;
-		axis6_coop_ff_offset_mm = 0.0;
-		axis6_coop_prev_hand_delta_mm = 0.0;
 		axis6_coop_prev_axis1_cmd_abs = 0.0;
-		axis6_coop_prev_t_ms = 0;
 
 		axis7_hold_rel = preserved_axis7_hold_rel;
-		axis7_rot_reengage_required = wait_rearm;
-		axis7_rot_reengage_ref = axis6_handle_filter.axis1_filtered;
+		axis6_reverse_switch_guard_active = false;
+		axis6_prev_abs_for_trigger = plc_act_pos[5] + plc_init_pos[5];
+		axis6_prev_abs_valid = true;
 
 		return write_refer();
 	};
@@ -1349,6 +1348,8 @@ int main(int argc, char* argv[])
 			axis6_crawl.rot_ref);
 		axis1_handle_filter.reset(axis1_crawl.handle_ref, axis1_crawl.rot_ref);
 		axis6_handle_filter.reset(axis6_crawl.handle_ref, axis6_crawl.rot_ref);
+		axis1_prev_linear_filtered = axis1_handle_filter.axis0_filtered;
+		axis6_prev_linear_filtered = axis6_handle_filter.axis0_filtered;
 
 		if (!read_plc_state())
 		{
@@ -1379,10 +1380,12 @@ int main(int argc, char* argv[])
 		axis1_crawl.wait_rearm = false;
 		axis1_crawl.rearm_dir = 0;
 		axis1_crawl.enabled = true;
+		axis1_follow_cmd_abs = plc_act_pos[0] + plc_init_pos[0];
 
 		axis2_hold_rel = preserved_axis2_hold_rel;
-		axis2_rot_reengage_required = true;
-		axis2_rot_reengage_ref = axis1_handle_filter.axis1_filtered;
+		axis1_reverse_switch_guard_active = false;
+		axis1_prev_abs_for_trigger = axis1_follow_cmd_abs;
+		axis1_prev_abs_valid = true;
 
 		axis3_base_rel = plc_act_pos[2];
 		axis5_base_rel = plc_act_pos[4];
@@ -1402,10 +1405,11 @@ int main(int argc, char* argv[])
 		axis6_crawl.enabled = false;
 		axis6_window_locked = false;
 		axis6_coop_ff_inited = false;
-		axis6_coop_ff_offset_mm = 0.0;
-		axis6_coop_prev_hand_delta_mm = 0.0;
 		axis6_coop_prev_axis1_cmd_abs = 0.0;
-		axis6_coop_prev_t_ms = 0;
+		axis6_follow_cmd_abs = plc_act_pos[5] + plc_init_pos[5];
+		axis6_reverse_switch_guard_active = false;
+		axis6_prev_abs_for_trigger = axis6_follow_cmd_abs;
+		axis6_prev_abs_valid = true;
 		axis6_coupled_active = false;
 		axis6_coupled_requested = false;
 		axis6_coupled_done = false;
@@ -1413,8 +1417,6 @@ int main(int argc, char* argv[])
 		axis6_coupled_error_id = 0;
 
 		axis7_hold_rel = preserved_axis7_hold_rel;
-		axis7_rot_reengage_required = true;
-		axis7_rot_reengage_ref = axis6_handle_filter.axis1_filtered;
 
 		return true;
 	};
@@ -1432,6 +1434,7 @@ int main(int argc, char* argv[])
 		axis1_crawl.rot_ref = axis1_handle_filter.axis1_filtered;
 		axis1_crawl.base_rel = plc_act_pos[0];
 		axis1_crawl.rot_base_rel = axis2_hold_rel;
+		axis1_follow_cmd_abs = plc_act_pos[0] + plc_init_pos[0];
 		axis1_crawl.plc_move_requested = false;
 		axis3_base_rel = plc_act_pos[2];
 		axis5_base_rel = plc_act_pos[4];
@@ -1470,13 +1473,13 @@ int main(int argc, char* argv[])
 		independent_axis5_hold_rel = plc_act_pos[4];
 
 		axis7_hold_rel = preserved_axis7_hold_rel;
-		axis7_rot_reengage_required = false;
-		axis7_rot_reengage_ref = axis6_handle_filter.axis1_filtered;
 
 		get_average_handle_pose(handle_axis6, 20, axis6_crawl.handle_ref, axis6_crawl.rot_ref);
 		axis6_handle_filter.reset(axis6_crawl.handle_ref, axis6_crawl.rot_ref);
+		axis6_prev_linear_filtered = axis6_handle_filter.axis0_filtered;
 		axis6_crawl.base_rel = plc_act_pos[5];
 		axis6_crawl.rot_base_rel = axis7_hold_rel;
+		axis6_follow_cmd_abs = plc_act_pos[5] + plc_init_pos[5];
 		if (!axis6_window_locked)
 		{
 			if (!set_axis6_independent_window(plc_act_pos[5] + plc_init_pos[5], true))
@@ -1506,10 +1509,10 @@ int main(int argc, char* argv[])
 		cfg.crawl_arrive_tol_mm);
 		axis6_crawl.enabled = true;
 		axis6_coop_ff_inited = false;
-		axis6_coop_ff_offset_mm = 0.0;
-		axis6_coop_prev_hand_delta_mm = 0.0;
 		axis6_coop_prev_axis1_cmd_abs = 0.0;
-		axis6_coop_prev_t_ms = 0;
+		axis6_reverse_switch_guard_active = false;
+		axis6_prev_abs_for_trigger = axis6_follow_cmd_abs;
+		axis6_prev_abs_valid = true;
 
 		pos[0] = plc_act_pos[0];
 		pos[1] = axis2_hold_rel;
@@ -1545,10 +1548,7 @@ int main(int argc, char* argv[])
 		guidewire_mode = GuidewireMode::None;
 		axis6_window_locked = false;
 		axis6_coop_ff_inited = false;
-		axis6_coop_ff_offset_mm = 0.0;
-		axis6_coop_prev_hand_delta_mm = 0.0;
 		axis6_coop_prev_axis1_cmd_abs = 0.0;
-		axis6_coop_prev_t_ms = 0;
 		// 退出导丝时用当前实际值刷新旋转保持位，避免沿用陈旧 hold 导致 axis2 偶发回零。
 		if (!read_plc_state())
 		{
@@ -1556,7 +1556,8 @@ int main(int argc, char* argv[])
 		}
 		axis2_hold_rel = plc_act_pos[1];
 		axis7_hold_rel = plc_act_pos[6];
-		axis7_rot_reengage_required = false;
+		axis1_reverse_switch_guard_active = false;
+		axis6_reverse_switch_guard_active = false;
 		return sync_axis1(20, false, 0);
 	};
 
@@ -1606,10 +1607,7 @@ int main(int argc, char* argv[])
 		axis6_crawl.enabled = false;
 		axis6_window_locked = false;
 		axis6_coop_ff_inited = false;
-		axis6_coop_ff_offset_mm = 0.0;
-		axis6_coop_prev_hand_delta_mm = 0.0;
 		axis6_coop_prev_axis1_cmd_abs = 0.0;
-		axis6_coop_prev_t_ms = 0;
 		startup.phase = StartupPhase::ReleaseClamps;
 		startup.phase_t0 = GetTickCount();
 		startup.completed = false;
@@ -1665,11 +1663,15 @@ int main(int argc, char* argv[])
 
 	load_pos_from_actual();
 	axis2_hold_rel = plc_act_pos[1];
-	axis2_rot_reengage_required = false;
-	axis2_rot_reengage_ref = axis1_handle_filter.axis1_filtered;
 	axis7_hold_rel = plc_act_pos[6];
-	axis7_rot_reengage_required = false;
-	axis7_rot_reengage_ref = axis6_handle_filter.axis1_filtered;
+	axis1_follow_cmd_abs = plc_act_pos[0] + plc_init_pos[0];
+	axis6_follow_cmd_abs = plc_act_pos[5] + plc_init_pos[5];
+	axis1_prev_linear_filtered = axis1_handle_filter.axis0_filtered;
+	axis6_prev_linear_filtered = axis6_handle_filter.axis0_filtered;
+	axis1_prev_abs_for_trigger = axis1_follow_cmd_abs;
+	axis6_prev_abs_for_trigger = axis6_follow_cmd_abs;
+	axis1_prev_abs_valid = true;
+	axis6_prev_abs_valid = true;
 	write_refer();
 
 	bool self_check_done = true;
@@ -1875,31 +1877,46 @@ int main(int argc, char* argv[])
 		}
 		pause_pressed_prev = pause_pressed;
 
-		// 2) 反向爬行按键状态变化时重同步爬行基准。
+		// 2) 正反键切换：启用一次性触发保护，不再执行线性重同步。
 		if (!freeze_active && !estop_hold_active && !startup_sequence_active && control_active)
 		{
 			if (guidewire_mode == GuidewireMode::None && axis1_reverse_pressed != axis1_reverse_pressed_prev)
 			{
-				if (sync_axis1(20, false, 0))
+				const double axis1_abs_now_for_guard = plc_act_pos[0] + plc_init_pos[0];
+				const double axis1_new_trigger_edge_abs =
+					axis1_reverse_pressed ? axis1_window_right_abs() : axis1_window_left_abs();
+				axis1_reverse_switch_guard_active =
+					(std::abs(axis1_abs_now_for_guard - axis1_new_trigger_edge_abs) <= cfg.reverse_switch_trigger_guard_mm);
+				if (axis1_reverse_switch_guard_active)
 				{
-					std::cout << "Axis1 catheter retract mode: " << (axis1_reverse_pressed ? "ON" : "OFF") << std::endl;
+					std::cout << "Axis1 catheter retract mode: "
+						<< (axis1_reverse_pressed ? "ON" : "OFF")
+						<< " (trigger guard armed)." << std::endl;
 				}
 				else
 				{
-					std::cout << "Axis1 catheter retract mode sync failed." << std::endl;
+					std::cout << "Axis1 catheter retract mode: " << (axis1_reverse_pressed ? "ON" : "OFF") << std::endl;
 				}
 			}
 
 			if ((guidewire_mode == GuidewireMode::Independent || guidewire_mode == GuidewireMode::Cooperative) &&
+				(requested_guidewire_mode == guidewire_mode) &&
 				axis6_effective_reverse_pressed != axis6_effective_reverse_prev)
 			{
-				if (sync_axis6(20, false, false, 0, false, false))
+				const double axis6_abs_now_for_guard = plc_act_pos[5] + plc_init_pos[5];
+				const double axis6_new_trigger_edge_abs =
+					axis6_effective_reverse_pressed ? axis6_crawl.end_abs : axis6_crawl.start_abs;
+				axis6_reverse_switch_guard_active =
+					(std::abs(axis6_abs_now_for_guard - axis6_new_trigger_edge_abs) <= cfg.reverse_switch_trigger_guard_mm);
+				if (axis6_reverse_switch_guard_active)
 				{
-					std::cout << "Axis6 reverse crawl mode: " << (axis6_effective_reverse_pressed ? "ON" : "OFF") << std::endl;
+					std::cout << "Axis6 reverse crawl mode: "
+						<< (axis6_effective_reverse_pressed ? "ON" : "OFF")
+						<< " (trigger guard armed)." << std::endl;
 				}
 				else
 				{
-					std::cout << "Axis6 reverse crawl mode sync failed." << std::endl;
+					std::cout << "Axis6 reverse crawl mode: " << (axis6_effective_reverse_pressed ? "ON" : "OFF") << std::endl;
 				}
 			}
 		}
@@ -2047,10 +2064,7 @@ int main(int argc, char* argv[])
 							axis6_crawl.enabled = false;
 							axis6_window_locked = false;
 							axis6_coop_ff_inited = false;
-							axis6_coop_ff_offset_mm = 0.0;
-							axis6_coop_prev_hand_delta_mm = 0.0;
 							axis6_coop_prev_axis1_cmd_abs = 0.0;
-							axis6_coop_prev_t_ms = 0;
 							std::cout << "Guidewire mode exit failed: ADS sync failed." << std::endl;
 						}
 					}
@@ -2060,10 +2074,7 @@ int main(int argc, char* argv[])
 						axis6_crawl.enabled = false;
 						axis6_window_locked = false;
 						axis6_coop_ff_inited = false;
-						axis6_coop_ff_offset_mm = 0.0;
-						axis6_coop_prev_hand_delta_mm = 0.0;
 						axis6_coop_prev_axis1_cmd_abs = 0.0;
-						axis6_coop_prev_t_ms = 0;
 					}
 				}
 			}
@@ -2156,10 +2167,7 @@ int main(int argc, char* argv[])
 					axis6_crawl.enabled = false;
 					axis6_window_locked = false;
 					axis6_coop_ff_inited = false;
-					axis6_coop_ff_offset_mm = 0.0;
-					axis6_coop_prev_hand_delta_mm = 0.0;
 					axis6_coop_prev_axis1_cmd_abs = 0.0;
-					axis6_coop_prev_t_ms = 0;
 					startup.phase = StartupPhase::WaitForEnter;
 					startup.completed = false;
 					startup.prompted = false;
@@ -2264,9 +2272,13 @@ int main(int argc, char* argv[])
 
 			const double axis1_abs = plc_act_pos[0] + plc_init_pos[0]; // 轴1绝对位置(mm)
 			const double axis3_abs = plc_act_pos[2] + plc_init_pos[2];
-			const double axis1_base_abs = axis1_crawl.base_rel + plc_init_pos[0]; // 当前控制段的轴1绝对基线
-			const double axis1_hand_delta_mm =
-				(axis1_linear_filtered - axis1_crawl.handle_ref) * cfg.k_handle_to_mm * cfg.axis_push_sign; // 手柄相对基线增量(mm)
+			const double axis1_linear_increment_raw_mm =
+				(axis1_linear_filtered - axis1_prev_linear_filtered) * cfg.k_handle_to_mm * cfg.axis_push_sign;
+			const double axis1_linear_increment_mm =
+				(std::abs(axis1_linear_increment_raw_mm) >= cfg.linear_increment_noise_deadband_mm)
+				? axis1_linear_increment_raw_mm
+				: 0.0;
+			const bool axis1_linear_increment_active = std::abs(axis1_linear_increment_mm) > 0.0;
 			const double axis1_window_left_abs_now = axis1_crawl.start_abs;
 			const double axis1_window_right_abs_now = axis1_crawl.end_abs;
 			const double axis1_min_abs = axis1_crawl.min_abs();
@@ -2276,9 +2288,13 @@ int main(int argc, char* argv[])
 				axis3_from_left_mm <= (cfg.axis3_delivery_stop_from_left_mm + cfg.crawl_arrive_tol_mm);
 
 			const double axis6_abs = plc_act_pos[5] + plc_init_pos[5]; // 轴6绝对位置(mm)
-			const double axis6_base_abs = axis6_crawl.base_rel + plc_init_pos[5]; // 当前控制段的轴6绝对基线
-			const double axis6_hand_delta_mm =
-				(axis6_linear_filtered - axis6_crawl.handle_ref) * cfg.k_handle_to_mm * cfg.axis_push_sign; // 手柄相对基线增量(mm)
+			const double axis6_linear_increment_raw_mm =
+				(axis6_linear_filtered - axis6_prev_linear_filtered) * cfg.k_handle_to_mm * cfg.axis_push_sign;
+			const double axis6_linear_increment_mm =
+				(std::abs(axis6_linear_increment_raw_mm) >= cfg.linear_increment_noise_deadband_mm)
+				? axis6_linear_increment_raw_mm
+				: 0.0;
+			const bool axis6_linear_increment_active = std::abs(axis6_linear_increment_mm) > 0.0;
 			const double axis6_window_left_abs_now = axis6_crawl.start_abs;
 			const double axis6_window_right_abs_now = axis6_crawl.end_abs;
 
@@ -2290,21 +2306,6 @@ int main(int argc, char* argv[])
 
 			auto compute_axis7_cmd_rel = [&]() -> double
 			{
-				// 在重同步或模式边沿后，先忽略小幅手柄扭转，直到操作者
-				// 有意超过重新接管死区。
-				if (axis7_rot_reengage_required)
-				{
-					const double axis7_rot_delta_deg =
-						(axis6_rot_filtered - axis7_rot_reengage_ref) * cfg.axis_rot_scale_deg;
-					if (std::abs(axis7_rot_delta_deg) >= cfg.axis2_rot_reengage_deadband_deg)
-					{
-						axis7_rot_reengage_required = false;
-						axis6_crawl.rot_ref = axis6_rot_filtered;
-						axis6_crawl.rot_base_rel = axis7_hold_rel;
-					}
-					return axis7_hold_rel;
-				}
-
 				const double axis7_follow_rel =
 					axis6_crawl.rot_base_rel + (axis6_rot_filtered - axis6_crawl.rot_ref) * cfg.axis_rot_scale_deg;
 				axis7_hold_rel = axis7_follow_rel;
@@ -2315,64 +2316,70 @@ int main(int argc, char* argv[])
 				(guidewire_mode == GuidewireMode::None) ? axis7_hold_rel : compute_axis7_cmd_rel();
 			pos[6] = axis7_cmd_rel;
 
-			// 独立与协同导丝模式共用的 axis6 爬行状态机。
-			// axis6 爬行状态机（独立/协同共用）。
+			// 独立与协同导丝模式共用的 axis6 爬行状态机（增量式输入）。
 			// 参数说明：
-			// - axis6_raw_cmd_abs: 当前周期未裁剪的 axis6 绝对指令
-			// - axis6_push_request / axis6_pull_request: 方向判定结果（已含死区）
+			// - axis6_raw_cmd_abs: 本拍按增量累加后的 axis6 绝对目标（未做最终触发处理）
+			// - axis6_increment_mm: 本拍 axis6 线性有效增量（mm）
 			// - axis6_reverse_mode: 当前是否处于反向爬行判定
-			auto run_axis6_crawl_state = [&](double axis6_raw_cmd_abs, bool axis6_push_request, bool axis6_pull_request, bool axis6_reverse_mode)
+			// - axis6_user_increment_active: 587 本人线性通道是否存在有效增量
+			// - require_user_increment_for_trigger: 是否要求“触发反弹必须有 587 本人有效增量”
+			auto run_axis6_crawl_state = [&](double axis6_raw_cmd_abs,
+				double axis6_increment_mm,
+				bool axis6_reverse_mode,
+				bool axis6_user_increment_active,
+				bool require_user_increment_for_trigger)
 			{
 				if (axis6_crawl.phase == CrawlState::Phase::Follow)
 				{
-					double axis6_cmd_abs = axis6_base_abs;
-					if (!axis6_crawl.wait_rearm)
+					double axis6_cmd_abs = axis6_follow_cmd_abs;
+					const bool axis6_increment_active = std::abs(axis6_increment_mm) > 0.0;
+					if (axis6_increment_active)
 					{
-						if (axis6_reverse_mode)
-						{
-							if (axis6_pull_request)
-							{
-								axis6_cmd_abs = clamp_double(axis6_raw_cmd_abs, axis6_window_left_abs_now, axis6_window_right_abs_now);
-							}
-						}
-						else if (axis6_push_request)
-						{
-							axis6_cmd_abs = clamp_double(axis6_raw_cmd_abs, axis6_window_left_abs_now, axis6_window_right_abs_now);
-						}
+						axis6_cmd_abs = clamp_double(axis6_raw_cmd_abs, axis6_window_left_abs_now, axis6_window_right_abs_now);
 					}
 
 					pos[5] = axis6_cmd_abs - plc_init_pos[5];
+					axis6_follow_cmd_abs = axis6_cmd_abs;
 					cylinder3_cmd = cyl.cyl3_open;
 					cylinder4_cmd = cyl.cyl4_clamp;
 
-					if (!axis6_crawl.wait_rearm)
+					const double axis6_trigger_edge_abs =
+						axis6_reverse_mode ? axis6_window_right_abs_now : axis6_window_left_abs_now;
+					if (axis6_reverse_switch_guard_active &&
+						(std::abs(axis6_abs - axis6_trigger_edge_abs) > cfg.reverse_switch_trigger_guard_mm))
 					{
-						if (!axis6_reverse_mode &&
-							axis6_push_request &&
-							(std::abs(axis6_abs - axis6_window_left_abs_now) <= cfg.crawl_arrive_tol_mm))
-						{
-							axis6_crawl.target_abs = axis6_window_right_abs_now;
-							axis6_return_entry_rel = plc_act_pos[5];
-							axis6_crawl.phase = CrawlState::Phase::SwitchWait;
-							axis6_crawl.phase_t0 = now_ms;
-							axis6_crawl.rearm_dir = -1;
-							axis6_crawl.plc_move_requested = false;
-							cylinder3_cmd = cyl.cyl3_clamp;
-							cylinder4_cmd = cyl.cyl4_open;
-						}
-						else if (axis6_reverse_mode &&
-							axis6_pull_request &&
-							(std::abs(axis6_abs - axis6_window_right_abs_now) <= cfg.crawl_arrive_tol_mm))
-						{
-							axis6_crawl.target_abs = axis6_window_left_abs_now;
-							axis6_return_entry_rel = plc_act_pos[5];
-							axis6_crawl.phase = CrawlState::Phase::SwitchWait;
-							axis6_crawl.phase_t0 = now_ms;
-							axis6_crawl.rearm_dir = 1;
-							axis6_crawl.plc_move_requested = false;
-							cylinder3_cmd = cyl.cyl3_clamp;
-							cylinder4_cmd = cyl.cyl4_open;
-						}
+						axis6_reverse_switch_guard_active = false;
+					}
+					const bool axis6_switch_guard_blocked =
+						axis6_reverse_switch_guard_active &&
+						(std::abs(axis6_abs - axis6_trigger_edge_abs) <= cfg.reverse_switch_trigger_guard_mm);
+
+					const bool axis6_toward_trigger =
+						axis6_reverse_mode ? (axis6_increment_mm > 0.0) : (axis6_increment_mm < 0.0);
+					const bool axis6_trigger_user_ok =
+						(!require_user_increment_for_trigger) || axis6_user_increment_active;
+					const double axis6_prev_abs = axis6_prev_abs_valid ? axis6_prev_abs_for_trigger : axis6_abs;
+					const bool axis6_enter_trigger_edge =
+						(std::abs(axis6_abs - axis6_trigger_edge_abs) <= cfg.crawl_arrive_tol_mm) &&
+						(std::abs(axis6_prev_abs - axis6_trigger_edge_abs) > cfg.crawl_arrive_tol_mm);
+					const bool axis6_ready_to_trigger =
+						axis6_trigger_user_ok &&
+						axis6_increment_active &&
+						axis6_toward_trigger &&
+						axis6_enter_trigger_edge &&
+						!axis6_switch_guard_blocked;
+					if (axis6_ready_to_trigger)
+					{
+						axis6_crawl.target_abs = axis6_reverse_mode
+							? axis6_window_left_abs_now
+							: axis6_window_right_abs_now;
+						axis6_return_entry_rel = plc_act_pos[5];
+						axis6_crawl.phase = CrawlState::Phase::SwitchWait;
+						axis6_crawl.phase_t0 = now_ms;
+						axis6_crawl.rearm_dir = 0;
+						axis6_crawl.plc_move_requested = false;
+						cylinder3_cmd = cyl.cyl3_clamp;
+						cylinder4_cmd = cyl.cyl4_open;
 					}
 				}
 				else if (axis6_crawl.phase == CrawlState::Phase::SwitchWait)
@@ -2416,10 +2423,9 @@ int main(int argc, char* argv[])
 							clear_axis_return_request(AdsSymbol::axis6_return);
 							axis6_crawl.plc_move_requested = false;
 							std::cout << "Axis6 planned return error: " << axis6_return_status.error_id << std::endl;
-							if (!sync_axis6(3, false, true, axis6_crawl.rearm_dir, false, false))
+							if (!sync_axis6(3, false, false, 0, false, false))
 							{
 								axis6_crawl.phase = CrawlState::Phase::Follow;
-								axis6_crawl.wait_rearm = true;
 							}
 						}
 						else if (axis6_return_status.done)
@@ -2440,11 +2446,10 @@ int main(int argc, char* argv[])
 					cylinder4_cmd = cyl.cyl4_clamp;
 					if ((now_ms - axis6_crawl.phase_t0) >= cfg.axis6_post_return_cylinder_wait_ms)
 					{
-						if (!sync_axis6(3, false, true, axis6_crawl.rearm_dir, false, false))
+						if (!sync_axis6(3, false, false, 0, false, false))
 						{
 							std::cout << "Axis6 resync after planned return failed." << std::endl;
 							axis6_crawl.phase = CrawlState::Phase::Follow;
-							axis6_crawl.wait_rearm = true;
 						}
 					}
 				}
@@ -2581,16 +2586,13 @@ int main(int argc, char* argv[])
 				pos[6] = axis7_cmd_rel;
 
 				axis6_coop_ff_inited = false;
-				axis6_coop_ff_offset_mm = 0.0;
-				check_crawl_rearm(axis6_crawl, axis6_hand_delta_mm, cfg.crawl_rearm_threshold_mm);
-				const double axis6_raw_cmd_abs = axis6_base_abs + axis6_hand_delta_mm;
-				const bool axis6_push_request = axis6_hand_delta_mm < -cfg.crawl_trigger_deadband_mm;
-				const bool axis6_pull_request = axis6_hand_delta_mm > cfg.crawl_trigger_deadband_mm;
+				const double axis6_raw_cmd_abs = axis6_follow_cmd_abs + axis6_linear_increment_mm;
 				run_axis6_crawl_state(
 					axis6_raw_cmd_abs,
-					axis6_push_request,
-					axis6_pull_request,
-					axis6_effective_reverse_pressed);
+					axis6_linear_increment_mm,
+					axis6_effective_reverse_pressed,
+					axis6_linear_increment_active,
+					false);
 			}
 			else
 			{
@@ -2608,36 +2610,30 @@ int main(int argc, char* argv[])
 					std::cout << "Axis1 entered crawl window; crawl logic enabled." << std::endl;
 				}
 
-				check_crawl_rearm(axis1_crawl, axis1_hand_delta_mm, cfg.crawl_rearm_threshold_mm);
-
 				if (axis1_crawl.phase == CrawlState::Phase::Follow)
 				{
-					const double axis1_raw_cmd_abs = axis1_base_abs + axis1_hand_delta_mm; // 手柄映射得到的未裁剪绝对目标
-					const bool axis1_push_request = axis1_hand_delta_mm < -cfg.crawl_trigger_deadband_mm; // 超过死区的“推”请求
-					const bool axis1_pull_request = axis1_hand_delta_mm > cfg.crawl_trigger_deadband_mm; // 超过死区的“拉”请求
-					const bool axis1_drive_request = axis1_reverse_pressed ? axis1_pull_request : axis1_push_request;
-					const bool axis1_follow_enabled =
-						axis1_reverse_pressed || (!axis1_push_rearm_after_hold && !axis1_delivery_stop_latched);
+					const double axis1_raw_cmd_abs = axis1_follow_cmd_abs + axis1_linear_increment_mm;
+					const bool axis1_follow_enabled = axis1_reverse_pressed || (!axis1_push_rearm_after_hold && !axis1_delivery_stop_latched);
 					if (axis3_from_left_mm >
 						(cfg.axis3_delivery_stop_from_left_mm + cfg.axis3_delivery_release_hysteresis_mm))
 					{
 						axis1_delivery_stop_prompted = false;
 					}
 
-					if (axis1_push_rearm_after_hold && axis1_hand_delta_mm > cfg.hold_recover_rearm_mm)
+					if (axis1_push_rearm_after_hold && axis1_linear_increment_mm > 0.0)
 					{
 						axis1_push_rearm_after_hold = false;
 						capture_axis1_follow_baseline();
 						std::cout << "Axis1 push re-armed after hold." << std::endl;
 					}
-					if (axis1_delivery_stop_latched && axis1_reverse_pressed && axis1_pull_request)
+					if (axis1_delivery_stop_latched && axis1_reverse_pressed && axis1_linear_increment_active)
 					{
 						axis1_delivery_stop_latched = false;
 						axis1_delivery_stop_prompted = false;
 					}
 
-					double axis1_cmd_abs = axis1_base_abs; // 经过方向门控/窗口裁剪后的最终绝对目标
-					if (axis1_drive_request && axis1_follow_enabled)
+					double axis1_cmd_abs = axis1_follow_cmd_abs;
+					if (axis1_linear_increment_active && axis1_follow_enabled)
 					{
 						axis1_cmd_abs = axis1_crawl.window_active
 							? clamp_double(axis1_raw_cmd_abs, axis1_window_left_abs_now, axis1_window_right_abs_now)
@@ -2657,25 +2653,11 @@ int main(int argc, char* argv[])
 					}
 
 					pos[0] = axis1_cmd_abs - plc_init_pos[0]; // 绝对目标 -> refer相对坐标（相对 init_pos）
+					axis1_follow_cmd_abs = axis1_cmd_abs;
 
-					if (axis2_rot_reengage_required)
-					{
-						pos[1] = axis2_hold_rel;
-						const double axis2_rot_delta_deg =
-							(axis1_rot_filtered - axis2_rot_reengage_ref) * cfg.axis_rot_scale_deg;
-						if (std::abs(axis2_rot_delta_deg) >= cfg.axis2_rot_reengage_deadband_deg)
-						{
-							axis2_rot_reengage_required = false;
-							axis1_crawl.rot_ref = axis1_rot_filtered;
-							axis1_crawl.rot_base_rel = axis2_hold_rel;
-						}
-					}
-					else
-					{
-						pos[1] = axis1_crawl.rot_base_rel +
-							(axis1_rot_filtered - axis1_crawl.rot_ref) * cfg.axis_rot_scale_deg;
-						axis2_hold_rel = pos[1];
-					}
+					pos[1] = axis1_crawl.rot_base_rel +
+						(axis1_rot_filtered - axis1_crawl.rot_ref) * cfg.axis_rot_scale_deg;
+					axis2_hold_rel = pos[1];
 
 					apply_axis1_mirror_from_abs(axis1_cmd_abs, false);
 					if (!cooperative_mode)
@@ -2691,15 +2673,31 @@ int main(int argc, char* argv[])
 						cylinder4_cmd = cyl.cyl4_follow_release;
 					}
 
-					if (axis1_crawl.window_active && !axis1_crawl.wait_rearm)
+					if (axis1_crawl.window_active)
 					{
 						const double axis1_trigger_edge_abs = axis1_reverse_pressed
 							? axis1_window_right_abs_now
 							: axis1_window_left_abs_now;
-
-						const bool axis1_ready_to_trigger = axis1_drive_request &&
-							(axis1_reverse_pressed || (!axis1_push_rearm_after_hold && !axis1_delivery_stop_latched)) &&
-							(std::abs(axis1_abs - axis1_trigger_edge_abs) <= cfg.crawl_arrive_tol_mm);
+						if (axis1_reverse_switch_guard_active &&
+							(std::abs(axis1_abs - axis1_trigger_edge_abs) > cfg.reverse_switch_trigger_guard_mm))
+						{
+							axis1_reverse_switch_guard_active = false;
+						}
+						const bool axis1_switch_guard_blocked =
+							axis1_reverse_switch_guard_active &&
+							(std::abs(axis1_abs - axis1_trigger_edge_abs) <= cfg.reverse_switch_trigger_guard_mm);
+						const bool axis1_toward_trigger =
+							axis1_reverse_pressed ? (axis1_linear_increment_mm > 0.0) : (axis1_linear_increment_mm < 0.0);
+						const double axis1_prev_abs = axis1_prev_abs_valid ? axis1_prev_abs_for_trigger : axis1_abs;
+						const bool axis1_enter_trigger_edge =
+							(std::abs(axis1_abs - axis1_trigger_edge_abs) <= cfg.crawl_arrive_tol_mm) &&
+							(std::abs(axis1_prev_abs - axis1_trigger_edge_abs) > cfg.crawl_arrive_tol_mm);
+						const bool axis1_ready_to_trigger =
+							axis1_linear_increment_active &&
+							axis1_toward_trigger &&
+							axis1_follow_enabled &&
+							axis1_enter_trigger_edge &&
+							!axis1_switch_guard_blocked;
 						if (axis1_ready_to_trigger)
 						{
 							if (!axis1_reverse_pressed && axis3_delivery_stop_active)
@@ -2745,7 +2743,7 @@ int main(int argc, char* argv[])
 								}
 								axis1_crawl.phase = CrawlState::Phase::SwitchWait;
 								axis1_crawl.phase_t0 = now_ms;
-								axis1_crawl.rearm_dir = axis1_reverse_pressed ? 1 : -1;
+								axis1_crawl.rearm_dir = 0;
 								axis1_crawl.plc_move_requested = false;
 								cylinder1_cmd = cyl.cyl1_clamp;
 								cylinder2_cmd = cyl.cyl2_open;
@@ -2877,10 +2875,9 @@ int main(int argc, char* argv[])
 							axis6_coupled_done = false;
 							axis6_coupled_error = false;
 							axis6_coupled_error_id = 0;
-							if (!sync_axis1(3, true, axis1_crawl.rearm_dir))
+							if (!sync_axis1(3, false, 0))
 							{
 								axis1_crawl.phase = CrawlState::Phase::Follow;
-								axis1_crawl.wait_rearm = true;
 							}
 						}
 						else if (axis1_return_status.done)
@@ -2901,10 +2898,9 @@ int main(int argc, char* argv[])
 									axis6_coupled_done = false;
 									axis6_coupled_error = false;
 									axis6_coupled_error_id = 0;
-									if (!sync_axis1(3, true, axis1_crawl.rearm_dir))
+									if (!sync_axis1(3, false, 0))
 									{
 										axis1_crawl.phase = CrawlState::Phase::Follow;
-										axis1_crawl.wait_rearm = true;
 									}
 								}
 								else if (axis6_coupled_done)
@@ -2951,11 +2947,10 @@ int main(int argc, char* argv[])
 					}
 					if ((now_ms - axis1_crawl.phase_t0) >= coupled_post_return_wait_ms)
 					{
-						if (!sync_axis1(3, true, axis1_crawl.rearm_dir))
+						if (!sync_axis1(3, false, 0))
 						{
 							std::cout << "Axis1 resync after planned return failed." << std::endl;
 							axis1_crawl.phase = CrawlState::Phase::Follow;
-							axis1_crawl.wait_rearm = true;
 						}
 						axis6_coupled_active = false;
 						axis6_coupled_requested = false;
@@ -2968,8 +2963,8 @@ int main(int argc, char* argv[])
 				if (cooperative_mode)
 				{
 					// 协同模式保持导管侧各轴挂在 axis1 链路上，同时 axis6 运行
-					// 自身带速度前馈的爬行状态机：
-					// v6 = v587 + v1（v1 仅在 axis1 Follow 阶段生效）。
+					// 增量叠加的爬行状态机：
+					// axis6_increment = increment(587) + increment(axis1_cmd)。
 					const double axis1_cmd_abs_for_ff = pos[0] + plc_init_pos[0];
 
 					if (axis6_crawl.phase == CrawlState::Phase::Follow)
@@ -2977,68 +2972,55 @@ int main(int argc, char* argv[])
 						if (!axis6_coop_ff_inited)
 						{
 							axis6_coop_ff_inited = true;
-							axis6_coop_ff_offset_mm = 0.0;
-							axis6_coop_prev_hand_delta_mm = axis6_hand_delta_mm;
 							axis6_coop_prev_axis1_cmd_abs = axis1_cmd_abs_for_ff;
-							axis6_coop_prev_t_ms = now_ms;
 						}
-						else
+						double axis1_increment_mm = 0.0;
+						if (axis1_crawl.phase == CrawlState::Phase::Follow)
 						{
-							const DWORD dt_ms = now_ms - axis6_coop_prev_t_ms;
-							if (dt_ms > 0 && dt_ms <= 200)
-							{
-								const double dt_s = static_cast<double>(dt_ms) / 1000.0;
-								const double v587_mm_s =
-									(axis6_hand_delta_mm - axis6_coop_prev_hand_delta_mm) / dt_s;
-								double v1_mm_s = 0.0;
-								if (axis1_crawl.phase == CrawlState::Phase::Follow)
-								{
-									v1_mm_s = (axis1_cmd_abs_for_ff - axis6_coop_prev_axis1_cmd_abs) / dt_s;
-								}
+							axis1_increment_mm = axis1_cmd_abs_for_ff - axis6_coop_prev_axis1_cmd_abs;
+						}
+						const double axis6_combined_increment_mm = axis6_linear_increment_mm + axis1_increment_mm;
+						axis6_coop_prev_axis1_cmd_abs = axis1_cmd_abs_for_ff;
 
-								axis6_coop_ff_offset_mm += (v587_mm_s + v1_mm_s) * dt_s;
-
-								if (cfg.cooperative_debug_log && ((loop_count % 50) == 0))
-								{
-									std::cout
-										<< "[COOP] v587=" << v587_mm_s
-										<< " v1=" << v1_mm_s
-										<< " off=" << axis6_coop_ff_offset_mm
-										<< " axis1_phase=" << static_cast<int>(axis1_crawl.phase)
-										<< std::endl;
-								}
-							}
+						if (cfg.cooperative_debug_log && ((loop_count % 50) == 0))
+						{
+							std::cout
+								<< "[COOP] inc587=" << axis6_linear_increment_mm
+								<< " inc1=" << axis1_increment_mm
+								<< " sum=" << axis6_combined_increment_mm
+								<< " axis1_phase=" << static_cast<int>(axis1_crawl.phase)
+								<< std::endl;
 						}
 
-						axis6_coop_prev_hand_delta_mm = axis6_hand_delta_mm;
-						axis6_coop_prev_axis1_cmd_abs = axis1_cmd_abs_for_ff;
-						axis6_coop_prev_t_ms = now_ms;
-
-						const double axis6_combined_delta_mm = axis6_coop_ff_offset_mm;
-						check_crawl_rearm(axis6_crawl, axis6_combined_delta_mm, cfg.crawl_rearm_threshold_mm);
-						const double axis6_raw_cmd_abs = axis6_base_abs + axis6_combined_delta_mm;
-						const bool axis6_push_request = axis6_combined_delta_mm < -cfg.crawl_trigger_deadband_mm;
-						const bool axis6_pull_request = axis6_combined_delta_mm > cfg.crawl_trigger_deadband_mm;
+						const double axis6_raw_cmd_abs = axis6_follow_cmd_abs + axis6_combined_increment_mm;
 
 						run_axis6_crawl_state(
 							axis6_raw_cmd_abs,
-							axis6_push_request,
-							axis6_pull_request,
-							axis6_effective_reverse_pressed);
+							axis6_combined_increment_mm,
+							axis6_effective_reverse_pressed,
+							axis6_linear_increment_active,
+							true);
 					}
 					else
 					{
 						// 按设计，axis6 回退阶段会忽略 axis1 的贡献。
 						axis6_coop_ff_inited = false;
 						run_axis6_crawl_state(
-							axis6_base_abs + axis6_coop_ff_offset_mm,
+							axis6_follow_cmd_abs,
+							0.0,
+							axis6_effective_reverse_pressed,
 							false,
-							false,
-							axis6_effective_reverse_pressed);
+							true);
 					}
 				}
 			}
 
+			axis1_prev_linear_filtered = axis1_linear_filtered;
+			axis6_prev_linear_filtered = axis6_linear_filtered;
+			axis1_prev_abs_for_trigger = axis1_abs;
+			axis6_prev_abs_for_trigger = axis6_abs;
+			axis1_prev_abs_valid = true;
+			axis6_prev_abs_valid = true;
 			write_refer();
 		}
 
@@ -3106,6 +3088,9 @@ int main(int argc, char* argv[])
 				force_log_warn_last_ms = force_log_now_ms;
 			}
 		}
+		// 无论本拍是否进入控制分支，都更新线性差分基准，避免暂停/等待期间累积大跳变。
+		axis1_prev_linear_filtered = axis1_handle_filter.axis0_filtered;
+		axis6_prev_linear_filtered = axis6_handle_filter.axis0_filtered;
 	}
 
 	startup_smoothing_bypass = false;
