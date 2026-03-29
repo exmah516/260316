@@ -205,8 +205,6 @@ namespace AdsSymbol
 	const char* self_check_done = "G.self_check_done";
 	const char* handle_reinit_req = "G.handle_reinit_req";
 	const char* estop_hold_req = "G.estop_hold_req";
-	const char* fn_value = "G.fn_value";
-	const char* ft_value = "G.ft_value";
 	const char* ft_1_value = "G.ft_1_value";
 	const char* fn_1_value = "G.fn_1_value";
 	const char* fn_2_value = "G.fn_2_value";
@@ -280,7 +278,8 @@ struct ControlConfig
 	double axis_push_sign = -1.0; // 手柄“推/拉”到轴“正/负”方向的映射符号
 	double axis_rot_scale_deg = Rad;
 
-	// 力反馈仅作用于 582 手柄。
+	// 力反馈输出配置：当前主路径统一使用 setforce(F,N) 的 axis=0 语义。
+	// axial_force_* 保留为兼容旧配置，本轮不再参与映射。
 	int axial_force_axis = 1;
 	double axial_force_sign = -1.0;
 
@@ -427,39 +426,66 @@ struct CrawlState
 
 struct ForceFeedbackState
 {
-	// 将滤波与有效性状态保持在本地，这样禁用力反馈时无需
-	// 污染运动控制状态。
+	// 力反馈开关：F=ON 时允许输出，F=OFF 时强制双手柄归零。
 	bool enabled = false;
-	short fn_raw = 0;
-	short ft_raw = 0;
-	double fn_bias = 0.0;
-	bool fn_bias_inited = false;
-	double fn_force_f = 0.0;
-	double ft_force_f = 0.0;
-	int last_fn_raw = 0;
-	int last_ft_raw = 0;
-	short fn_last_valid = 0;
-	short ft_last_valid = 0;
-	bool fn_has_valid = false;
-	bool ft_has_valid = false;
-	int fn_invalid_streak = 0;
-	int ft_invalid_streak = 0;
+	// 当前输出命令缓存（用于调试与冻结保持）。
+	double force_582_f = 0.0;
+	double force_582_n = 0.0;
+	double force_587_f = 0.0;
+	double force_587_n = 0.0;
+	// 导管快进/快退期间冻结 582 输出，保持进入冻结时最后一拍命令。
+	bool freeze_582_active = false;
+	double freeze_582_f = 0.0;
+	double freeze_582_n = 0.0;
+	// 调试观测缓存。
+	short last_fn_1_raw = 0;
+	short last_ft_1_raw = 0;
+	short last_fn_2_raw = 0;
+	short last_ft_2_raw = 0;
+	bool last_fast_move = false;
+	GuidewireMode last_mode = GuidewireMode::None;
 
 	void reset()
 	{
-		fn_bias_inited = false;
-		fn_force_f = 0.0;
-		ft_force_f = 0.0;
-		fn_invalid_streak = 0;
-		ft_invalid_streak = 0;
+		force_582_f = 0.0;
+		force_582_n = 0.0;
+		force_587_f = 0.0;
+		force_587_n = 0.0;
+		freeze_582_active = false;
+		freeze_582_f = 0.0;
+		freeze_582_n = 0.0;
+		last_fast_move = false;
+		last_mode = GuidewireMode::None;
 	}
 
 	void clear_output()
 	{
-		fn_bias_inited = false;
-		fn_force_f = 0.0;
-		ft_force_f = 0.0;
+		force_582_f = 0.0;
+		force_582_n = 0.0;
+		force_587_f = 0.0;
+		force_587_n = 0.0;
+		freeze_582_active = false;
+		freeze_582_f = 0.0;
+		freeze_582_n = 0.0;
 	}
+};
+
+struct ForceSampleFrame
+{
+	short ft_1_value = 0;
+	short fn_1_value = 0;
+	short fn_2_value = 0;
+	short ft_2_value = 0;
+	bool valid = false;
+	DWORD tick_ms = 0;
+};
+
+struct ForceOutputCmd
+{
+	double force_582_f = 0.0;
+	double force_582_n = 0.0;
+	double force_587_f = 0.0;
+	double force_587_n = 0.0;
 };
 
 struct ForceLogState
@@ -492,7 +518,7 @@ struct ForceLogState
 
 	bool should_sample(DWORD now_ms) const
 	{
-		if (!enabled || !file.is_open())
+		if (!enabled)
 		{
 			return false;
 		}
@@ -505,6 +531,7 @@ struct ForceLogState
 
 	void append_sample(DWORD now_ms, short ft1, short fn1, short fn2, short ft2)
 	{
+		last_sample_ms = now_ms;
 		if (!file.is_open())
 		{
 			return;
@@ -522,7 +549,6 @@ struct ForceLogState
 		line_buffer += std::to_string(static_cast<int>(ft2));
 		line_buffer += "\n";
 
-		last_sample_ms = now_ms;
 		++buffered_lines;
 
 		// 行数达到阈值或超过时间间隔就刷入文件。
@@ -590,129 +616,158 @@ struct StartupState
 	}
 };
 
+// 582 导管模式映射：fn_1 -> setforce 第一位(F)。
+double map_fn1_to_force_582(short fn_1_raw)
+{
+	const double x = static_cast<double>(fn_1_raw);
+	double y = 0.0;
+	if (x >= 1150.0 && x <= 1200.0)
+	{
+		y = 0.0;
+	}
+	else if (x > 1200.0)
+	{
+		y = (x - 1200.0) * (2.0 / (3000.0 - 1200.0));
+	}
+	else
+	{
+		y = (x - 1150.0) * ((-2.0 - 0.0) / (-1000.0 - 1150.0));
+	}
+	return clamp_double(y, -2.0, 2.0);
+}
+
+// 582 导管模式映射：ft_1 -> setforce 第二位(N)。
+double map_ft1_to_torque_582(short ft_1_raw)
+{
+	const double x = static_cast<double>(ft_1_raw);
+	double y = 0.0;
+	if (x >= -350.0 && x <= -300.0)
+	{
+		y = 0.0;
+	}
+	else if (x > -300.0)
+	{
+		y = (x + 300.0) * ((-2.0 - 0.0) / (500.0 - (-300.0)));
+	}
+	else
+	{
+		y = (x + 350.0) * ((2.0 - 0.0) / (-1150.0 - (-350.0)));
+	}
+	return clamp_double(y, -2.0, 2.0);
+}
+
+// 587 导丝模式映射占位：当前按需求先输出 0，但链路完整保留。
+void map_force_587_placeholder(short fn_2_raw, short ft_2_raw, double& out_f, double& out_n)
+{
+	(void)fn_2_raw;
+	(void)ft_2_raw;
+	out_f = 0.0;
+	out_n = 0.0;
+}
+
 // 力反馈与运动生成有意解耦；当运动冻结、
-// 保持或尚未激活时，会在不改动运动状态的情况下将力输出归零。
+// 保持或尚未激活时，会在不改动运动状态的情况下将双手柄力输出归零。
 void process_force_feedback(
 	ForceFeedbackState& ff,
-	CADSComm& ads,
-	Handle& handle,
+	const ForceSampleFrame& sample,
+	Handle& handle_582,
+	Handle& handle_587,
+	GuidewireMode guidewire_mode,
 	bool control_active,
 	bool freeze_active,
 	bool estop_hold_active,
-	int loop_count,
-	int force_axis,
-	double force_sign)
+	bool axis1_fast_return,
+	bool axis6_fast_retract,
+	int loop_count)
 {
-	if (!estop_hold_active &&
+	ForceOutputCmd out_cmd;
+	const bool fast_move_active = axis1_fast_return || axis6_fast_retract;
+	const bool output_enabled =
 		ff.enabled &&
-		ads.ADSRead(AdsSymbol::fn_value, sizeof(ff.fn_raw), &ff.fn_raw) &&
-		ads.ADSRead(AdsSymbol::ft_value, sizeof(ff.ft_raw), &ff.ft_raw))
+		control_active &&
+		!freeze_active &&
+		!estop_hold_active &&
+		sample.valid;
+
+	if (output_enabled)
 	{
-		const bool fn_valid = (std::abs(static_cast<int>(ff.fn_raw)) <= 8000);
-		const bool ft_valid = (std::abs(static_cast<int>(ff.ft_raw)) <= 8000);
-
-		if (fn_valid)
+		if (guidewire_mode == GuidewireMode::None)
 		{
-			ff.fn_last_valid = ff.fn_raw;
-			ff.fn_has_valid = true;
-			ff.fn_invalid_streak = 0;
-		}
-		else
-		{
-			++ff.fn_invalid_streak;
-		}
-
-		if (ft_valid)
-		{
-			ff.ft_last_valid = ff.ft_raw;
-			ff.ft_has_valid = true;
-			ff.ft_invalid_streak = 0;
-		}
-		else
-		{
-			++ff.ft_invalid_streak;
-		}
-
-		if (ff.fn_has_valid)
-		{
-			ff.fn_raw = ff.fn_last_valid;
-		}
-		if (ff.ft_has_valid)
-		{
-			ff.ft_raw = ff.ft_last_valid;
-		}
-
-		if (!ff.fn_bias_inited)
-		{
-			ff.fn_bias = static_cast<double>(ff.fn_raw);
-			ff.fn_bias_inited = true;
-		}
-		else
-		{
-			const double fn_err = static_cast<double>(ff.fn_raw) - ff.fn_bias;
-			if (std::abs(fn_err) <= 120.0)
+			const double mapped_582_f = map_fn1_to_force_582(sample.fn_1_value);
+			const double mapped_582_n = map_ft1_to_torque_582(sample.ft_1_value);
+			if (fast_move_active)
 			{
-				ff.fn_bias = ff.fn_bias * 0.995 + static_cast<double>(ff.fn_raw) * 0.005;
+				if (!ff.freeze_582_active)
+				{
+					ff.freeze_582_f = mapped_582_f;
+					ff.freeze_582_n = mapped_582_n;
+					ff.freeze_582_active = true;
+				}
+				out_cmd.force_582_f = ff.freeze_582_f;
+				out_cmd.force_582_n = ff.freeze_582_n;
 			}
-		}
-
-		double fn_zeroed = static_cast<double>(ff.fn_raw) - ff.fn_bias;
-		if (std::abs(fn_zeroed) < 20.0)
-		{
-			fn_zeroed = 0.0;
-		}
-
-		const double axial_gain = 1.0 / 1000.0;
-		const double axial_limit = 6.0;
-		const double axial_force = clamp_double(fn_zeroed * axial_gain, -axial_limit, axial_limit);
-
-		double torque_force = 0.0;
-		if (ff.ft_raw >= -870 && ff.ft_raw <= -700)
-		{
-			torque_force = 0.0;
-		}
-		else if (ff.ft_raw > -700)
-		{
-			torque_force = (static_cast<double>(ff.ft_raw) + 700.0) * (-1.0 / 600.0);
+			else
+			{
+				ff.freeze_582_active = false;
+				out_cmd.force_582_f = mapped_582_f;
+				out_cmd.force_582_n = mapped_582_n;
+			}
+			out_cmd.force_587_f = 0.0;
+			out_cmd.force_587_n = 0.0;
 		}
 		else
 		{
-			torque_force = (static_cast<double>(ff.ft_raw) + 870.0) / (-530.0);
-		}
-		torque_force = clamp_double(torque_force, -1.0, 1.0);
-
-		if (control_active)
-		{
-			ff.fn_force_f = ff.fn_force_f * 0.7 + (axial_force * 0.3);
-			ff.ft_force_f = ff.ft_force_f * 0.7 + (torque_force * 0.3);
-			handle.setforce_axis(ff.fn_force_f * force_sign, force_axis, ff.ft_force_f);
-		}
-		else
-		{
-			handle.setforce_axis(0.0, force_axis, 0.0);
-		}
-
-		if ((loop_count % 100) == 0 || ff.fn_raw != ff.last_fn_raw || ff.ft_raw != ff.last_ft_raw)
-		{
-			ff.last_fn_raw = ff.fn_raw;
-			ff.last_ft_raw = ff.ft_raw;
-			std::cout
-				<< "fn_raw=" << ff.fn_raw << " fn_bias=" << ff.fn_bias
-				<< " fn_cmd=" << ff.fn_force_f
-				<< " | ft_raw=" << ff.ft_raw << " ft_cmd=" << ff.ft_force_f
-				<< " | fn_inv=" << ff.fn_invalid_streak << " ft_inv=" << ff.ft_invalid_streak
-				<< std::endl;
+			ff.freeze_582_active = false;
+			out_cmd.force_582_f = 0.0;
+			out_cmd.force_582_n = 0.0;
+			map_force_587_placeholder(sample.fn_2_value, sample.ft_2_value, out_cmd.force_587_f, out_cmd.force_587_n);
 		}
 	}
 	else
 	{
-		ff.fn_force_f = 0.0;
-		ff.ft_force_f = 0.0;
-		if (!freeze_active)
-		{
-			handle.setforce_axis(0.0, force_axis, 0.0);
-		}
+		ff.freeze_582_active = false;
+		out_cmd.force_582_f = 0.0;
+		out_cmd.force_582_n = 0.0;
+		out_cmd.force_587_f = 0.0;
+		out_cmd.force_587_n = 0.0;
 	}
+
+	// 使用 setforce(F,N) 直接对应 SDK axis=0 通道语义。
+	handle_582.setforce(out_cmd.force_582_f, out_cmd.force_582_n);
+	handle_587.setforce(out_cmd.force_587_f, out_cmd.force_587_n);
+
+	ff.force_582_f = out_cmd.force_582_f;
+	ff.force_582_n = out_cmd.force_582_n;
+	ff.force_587_f = out_cmd.force_587_f;
+	ff.force_587_n = out_cmd.force_587_n;
+
+	if (sample.valid)
+	{
+		ff.last_fn_1_raw = sample.fn_1_value;
+		ff.last_ft_1_raw = sample.ft_1_value;
+		ff.last_fn_2_raw = sample.fn_2_value;
+		ff.last_ft_2_raw = sample.ft_2_value;
+	}
+
+	if ((loop_count % 100) == 0 ||
+		(ff.last_mode != guidewire_mode) ||
+		(ff.last_fast_move != fast_move_active))
+	{
+		std::cout
+			<< "Force route="
+			<< ((guidewire_mode == GuidewireMode::None) ? "catheter->582" : "guidewire->587")
+			<< " F=" << (ff.enabled ? "ON" : "OFF")
+			<< " fast=" << (fast_move_active ? "ON" : "OFF")
+			<< " raw(ft1/fn1/fn2/ft2)="
+			<< sample.ft_1_value << "/" << sample.fn_1_value << "/"
+			<< sample.fn_2_value << "/" << sample.ft_2_value
+			<< " cmd582(F/N)=" << ff.force_582_f << "/" << ff.force_582_n
+			<< " cmd587(F/N)=" << ff.force_587_f << "/" << ff.force_587_n
+			<< std::endl;
+	}
+
+	ff.last_fast_move = fast_move_active;
+	ff.last_mode = guidewire_mode;
 }
 
 } // 命名空间
@@ -886,11 +941,17 @@ int main(int argc, char* argv[])
 		}
 	}
 
-
-	// 仅在导管侧手柄输出力反馈。
-	auto apply_cmd_force = [&](double cmd_force)
+	// 力输出统一入口：按 setforce(F,N) 语义分别下发到 582/587。
+	auto apply_force_output = [&](double force_582_f, double force_582_n, double force_587_f, double force_587_n)
 	{
-		handle_axis1.setforce_axis(cmd_force * cfg.axial_force_sign, cfg.axial_force_axis, 0.0);
+		handle_axis1.setforce(force_582_f, force_582_n);
+		handle_axis6.setforce(force_587_f, force_587_n);
+	};
+
+	// 双手柄力输出清零（用于暂停、急停保持、F=OFF 等场景）。
+	auto clear_force_output = [&]()
+	{
+		apply_force_output(0.0, 0.0, 0.0, 0.0);
 	};
 
 	// PLC 镜像状态数组：在生成新的 refer 帧前会先通过 ADS 刷新。
@@ -922,6 +983,36 @@ int main(int argc, char* argv[])
 			plc_leftlimit
 		};
 		return ads.ADSReadSum(symbols, lengths, outputs, 3);
+	};
+
+	// 单次读取 4 路力传感器：ft_1/fn_1/fn_2/ft_2（通过 ADSReadSum 合并为一次通讯）。
+	auto read_force_sample = [&](ForceSampleFrame& sample) -> bool
+	{
+		const char* symbols[] = {
+			AdsSymbol::ft_1_value,
+			AdsSymbol::fn_1_value,
+			AdsSymbol::fn_2_value,
+			AdsSymbol::ft_2_value
+		};
+		const unsigned long lengths[] = {
+			static_cast<unsigned long>(sizeof(sample.ft_1_value)),
+			static_cast<unsigned long>(sizeof(sample.fn_1_value)),
+			static_cast<unsigned long>(sizeof(sample.fn_2_value)),
+			static_cast<unsigned long>(sizeof(sample.ft_2_value))
+		};
+		void* outputs[] = {
+			&sample.ft_1_value,
+			&sample.fn_1_value,
+			&sample.fn_2_value,
+			&sample.ft_2_value
+		};
+		if (!ads.ADSReadSum(symbols, lengths, outputs, 4))
+		{
+			return false;
+		}
+		sample.valid = true;
+		sample.tick_ms = GetTickCount();
+		return true;
 	};
 
 	auto write_refer = [&]() -> bool
@@ -1690,6 +1781,7 @@ int main(int argc, char* argv[])
 	bool axis6_fast_retract = false; // 轴6快退旁路标志（写入 G.axis6_fast_retract）
 	AxisReturnStatus axis1_return_status;
 	AxisReturnStatus axis6_return_status;
+	ForceSampleFrame force_sample;
 	int loop_count = 0;
 	DWORD force_log_warn_last_ms = 0;
 	startup_smoothing_bypass = false;
@@ -1699,7 +1791,7 @@ int main(int argc, char* argv[])
 	unsigned char last_btn_axis6 = 0xFF;
 
 	std::cout << "Force feedback: OFF (press F to toggle)" << std::endl;
-	apply_cmd_force(0.0);
+	clear_force_output();
 
 	// 力感记录默认随 main 启动；文件名包含日期与 24 小时制时间（到秒）。
 	force_log.enabled = true;
@@ -1815,7 +1907,7 @@ int main(int argc, char* argv[])
 		{
 			freeze_active = true;
 			control_active = false;
-			apply_cmd_force(0.0);
+			clear_force_output();
 			std::cout << "Handle582 pause: ON." << std::endl;
 		}
 		else if (!pause_pressed && pause_pressed_prev)
@@ -1920,7 +2012,7 @@ int main(int argc, char* argv[])
 					}
 					estop_hold_active = true;
 					control_active = false;
-					apply_cmd_force(0.0);
+					clear_force_output();
 				}
 				else
 				{
@@ -1938,7 +2030,7 @@ int main(int argc, char* argv[])
 		if (freeze_active)
 		{
 			ff.clear_output();
-			apply_cmd_force(0.0);
+			clear_force_output();
 		}
 
 		// 4) 键盘侧通道：选择直接控制 / 启动准备 / 力反馈开关。
@@ -2020,7 +2112,7 @@ int main(int argc, char* argv[])
 				std::cout << "Force feedback: " << (ff.enabled ? "ON" : "OFF") << std::endl;
 				if (!ff.enabled)
 				{
-					apply_cmd_force(0.0);
+					clear_force_output();
 				}
 			}
 			else if (ch == 0 || ch == 224)
@@ -2194,17 +2286,6 @@ int main(int argc, char* argv[])
 			std::cout << "Handle587 Btns: 0x" << std::hex << static_cast<int>(handle_axis6.buttons2) << std::dec << std::endl;
 			last_btn_axis6 = handle_axis6.buttons2;
 		}
-
-		process_force_feedback(
-			ff,
-			ads,
-			handle_axis1,
-			control_active,
-			freeze_active,
-			estop_hold_active,
-			loop_count,
-			cfg.axial_force_axis,
-			cfg.axial_force_sign);
 
 		// 8) 当启动已完成但控制未激活时，通过全量重同步恢复。
 		const bool motion_startup_active = startup.is_active();
@@ -3041,30 +3122,43 @@ int main(int argc, char* argv[])
 		ads.ADSWrite(AdsSymbol::axis1_fast_return, sizeof(axis1_fast_return), &axis1_fast_return); // 轴1快退平滑旁路
 		ads.ADSWrite(AdsSymbol::axis6_fast_retract, sizeof(axis6_fast_retract), &axis6_fast_retract); // 轴6快退平滑旁路
 
-		// 力感数据记录：默认启用，可通过 force_log_period_ms 控制频率。
+		// 力传感器采样与 CSV 写入：仅受 force_log_period_ms 控制。
 		const DWORD force_log_now_ms = GetTickCount();
-		// 力传感器只用于日志，不参与控制闭环：降频到每 10 帧读取一次。
-		if (force_log.should_sample(force_log_now_ms) && ((loop_count % 10) == 0))
+		if (force_log.should_sample(force_log_now_ms))
 		{
-			short ft_1_value = 0;
-			short fn_1_value = 0;
-			short fn_2_value = 0;
-			short ft_2_value = 0;
-			bool force_log_read_ok = true;
-			force_log_read_ok = ads.ADSRead(AdsSymbol::ft_1_value, sizeof(ft_1_value), &ft_1_value) && force_log_read_ok;
-			force_log_read_ok = ads.ADSRead(AdsSymbol::fn_1_value, sizeof(fn_1_value), &fn_1_value) && force_log_read_ok;
-			force_log_read_ok = ads.ADSRead(AdsSymbol::fn_2_value, sizeof(fn_2_value), &fn_2_value) && force_log_read_ok;
-			force_log_read_ok = ads.ADSRead(AdsSymbol::ft_2_value, sizeof(ft_2_value), &ft_2_value) && force_log_read_ok;
-			if (force_log_read_ok)
+			// 采样节拍按 period_ms 统一推进，读失败也不打乱节拍。
+			force_log.last_sample_ms = force_log_now_ms;
+			ForceSampleFrame sampled_frame;
+			if (read_force_sample(sampled_frame))
 			{
-				force_log.append_sample(force_log_now_ms, ft_1_value, fn_1_value, fn_2_value, ft_2_value);
+				force_sample = sampled_frame;
+				force_log.append_sample(
+					force_log_now_ms,
+					force_sample.ft_1_value,
+					force_sample.fn_1_value,
+					force_sample.fn_2_value,
+					force_sample.ft_2_value);
 			}
 			else if ((force_log_now_ms - force_log_warn_last_ms) >= 1000)
 			{
-				std::cout << "Force sensor logging warning: ADS read failed." << std::endl;
+				std::cout << "Force sensor warning: ADSReadSum failed for ft_1/fn_1/fn_2/ft_2." << std::endl;
 				force_log_warn_last_ms = force_log_now_ms;
 			}
 		}
+
+		process_force_feedback(
+			ff,
+			force_sample,
+			handle_axis1,
+			handle_axis6,
+			guidewire_mode,
+			control_active,
+			freeze_active,
+			estop_hold_active,
+			axis1_fast_return,
+			axis6_fast_retract,
+			loop_count);
+
 		// 无论本拍是否进入控制分支，都更新线性差分基准，避免暂停/等待期间累积大跳变。
 		axis1_prev_linear_filtered = axis1_handle_filter.axis0_filtered;
 		axis6_prev_linear_filtered = axis6_handle_filter.axis0_filtered;
@@ -3072,6 +3166,7 @@ int main(int argc, char* argv[])
 
 	startup_smoothing_bypass = false;
 	ads.ADSWrite(AdsSymbol::startup_smoothing_bypass, sizeof(startup_smoothing_bypass), &startup_smoothing_bypass);
+	clear_force_output();
 	force_log.close();
 	handle_axis1.close();
 	handle_axis6.close();
