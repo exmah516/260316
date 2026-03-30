@@ -47,11 +47,11 @@ bool Handle::init(DWORD serial)
 
 	if (iID1 < 0)
 	{
-		printf("Open device error! %lu\n", static_cast<unsigned long>(serial_number_));
+		printf("打开设备失败！请求序列号: %lu\n", static_cast<unsigned long>(serial_number_));
 		return false;
 	}
 	else
-		printf(" You have opened a device! SN: %d (request %lu).\n\n",
+		printf("已打开设备！实际 SN: %d（请求 %lu）。\n\n",
 			getSerialNumber(iID1),
 			static_cast<unsigned long>(serial_number_));
 
@@ -150,7 +150,7 @@ void Handle::showinfo(const char* label)
 	// Encoders: 两路编码器原始值
 	// V       : 两路编码器速度
 	// J       : 两路关节值（axis0 以 mm 显示，axis1 以 deg 显示）
-	printf("SN:%d\t Rate:%4dHz\t Btns:%02X\t Encoders:%9d %9d\t V:%9.3f %9.3f\t J:%3.3f %3.3f\r",
+	printf("SN:%d\t 频率:%4dHz\t 按键:%02X\t 编码器:%9d %9d\t 速度:%9.3f %9.3f\t 关节:%3.3f %3.3f\r",
 		getSerialNumber(iID1),
 		(int)getServoLoopRate(),
 		buttons2,

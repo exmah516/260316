@@ -2,6 +2,7 @@
 #include <ADSComm1.h>
 
 #include <cmath>
+#include <clocale>
 #include <conio.h>
 #include <cstdio>
 #include <cstdlib>
@@ -20,6 +21,14 @@
 //    - 导丝协同模式（axis1 链路保留，axis6 使用叠速前馈）
 namespace
 {
+
+// 统一控制台编码为 UTF-8，避免中文提示乱码。
+void setup_console_utf8()
+{
+	SetConsoleOutputCP(CP_UTF8);
+	SetConsoleCP(CP_UTF8);
+	std::setlocale(LC_ALL, ".UTF-8");
+}
 
 // 生成 Force_sensor 日志文件名：Force_sensor_YYYYMMDD_HHMMSS.csv
 std::string build_force_log_filename()
@@ -681,6 +690,7 @@ void process_force_feedback(
 	bool axis6_fast_retract,
 	int loop_count)
 {
+	(void)loop_count;
 	ForceOutputCmd out_cmd;
 	const bool fast_move_active = axis1_fast_return || axis6_fast_retract;
 	const bool output_enabled =
@@ -749,32 +759,14 @@ void process_force_feedback(
 		ff.last_fn_2_raw = sample.fn_2_value;
 		ff.last_ft_2_raw = sample.ft_2_value;
 	}
-
-	if ((loop_count % 100) == 0 ||
-		(ff.last_mode != guidewire_mode) ||
-		(ff.last_fast_move != fast_move_active))
-	{
-		std::cout
-			<< "Force route="
-			<< ((guidewire_mode == GuidewireMode::None) ? "catheter->582" : "guidewire->587")
-			<< " F=" << (ff.enabled ? "ON" : "OFF")
-			<< " fast=" << (fast_move_active ? "ON" : "OFF")
-			<< " raw(ft1/fn1/fn2/ft2)="
-			<< sample.ft_1_value << "/" << sample.fn_1_value << "/"
-			<< sample.fn_2_value << "/" << sample.ft_2_value
-			<< " cmd582(F/N)=" << ff.force_582_f << "/" << ff.force_582_n
-			<< " cmd587(F/N)=" << ff.force_587_f << "/" << ff.force_587_n
-			<< std::endl;
-	}
-
-	ff.last_fast_move = fast_move_active;
-	ff.last_mode = guidewire_mode;
 }
 
 } // 命名空间
 
 int main(int argc, char* argv[])
 {
+	setup_console_utf8();
+
 	const DWORD serial_axis1_handle = 582;
 	const DWORD serial_axis6_handle = 587;
 	const char* hardcoded_ads_netid = "169.254.119.135.1.1";
@@ -791,14 +783,14 @@ int main(int argc, char* argv[])
 		Handle test_handle(test_serial);
 		if (!test_handle.init())
 		{
-			std::cout << "Handle Init Failed. Serial: " << test_serial << std::endl;
+			std::cout << "手柄初始化失败，序列号: " << test_serial << std::endl;
 			return 0;
 		}
 
-		std::cout << "=== Button Test Mode ===" << std::endl;
-		std::cout << "Serial: " << test_serial << std::endl;
-		std::cout << "Press buttons to see their bits." << std::endl;
-		std::cout << "Press ESC or 'q' to exit." << std::endl;
+		std::cout << "=== 按键测试模式 ===" << std::endl;
+		std::cout << "序列号: " << test_serial << std::endl;
+		std::cout << "请按下按键查看位掩码。" << std::endl;
+		std::cout << "按 ESC 或 q 退出。" << std::endl;
 
 		unsigned char last_btn = 0xFF;
 		while (true)
@@ -808,7 +800,7 @@ int main(int argc, char* argv[])
 
 			if (cur_btn != last_btn)
 			{
-				std::cout << "Btns: 0x" << std::hex << static_cast<int>(cur_btn) << std::dec << " | Bits: ";
+				std::cout << "按键: 0x" << std::hex << static_cast<int>(cur_btn) << std::dec << " | 位: ";
 				for (int i = 0; i < 8; ++i)
 				{
 					std::cout << ((cur_btn >> i) & 1);
@@ -844,13 +836,13 @@ int main(int argc, char* argv[])
 		Handle test_handle(test_serial);
 		if (!test_handle.init())
 		{
-			std::cout << "Handle Init Failed. Serial: " << test_serial << std::endl;
+			std::cout << "手柄初始化失败，序列号: " << test_serial << std::endl;
 			return 0;
 		}
 
-		std::cout << "=== Handle Monitor Mode ===" << std::endl;
-		std::cout << "Serial: " << test_serial << std::endl;
-		std::cout << "Press ESC or 'q' to exit." << std::endl;
+		std::cout << "=== 手柄监视模式 ===" << std::endl;
+		std::cout << "序列号: " << test_serial << std::endl;
+		std::cout << "按 ESC 或 q 退出。" << std::endl;
 
 		while (true)
 		{
@@ -905,13 +897,13 @@ int main(int argc, char* argv[])
 
 	if (!handle_axis1.init())
 	{
-		std::cout << "Handle Init Failed. Serial: " << serial_axis1_handle << std::endl;
+		std::cout << "手柄初始化失败，序列号: " << serial_axis1_handle << std::endl;
 		return 0;
 	}
 
 	if (!handle_axis6.init())
 	{
-		std::cout << "Handle Init Failed. Serial: " << serial_axis6_handle << std::endl;
+		std::cout << "手柄初始化失败，序列号: " << serial_axis6_handle << std::endl;
 		handle_axis1.close();
 		return 0;
 	}
@@ -924,18 +916,18 @@ int main(int argc, char* argv[])
 
 	if (ads.OpenComm_inside())
 	{
-		std::cout << "ADS connected: local AMS route, port 851." << std::endl;
+		std::cout << "ADS 已连接：本地 AMS 路由，端口 851。" << std::endl;
 	}
 	else
 	{
-		std::cout << "ADS Open Failed (Local). Error: " << ads.GetLastError() << std::endl;
+		// 本地路由失败时尝试远端 NetId；仅当两者都失败再输出错误，避免无效告警干扰。
 		if (ads.OpenComm())
 		{
-			std::cout << "ADS connected: remote AMS NetId " << hardcoded_ads_netid << ", port 851." << std::endl;
+			std::cout << "ADS 已连接：远端 AMS NetId " << hardcoded_ads_netid << "，端口 851。" << std::endl;
 		}
 		else
 		{
-			std::cout << "ADS Open Failed (Hardcoded). Error: " << ads.GetLastError() << std::endl;
+			std::cout << "ADS 连接失败，本地与远端路由均不可用，错误码: " << ads.GetLastError() << std::endl;
 			handle_axis1.close();
 			handle_axis6.close();
 			return 0;
@@ -1195,14 +1187,14 @@ int main(int argc, char* argv[])
 		{
 			if (log_clamp)
 			{
-				std::cout << "Guidewire mode switch ignored: axis6 independent window is too close to left limit." << std::endl;
+				std::cout << "导丝模式切换已忽略：axis6 独立窗口距离左限位过近。" << std::endl;
 			}
 			return false;
 		}
 
 		if (log_clamp && clamped_left_abs > requested_left_abs)
 		{
-			std::cout << "Axis6 independent window clamped by left limit." << std::endl;
+			std::cout << "axis6 独立窗口已按左限位进行夹紧修正。" << std::endl;
 		}
 
 		return true;
@@ -1228,6 +1220,8 @@ int main(int argc, char* argv[])
 	// 认为窗口被覆盖，按 axis5 的 from-left 值重建 axis6 两端点。
 	auto rebuild_axis6_window_if_covered = [&](const char* reason, bool log_result) -> bool
 	{
+		(void)reason;
+		(void)log_result;
 		const double axis6_start_from_left_mm = axis6_crawl.start_abs - plc_leftlimit[5];
 		const double axis6_end_from_left_mm = axis6_crawl.end_abs - plc_leftlimit[5];
 		const double axis6_far_from_left_mm =
@@ -1237,7 +1231,6 @@ int main(int argc, char* argv[])
 		const double axis5_from_left_mm =
 			(plc_act_pos[4] + plc_init_pos[4]) - plc_leftlimit[4];
 		const double delta_mm = axis6_far_from_left_mm - axis5_from_left_mm;
-		bool rebuilt = false;
 
 		if (delta_mm < cfg.axis6_window_cover_threshold_mm)
 		{
@@ -1249,18 +1242,6 @@ int main(int argc, char* argv[])
 				return false;
 			}
 			lock_axis6_window_from_current();
-			rebuilt = true;
-		}
-
-		if (log_result)
-		{
-			std::cout
-				<< "Axis6 window cover check(" << reason << "): far_from_left="
-				<< axis6_far_from_left_mm
-				<< " mm, axis5_from_left=" << axis5_from_left_mm
-				<< " mm, delta=" << delta_mm
-				<< " mm, rebuilt=" << (rebuilt ? "YES" : "NO")
-				<< std::endl;
 		}
 		return true;
 	};
@@ -1731,7 +1712,9 @@ int main(int argc, char* argv[])
 	{
 		if (!startup.prompted)
 		{
-			std::cout << "Startup mode pending: press C for direct control, or S to run startup preparation first." << std::endl;
+			std::cout << "请安装器械。" << std::endl;
+			std::cout << "进入启动姿态请按键盘 S 键。" << std::endl;
+			std::cout << "直接继续控制请按键盘 C 键。" << std::endl;
 			startup.prompted = true;
 		}
 	};
@@ -1739,7 +1722,7 @@ int main(int argc, char* argv[])
 	// 在交互循环开始前，用初始 PLC 快照初始化各保持位姿。
 	if (!read_plc_state())
 	{
-		std::cout << "Failed to read PLC state." << std::endl;
+		std::cout << "读取 PLC 状态失败。" << std::endl;
 		handle_axis1.close();
 		handle_axis6.close();
 		return 0;
@@ -1773,8 +1756,6 @@ int main(int argc, char* argv[])
 	bool pause_pressed_prev = false;
 	bool axis1_reverse_pressed_prev = false;
 	bool axis6_effective_reverse_prev = false;
-	int axis4_jog_state_prev = 0;
-	bool axis4_manual_busy_prev = false;
 	bool axis4_manual_error_prev = false;
 	unsigned long axis4_manual_error_id_prev = 0;
 	GuidewireMode requested_guidewire_mode_prev = GuidewireMode::None;
@@ -1788,10 +1769,7 @@ int main(int argc, char* argv[])
 	startup_smoothing_bypass = false;
 	ads.ADSWrite(AdsSymbol::startup_smoothing_bypass, sizeof(startup_smoothing_bypass), &startup_smoothing_bypass);
 
-	unsigned char last_btn_axis1 = 0xFF;
-	unsigned char last_btn_axis6 = 0xFF;
-
-	std::cout << "Force feedback: OFF (press F to toggle)" << std::endl;
+	std::cout << "力反馈：关闭（按 F 键切换）。" << std::endl;
 	clear_force_output();
 
 	// 力感记录默认随 main 启动；文件名包含日期与 24 小时制时间（到秒）。
@@ -1800,12 +1778,14 @@ int main(int argc, char* argv[])
 	const std::string force_log_filename = build_force_log_filename();
 	if (force_log.open_file(force_log_filename))
 	{
-		std::cout << "Force sensor logging: ON -> " << force_log_filename
-			<< " (period_ms=" << force_log.period_ms << ")" << std::endl;
+		std::cout << "传感数据已保存到："
+			<< force_log_filename
+			<< "（采样周期 ms=" << force_log.period_ms << "）"
+			<< std::endl;
 	}
 	else
 	{
-		std::cout << "Force sensor logging: OFF (file open failed)." << std::endl;
+		std::cout << "传感数据记录已关闭（文件打开失败）。" << std::endl;
 	}
 
 	if (!has_self_check_flag || self_check_done)
@@ -1874,7 +1854,6 @@ int main(int argc, char* argv[])
 			axis4_base_pressed &&
 			((axis1_buttons & axis4_buttons_reverse_mask) != 0) &&
 			((axis1_buttons & axis4_buttons_forward_mask) == 0);
-		const int axis4_jog_state = axis4_forward_pressed ? 1 : (axis4_reverse_pressed ? -1 : 0);
 
 		// 导丝模式请求解码（587）：
 		// - b6=1,b0=0 -> Independent（0x46）
@@ -1894,13 +1873,6 @@ int main(int argc, char* argv[])
 		const bool axis4_jog_allowed = !freeze_active && !estop_hold_active && !startup_sequence_active;
 		const bool axis4_forward_request = axis4_jog_allowed && axis4_forward_pressed;
 		const bool axis4_reverse_request = axis4_jog_allowed && axis4_reverse_pressed;
-		if (axis4_jog_state != axis4_jog_state_prev)
-		{
-			std::cout << "Axis4 jog: "
-				<< ((axis4_jog_state > 0) ? "FORWARD" : ((axis4_jog_state < 0) ? "REVERSE" : "STOP"))
-				<< std::endl;
-			axis4_jog_state_prev = axis4_jog_state;
-		}
 
 		if (!formal_control_stage)
 		{
@@ -1909,14 +1881,14 @@ int main(int argc, char* argv[])
 				freeze_active = true;
 				control_active = false;
 				clear_force_output();
-				std::cout << "Handle582 pause: ON." << std::endl;
+				std::cout << "582 暂停：开启。" << std::endl;
 			}
 			else if (!pause_pressed && pause_pressed_prev)
 			{
 				freeze_active = false;
 				if (startup_sequence_active)
 				{
-					std::cout << "Handle582 pause: OFF, startup sequence resumed." << std::endl;
+					std::cout << "582 暂停：关闭，启动流程继续。" << std::endl;
 				}
 				else if (!startup.completed)
 				{
@@ -1927,36 +1899,38 @@ int main(int argc, char* argv[])
 						{
 							prompt_startup_mode();
 						}
-						std::cout << "Handle582 pause: OFF, waiting for startup mode selection." << std::endl;
+						std::cout << "582 暂停：关闭，等待选择启动方式。" << std::endl;
 					}
 					else if (estop_hold_active)
 					{
-						std::cout << "Handle582 pause released, waiting for PLC hold to clear." << std::endl;
+						std::cout << "582 暂停已释放，等待 PLC 保持解除。" << std::endl;
 					}
 					else
 					{
-						std::cout << "Handle582 pause released, resync pending." << std::endl;
+						std::cout << "582 暂停已释放，等待重同步完成。" << std::endl;
 					}
 				}
 				else if (!estop_hold_active && sync_all(20))
 				{
 					control_active = true;
-					std::cout << "Handle582 pause: OFF, control resumed." << std::endl;
+					std::cout << "582 暂停：关闭，控制已恢复。" << std::endl;
 				}
 				else if (estop_hold_active)
 				{
-					std::cout << "Handle582 pause released, waiting for PLC hold to clear." << std::endl;
+					std::cout << "582 暂停已释放，等待 PLC 保持解除。" << std::endl;
 				}
 				else
 				{
-					std::cout << "Handle582 pause released, resync pending." << std::endl;
+					std::cout << "582 暂停已释放，等待重同步完成。" << std::endl;
 				}
 			}
 		}
 		else if (pause_pressed != pause_pressed_prev)
 		{
 			// 正式控制阶段下，b6 仅用于切换电缸5，不再触发 freeze/pause。
-			std::cout << "Handle582 b6: " << (pause_pressed ? "pressed, cylinder5 -> 0." : "released, cylinder5 -> 2000.") << std::endl;
+			std::cout << "582 b6："
+				<< (pause_pressed ? "按下，电缸5 -> 0。" : "松开，电缸5 -> 2000。")
+				<< std::endl;
 		}
 		pause_pressed_prev = pause_pressed;
 
@@ -1972,13 +1946,13 @@ int main(int argc, char* argv[])
 					(std::abs(axis1_abs_now_for_guard - axis1_new_trigger_edge_abs) <= cfg.reverse_switch_trigger_guard_mm);
 				if (axis1_reverse_switch_guard_active)
 				{
-					std::cout << "Axis1 catheter retract mode: "
-						<< (axis1_reverse_pressed ? "ON" : "OFF")
-						<< " (trigger guard armed)." << std::endl;
+					std::cout << "轴1导管回退模式："
+						<< (axis1_reverse_pressed ? "开启" : "关闭")
+						<< "（触发保护已激活）。" << std::endl;
 				}
 				else
 				{
-					std::cout << "Axis1 catheter retract mode: " << (axis1_reverse_pressed ? "ON" : "OFF") << std::endl;
+					std::cout << "轴1导管回退模式：" << (axis1_reverse_pressed ? "开启" : "关闭") << std::endl;
 				}
 			}
 
@@ -1993,13 +1967,13 @@ int main(int argc, char* argv[])
 					(std::abs(axis6_abs_now_for_guard - axis6_new_trigger_edge_abs) <= cfg.reverse_switch_trigger_guard_mm);
 				if (axis6_reverse_switch_guard_active)
 				{
-					std::cout << "Axis6 reverse crawl mode: "
-						<< (axis6_effective_reverse_pressed ? "ON" : "OFF")
-						<< " (trigger guard armed)." << std::endl;
+					std::cout
+						<< (axis6_effective_reverse_pressed ? "导丝模式：反向取出" : "导丝模式：正向输送")
+						<< "（触发保护已激活）。" << std::endl;
 				}
 				else
 				{
-					std::cout << "Axis6 reverse crawl mode: " << (axis6_effective_reverse_pressed ? "ON" : "OFF") << std::endl;
+					std::cout << (axis6_effective_reverse_pressed ? "导丝模式：反向取出。" : "导丝模式：正向输送。") << std::endl;
 				}
 			}
 		}
@@ -2015,7 +1989,7 @@ int main(int argc, char* argv[])
 				{
 					if (!estop_hold_active)
 					{
-						std::cout << "PLC hold: ON" << std::endl;
+						std::cout << "PLC 保持：开启。" << std::endl;
 					}
 					estop_hold_active = true;
 					control_active = false;
@@ -2025,9 +1999,9 @@ int main(int argc, char* argv[])
 				{
 					if (estop_hold_active)
 					{
-						std::cout << "PLC hold: OFF" << std::endl;
+						std::cout << "PLC 保持：关闭。" << std::endl;
 						axis1_push_rearm_after_hold = true;
-						std::cout << "Axis1 push locked after hold; pull handle back to re-arm." << std::endl;
+						std::cout << "轴1推送已锁定，请先反向回拉手柄完成重接管。" << std::endl;
 					}
 					estop_hold_active = false;
 				}
@@ -2050,19 +2024,19 @@ int main(int argc, char* argv[])
 				{
 					if (freeze_active)
 					{
-						std::cout << "Direct control start ignored: Handle582 pause is active." << std::endl;
+						std::cout << "直接控制启动已忽略：582 暂停处于开启状态。" << std::endl;
 					}
 					else if (estop_hold_active)
 					{
-						std::cout << "Direct control start ignored: PLC hold is active." << std::endl;
+						std::cout << "直接控制启动已忽略：PLC 保持处于开启状态。" << std::endl;
 					}
 					else if (has_self_check_flag && !self_check_done)
 					{
-						std::cout << "Direct control start ignored: PLC self check is not done yet." << std::endl;
+						std::cout << "直接控制启动已忽略：PLC 自检尚未完成。" << std::endl;
 					}
 					else if (!restore_startup_v_limit())
 					{
-						std::cout << "Direct control start failed: unable to restore startup v_limit." << std::endl;
+						std::cout << "直接控制启动失败：无法恢复启动期速度限制参数。" << std::endl;
 					}
 					else if (sync_all(20))
 					{
@@ -2070,11 +2044,11 @@ int main(int argc, char* argv[])
 						startup.completed = true;
 						startup.prompted = false;
 						control_active = true;
-						std::cout << "Direct control started." << std::endl;
+						std::cout << "已进入直接控制。" << std::endl;
 					}
 					else
 					{
-						std::cout << "Direct control start failed: ADS sync failed." << std::endl;
+						std::cout << "直接控制启动失败：ADS 重同步失败。" << std::endl;
 					}
 				}
 			}
@@ -2084,24 +2058,24 @@ int main(int argc, char* argv[])
 				{
 					if (freeze_active)
 					{
-						std::cout << "Startup sequence start ignored: Handle582 pause is active." << std::endl;
+						std::cout << "启动准备已忽略：582 暂停处于开启状态。" << std::endl;
 					}
 					else if (estop_hold_active)
 					{
-						std::cout << "Startup sequence start ignored: PLC hold is active." << std::endl;
+						std::cout << "启动准备已忽略：PLC 保持处于开启状态。" << std::endl;
 					}
 					else if (has_self_check_flag && !self_check_done)
 					{
-						std::cout << "Startup sequence start ignored: PLC self check is not done yet." << std::endl;
+						std::cout << "启动准备已忽略：PLC 自检尚未完成。" << std::endl;
 					}
 					else if (start_startup_sequence())
 					{
 						control_active = false;
-						std::cout << "Startup preparation sequence started." << std::endl;
+						std::cout << "启动准备流程已开始。" << std::endl;
 					}
 					else
 					{
-						std::cout << "Startup preparation sequence start failed: ADS sync failed." << std::endl;
+						std::cout << "启动准备流程启动失败：ADS 重同步失败。" << std::endl;
 					}
 				}
 			}
@@ -2116,7 +2090,7 @@ int main(int argc, char* argv[])
 			{
 				ff.enabled = !ff.enabled;
 				ff.reset();
-				std::cout << "Force feedback: " << (ff.enabled ? "ON" : "OFF") << std::endl;
+				std::cout << "力反馈：" << (ff.enabled ? "开启" : "关闭") << std::endl;
 				if (!ff.enabled)
 				{
 					clear_force_output();
@@ -2139,7 +2113,7 @@ int main(int argc, char* argv[])
 					{
 						if (exit_guidewire_mode_to_normal())
 						{
-							std::cout << "Guidewire mode: OFF." << std::endl;
+							std::cout << "导丝模式：关闭。" << std::endl;
 						}
 						else
 						{
@@ -2148,7 +2122,7 @@ int main(int argc, char* argv[])
 							axis6_window_locked = false;
 							axis6_coop_ff_inited = false;
 							axis6_coop_prev_axis1_cmd_abs = 0.0;
-							std::cout << "Guidewire mode exit failed: ADS sync failed." << std::endl;
+							std::cout << "导丝模式退出失败：ADS 重同步失败。" << std::endl;
 						}
 					}
 					else
@@ -2163,19 +2137,19 @@ int main(int argc, char* argv[])
 			}
 			else if (freeze_active)
 			{
-				std::cout << "Guidewire mode switch ignored: Handle582 pause is active." << std::endl;
+				std::cout << "导丝模式切换已忽略：582 暂停处于开启状态。" << std::endl;
 			}
 			else if (estop_hold_active)
 			{
-				std::cout << "Guidewire mode switch ignored: PLC hold is active." << std::endl;
+				std::cout << "导丝模式切换已忽略：PLC 保持处于开启状态。" << std::endl;
 			}
 			else if (!startup.completed || startup.phase != StartupPhase::Done)
 			{
-				std::cout << "Guidewire mode switch ignored: startup sequence is not completed yet." << std::endl;
+				std::cout << "导丝模式切换已忽略：启动准备尚未完成。" << std::endl;
 			}
 			else if (!control_active)
 			{
-				std::cout << "Guidewire mode switch ignored: control is not active yet." << std::endl;
+				std::cout << "导丝模式切换已忽略：控制尚未激活。" << std::endl;
 			}
 			else
 			{
@@ -2185,16 +2159,16 @@ int main(int argc, char* argv[])
 				const bool gate_checked = check_axis6_guidewire_entry_gate(axis6_from_left_mm);
 				if (!gate_checked)
 				{
-					std::cout << "Guidewire mode switch failed: unable to read PLC state for axis6 entry gate." << std::endl;
+					std::cout << "导丝模式切换失败：无法读取 axis6 进入门控的 PLC 状态。" << std::endl;
 				}
 				else if (axis6_from_left_mm >= cfg.guidewire_entry_axis6_from_left_max_mm)
 				{
 					std::cout
-						<< "Guidewire mode switch ignored: axis6 distance from left limit = "
+						<< "导丝模式切换已忽略：axis6 距左限位 = "
 						<< axis6_from_left_mm
-						<< " mm, required < "
+						<< " mm，要求 < "
 						<< cfg.guidewire_entry_axis6_from_left_max_mm
-						<< " mm."
+						<< " mm。"
 						<< std::endl;
 				}
 				else
@@ -2206,7 +2180,7 @@ int main(int argc, char* argv[])
 						if (mode_ok)
 						{
 							guidewire_mode = GuidewireMode::Independent;
-							std::cout << "Guidewire mode: INDEPENDENT." << std::endl;
+							std::cout << (axis6_effective_reverse_pressed ? "导丝模式：反向取出。" : "导丝模式：正向输送。") << std::endl;
 						}
 					}
 					else if (requested_guidewire_mode == GuidewireMode::Cooperative)
@@ -2215,14 +2189,14 @@ int main(int argc, char* argv[])
 						if (mode_ok)
 						{
 							guidewire_mode = GuidewireMode::Cooperative;
-							std::cout << "Guidewire mode: COOPERATIVE." << std::endl;
+							std::cout << "导丝模式：协同。" << std::endl;
 						}
 					}
 				}
 
 				if (mode_attempted && !mode_ok)
 				{
-					std::cout << "Guidewire mode switch failed." << std::endl;
+					std::cout << "导丝模式切换失败。" << std::endl;
 				}
 			}
 		}
@@ -2237,7 +2211,7 @@ int main(int argc, char* argv[])
 				{
 					if (!restore_startup_v_limit())
 					{
-						std::cout << "Warning: failed to restore startup v_limit after PLC self check transition." << std::endl;
+						std::cout << "警告：PLC 自检切换后恢复启动期速度限制参数失败。" << std::endl;
 					}
 					guidewire_mode = GuidewireMode::None;
 					axis6_crawl.enabled = false;
@@ -2250,7 +2224,7 @@ int main(int argc, char* argv[])
 					if (!freeze_active && !estop_hold_active && sync_all(30))
 					{
 						control_active = false;
-						std::cout << "PLC self check completed." << std::endl;
+						std::cout << "PLC 自检已完成。" << std::endl;
 						prompt_startup_mode();
 					}
 					else
@@ -2281,19 +2255,6 @@ int main(int argc, char* argv[])
 			}
 		}
 
-		// 7) 每次 buttons2 变化时输出可读的按键诊断信息。
-		if (handle_axis1.buttons2 != last_btn_axis1)
-		{
-			std::cout << "Handle582 Btns: 0x" << std::hex << static_cast<int>(handle_axis1.buttons2) << std::dec << std::endl;
-			last_btn_axis1 = handle_axis1.buttons2;
-		}
-
-		if (handle_axis6.buttons2 != last_btn_axis6)
-		{
-			std::cout << "Handle587 Btns: 0x" << std::hex << static_cast<int>(handle_axis6.buttons2) << std::dec << std::endl;
-			last_btn_axis6 = handle_axis6.buttons2;
-		}
-
 		// 8) 当启动已完成但控制未激活时，通过全量重同步恢复。
 		const bool motion_startup_active = startup.is_active();
 		startup_smoothing_bypass = motion_startup_active;
@@ -2301,7 +2262,6 @@ int main(int argc, char* argv[])
 		{
 			if (sync_all(20))
 			{
-				std::cout << "Re-synced" << std::endl;
 				control_active = true;
 			}
 		}
@@ -2493,7 +2453,7 @@ int main(int argc, char* argv[])
 						{
 							clear_axis_return_request(AdsSymbol::axis6_return);
 							axis6_crawl.plc_move_requested = false;
-							std::cout << "Axis6 planned return error: " << axis6_return_status.error_id << std::endl;
+							std::cout << "轴6 计划回退报错，错误码: " << axis6_return_status.error_id << std::endl;
 							if (!sync_axis6(3, false, false, 0, false, false))
 							{
 								axis6_crawl.phase = CrawlState::Phase::Follow;
@@ -2519,7 +2479,7 @@ int main(int argc, char* argv[])
 					{
 						if (!sync_axis6(3, false, false, 0, false, false))
 						{
-							std::cout << "Axis6 resync after planned return failed." << std::endl;
+							std::cout << "轴6 计划回退后重同步失败。" << std::endl;
 							axis6_crawl.phase = CrawlState::Phase::Follow;
 						}
 					}
@@ -2630,19 +2590,19 @@ int main(int argc, char* argv[])
 					{
 						if (!restore_startup_v_limit())
 						{
-							std::cout << "Warning: failed to restore startup v_limit after startup sequence." << std::endl;
+							std::cout << "警告：启动准备完成后恢复启动期速度限制参数失败。" << std::endl;
 						}
 						startup.phase = StartupPhase::Done;
 						startup.completed = true;
 						if (sync_all(30))
 						{
 							control_active = true;
-							std::cout << "Startup preparation sequence completed." << std::endl;
+							std::cout << "启动准备流程已完成。" << std::endl;
 						}
 						else
 						{
 							control_active = false;
-							std::cout << "Startup preparation sequence completed, but resync failed." << std::endl;
+							std::cout << "启动准备流程已完成，但重同步失败。" << std::endl;
 						}
 					}
 				}
@@ -2678,7 +2638,6 @@ int main(int argc, char* argv[])
 				{
 					capture_axis1_follow_baseline();
 					axis1_crawl.window_active = true;
-					std::cout << "Axis1 entered crawl window; crawl logic enabled." << std::endl;
 				}
 
 				if (axis1_crawl.phase == CrawlState::Phase::Follow)
@@ -2695,7 +2654,7 @@ int main(int argc, char* argv[])
 					{
 						axis1_push_rearm_after_hold = false;
 						capture_axis1_follow_baseline();
-						std::cout << "Axis1 push re-armed after hold." << std::endl;
+						std::cout << "PLC 保持解除后，轴1推送已重接管。" << std::endl;
 					}
 					if (axis1_delivery_stop_latched && axis1_reverse_pressed && axis1_linear_increment_active)
 					{
@@ -2776,7 +2735,7 @@ int main(int argc, char* argv[])
 								axis1_delivery_stop_latched = true;
 								if (!axis1_delivery_stop_prompted)
 								{
-									std::cout << "Delivery reached: axis3 <= 20mm from left limit. Enable reverse mode to continue." << std::endl;
+									std::cout << "已到达投送停止位：axis3 距左限位 <= 20mm。请切换反向模式后继续。" << std::endl;
 									axis1_delivery_stop_prompted = true;
 								}
 							}
@@ -2937,7 +2896,7 @@ int main(int argc, char* argv[])
 							clear_axis_return_request(AdsSymbol::axis1_return);
 							axis1_crawl.plc_move_requested = false;
 							std::cout
-								<< "Axis1 planned return error: "
+								<< "轴1 计划回退报错，错误码: "
 								<< axis1_return_status.error_id
 								<< std::endl;
 							clear_axis_return_request(AdsSymbol::axis6_return);
@@ -2958,7 +2917,7 @@ int main(int argc, char* argv[])
 								if (axis6_coupled_error)
 								{
 									std::cout
-										<< "Axis6 coupled fast-forward error: "
+										<< "轴6 协同快进报错，错误码: "
 										<< axis6_coupled_error_id
 										<< std::endl;
 									clear_axis_return_request(AdsSymbol::axis1_return);
@@ -3020,7 +2979,7 @@ int main(int argc, char* argv[])
 					{
 						if (!sync_axis1(3, false, 0))
 						{
-							std::cout << "Axis1 resync after planned return failed." << std::endl;
+							std::cout << "轴1 计划回退后重同步失败。" << std::endl;
 							axis1_crawl.phase = CrawlState::Phase::Follow;
 						}
 						axis6_coupled_active = false;
@@ -3052,16 +3011,6 @@ int main(int argc, char* argv[])
 						}
 						const double axis6_combined_increment_mm = axis6_linear_increment_mm + axis1_increment_mm;
 						axis6_coop_prev_axis1_cmd_abs = axis1_cmd_abs_for_ff;
-
-						if (cfg.cooperative_debug_log && ((loop_count % 50) == 0))
-						{
-							std::cout
-								<< "[COOP] inc587=" << axis6_linear_increment_mm
-								<< " inc1=" << axis1_increment_mm
-								<< " sum=" << axis6_combined_increment_mm
-								<< " axis1_phase=" << static_cast<int>(axis1_crawl.phase)
-								<< std::endl;
-						}
 
 						const double axis6_raw_cmd_abs = axis6_follow_cmd_abs + axis6_combined_increment_mm;
 
@@ -3106,15 +3055,10 @@ int main(int argc, char* argv[])
 			axis4_diag_ok = ads.ADSRead(AdsSymbol::axis4_manual_error_id, sizeof(axis4_manual_error_id_now), &axis4_manual_error_id_now) && axis4_diag_ok;
 			if (axis4_diag_ok)
 			{
-				if (axis4_manual_busy_now != axis4_manual_busy_prev)
-				{
-					std::cout << "Axis4 manual busy: " << (axis4_manual_busy_now ? "ON" : "OFF") << std::endl;
-					axis4_manual_busy_prev = axis4_manual_busy_now;
-				}
 				if (axis4_manual_error_now &&
 					(!axis4_manual_error_prev || axis4_manual_error_id_now != axis4_manual_error_id_prev))
 				{
-					std::cout << "Axis4 manual error: " << axis4_manual_error_id_now << std::endl;
+					std::cout << "轴4 手动控制报错，错误码: " << axis4_manual_error_id_now << std::endl;
 				}
 				axis4_manual_error_prev = axis4_manual_error_now;
 				axis4_manual_error_id_prev = axis4_manual_error_id_now;
@@ -3155,7 +3099,7 @@ int main(int argc, char* argv[])
 			}
 			else if ((force_log_now_ms - force_log_warn_last_ms) >= 1000)
 			{
-				std::cout << "Force sensor warning: ADSReadSum failed for ft_1/fn_1/fn_2/ft_2." << std::endl;
+				std::cout << "力传感器告警：ft_1/fn_1/fn_2/ft_2 的 ADSReadSum 读取失败。" << std::endl;
 				force_log_warn_last_ms = force_log_now_ms;
 			}
 		}
