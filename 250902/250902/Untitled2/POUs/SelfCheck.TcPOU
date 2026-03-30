@@ -118,6 +118,9 @@ IF G.selfcheck_reset_req THEN
     G.selfcheck_reset_req := FALSE;
 END_IF
 
+// selfcheck 期间固定初始化电缸5，避免阶段切换引入额外切换值。
+G.cylinder5_value := 2000;
+
 all_reach_limit := TRUE;
 FOR i:=1 TO 7 DO
     IF target_axes[i] AND ((stu[i] < 6) OR (NOT G.power_output[i].Done)) THEN

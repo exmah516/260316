@@ -202,6 +202,7 @@ namespace AdsSymbol
 	const char* cylinder2_value = "G.cylinder2_value";
 	const char* cylinder3_value = "G.cylinder3_value";
 	const char* cylinder4_value = "G.cylinder4_value";
+	const char* cylinder5_value = "G.cylinder5_value";
 	const char* self_check_done = "G.self_check_done";
 	const char* handle_reinit_req = "G.handle_reinit_req";
 	const char* estop_hold_req = "G.estop_hold_req";
@@ -1892,6 +1893,8 @@ int main(int argc, char* argv[])
 		// 反向有效键仅在“独立且 b0 按下（0x07）”时生效。
 		const bool axis6_effective_reverse_pressed = guidewire_reverse_pressed;
 		const bool startup_sequence_active = startup.is_active();
+		// 正式控制阶段：启动流程已完成，b6 从“暂停键”切换为“电缸5开关键”。
+		const bool formal_control_stage = startup.completed && (startup.phase == StartupPhase::Done);
 		const bool axis4_jog_allowed = !freeze_active && !estop_hold_active && !startup_sequence_active;
 		const bool axis4_forward_request = axis4_jog_allowed && axis4_forward_pressed;
 		const bool axis4_reverse_request = axis4_jog_allowed && axis4_reverse_pressed;
@@ -1903,30 +1906,46 @@ int main(int argc, char* argv[])
 			axis4_jog_state_prev = axis4_jog_state;
 		}
 
-		if (pause_pressed && !pause_pressed_prev)
+		if (!formal_control_stage)
 		{
-			freeze_active = true;
-			control_active = false;
-			clear_force_output();
-			std::cout << "Handle582 pause: ON." << std::endl;
-		}
-		else if (!pause_pressed && pause_pressed_prev)
-		{
-			freeze_active = false;
-			if (startup_sequence_active)
+			if (pause_pressed && !pause_pressed_prev)
 			{
-				std::cout << "Handle582 pause: OFF, startup sequence resumed." << std::endl;
+				freeze_active = true;
+				control_active = false;
+				clear_force_output();
+				std::cout << "Handle582 pause: ON." << std::endl;
 			}
-			else if (!startup.completed)
+			else if (!pause_pressed && pause_pressed_prev)
 			{
-				if (!estop_hold_active && sync_all(20))
+				freeze_active = false;
+				if (startup_sequence_active)
 				{
-					control_active = false;
-					if (!startup.prompted && (!has_self_check_flag || self_check_done))
+					std::cout << "Handle582 pause: OFF, startup sequence resumed." << std::endl;
+				}
+				else if (!startup.completed)
+				{
+					if (!estop_hold_active && sync_all(20))
 					{
-						prompt_startup_mode();
+						control_active = false;
+						if (!startup.prompted && (!has_self_check_flag || self_check_done))
+						{
+							prompt_startup_mode();
+						}
+						std::cout << "Handle582 pause: OFF, waiting for startup mode selection." << std::endl;
 					}
-					std::cout << "Handle582 pause: OFF, waiting for startup mode selection." << std::endl;
+					else if (estop_hold_active)
+					{
+						std::cout << "Handle582 pause released, waiting for PLC hold to clear." << std::endl;
+					}
+					else
+					{
+						std::cout << "Handle582 pause released, resync pending." << std::endl;
+					}
+				}
+				else if (!estop_hold_active && sync_all(20))
+				{
+					control_active = true;
+					std::cout << "Handle582 pause: OFF, control resumed." << std::endl;
 				}
 				else if (estop_hold_active)
 				{
@@ -1937,19 +1956,11 @@ int main(int argc, char* argv[])
 					std::cout << "Handle582 pause released, resync pending." << std::endl;
 				}
 			}
-			else if (!estop_hold_active && sync_all(20))
-			{
-				control_active = true;
-				std::cout << "Handle582 pause: OFF, control resumed." << std::endl;
-			}
-			else if (estop_hold_active)
-			{
-				std::cout << "Handle582 pause released, waiting for PLC hold to clear." << std::endl;
-			}
-			else
-			{
-				std::cout << "Handle582 pause released, resync pending." << std::endl;
-			}
+		}
+		else if (pause_pressed != pause_pressed_prev)
+		{
+			// 正式控制阶段下，b6 仅用于切换电缸5，不再触发 freeze/pause。
+			std::cout << "Handle582 b6: " << (pause_pressed ? "pressed, cylinder5 -> 0." : "released, cylinder5 -> 2000.") << std::endl;
 		}
 		pause_pressed_prev = pause_pressed;
 
@@ -2312,6 +2323,12 @@ int main(int argc, char* argv[])
 		unsigned short cylinder2_cmd = cyl.cyl2_clamp;
 		unsigned short cylinder3_cmd = cyl.cyl3_follow_release;
 		unsigned short cylinder4_cmd = cyl.cyl4_follow_release;
+		// 电缸5默认维持初始化值；正式控制阶段由 582 b6 实时切换。
+		unsigned short cylinder5_cmd = 2000;
+		if (formal_control_stage)
+		{
+			cylinder5_cmd = pause_pressed ? static_cast<unsigned short>(0) : static_cast<unsigned short>(2000);
+		}
 		bool axis4_manual_forward_req = axis4_reverse_request;
 		bool axis4_manual_reverse_req = axis4_forward_request;
 
@@ -3115,6 +3132,7 @@ int main(int argc, char* argv[])
 			ads.ADSWrite(AdsSymbol::cylinder2_value, sizeof(cylinder2_cmd), &cylinder2_cmd);
 			ads.ADSWrite(AdsSymbol::cylinder3_value, sizeof(cylinder3_cmd), &cylinder3_cmd);
 			ads.ADSWrite(AdsSymbol::cylinder4_value, sizeof(cylinder4_cmd), &cylinder4_cmd);
+			ads.ADSWrite(AdsSymbol::cylinder5_value, sizeof(cylinder5_cmd), &cylinder5_cmd);
 		}
 
 		write_axis4_manual_requests(axis4_manual_forward_req, axis4_manual_reverse_req);
