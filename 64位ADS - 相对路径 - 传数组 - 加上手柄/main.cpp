@@ -880,13 +880,13 @@ int main(int argc, char* argv[])
 	const unsigned char axis6_independent_button_mask = cfg.btn_b6;
 	const unsigned char axis6_cooperative_button_mask = cfg.btn_b0;
 	// Handle587（本轮重映射约定）：
-	// - b6: 导丝模式主键（独立/协同组合）
-	// - b0: 导丝反向/协同组合键（仅在 b6 未按下时作为反向判定）
+	// - b6: 导丝模式主键（独立）
+	// - b0: 导丝反向键（仅在 b6 未按下时作为反向判定）
 	// - b7: 本轮不参与导丝模式与反向判定
 	// Handle587 在基值 0x06 下的状态：
 	// 0x46 -> 独立导丝（正向）
 	// 0x07 -> 独立导丝（反向）
-	// 0x47 -> 协同导丝
+	// 0x47 -> 独立导丝（取消“同时按 b6+b0 进入协同模式”）
 	// Handle 582 上 Axis4 点动目标状态：
 	// 正向  ~= 0x86（b7 开，b5 关，基值 0x06）
 	// 反向  ~= 0x26（b5 开，b7 关，基值 0x06）
@@ -1879,14 +1879,10 @@ int main(int argc, char* argv[])
 		// 导丝模式请求解码（587）：
 		// - b6=1,b0=0 -> Independent（0x46）
 		// - b6=0,b0=1 -> Independent + Reverse（0x07）
-		// - b6=1,b0=1 -> Cooperative（0x47）
+		// - b6=1,b0=1 -> Independent（0x47，协同模式入口已取消）
 		// - b6=0,b0=0 -> None（0x06）
 		GuidewireMode requested_guidewire_mode = GuidewireMode::None;
-		if (guidewire_independent_pressed && guidewire_cooperative_pressed)
-		{
-			requested_guidewire_mode = GuidewireMode::Cooperative;
-		}
-		else if (guidewire_independent_pressed || guidewire_cooperative_pressed)
+		if (guidewire_independent_pressed || guidewire_cooperative_pressed)
 		{
 			requested_guidewire_mode = GuidewireMode::Independent;
 		}
@@ -2132,7 +2128,7 @@ int main(int argc, char* argv[])
 			}
 		}
 
-		// 5) 导丝模式由 handle 587 的边沿触发（0x46独立、0x07独立反向、0x47协同），并在切换时重同步。
+		// 5) 导丝模式由 handle 587 的边沿触发（0x46独立、0x07独立反向、0x47也按独立处理），并在切换时重同步。
 		if (requested_guidewire_mode != requested_guidewire_mode_prev)
 		{
 			if (requested_guidewire_mode == GuidewireMode::None)
