@@ -1447,7 +1447,7 @@ External Setpoint Generation:
 		</System>
 		<Motion>
 			<NC>
-				<SafTask Priority="4" CycleTime="100000" AmsPort="501" IoAtBegin="true" SafTaskInfo="256">
+				<SafTask Priority="4" CycleTime="10000" AmsPort="501" IoAtBegin="true" SafTaskInfo="256">
 					<Name>NC-Task 1 SAF</Name>
 					<Vars VarGrpType="1" InsertType="1">
 						<Name>Inputs</Name>
@@ -1615,7 +1615,7 @@ External Setpoint Generation:
 						<OtherSettings AllowMotionCmdToSlave="true"/>
 					</AxisPara>
 					<Encoder Name="Enc" EncType="19">
-						<EncPara ScaleFactorNumerator="360" ScaleFactorDenominator="563609" Inverse="true" EncMode="1" MaxCount="#xffffffff">
+						<EncPara ScaleFactorNumerator="360" ScaleFactorDenominator="563609" EncMode="1" MaxCount="#xffffffff">
 							<Inc RefSoftSyncMask="#x001fffff"/>
 						</EncPara>
 						<Vars VarGrpType="1">
@@ -2473,7 +2473,7 @@ External Setpoint Generation:
 		</Motion>
 		<Plc>
 			<Project GUID="{DD2ED881-765C-44ED-90B1-8AE0D6051941}" Name="Untitled2" PrjFilePath="Untitled2\Untitled2.plcproj" TmcFilePath="Untitled2\Untitled2.tmc" ReloadTmc="true" AmsPort="851" FileArchiveSettings="#x000e" SymbolicMapping="true">
-				<Instance Id="#x08502000" TcSmClass="TComPlcObjDef" KeepUnrestoredLinks="2" TmcPath="Untitled2\Untitled2.tmc" TmcHash="{DDF366AE-4DAA-FD32-6394-00F6A3E1D04F}">
+				<Instance Id="#x08502000" TcSmClass="TComPlcObjDef" KeepUnrestoredLinks="2" TmcPath="Untitled2\Untitled2.tmc" TmcHash="{A69150B6-102F-D1BD-6D7C-A798FB4C6146}">
 					<Name>Untitled2 Instance</Name>
 					<CLSID ClassFactory="TcPlc30">{08500001-0000-0000-F000-000000000064}</CLSID>
 					<Vars VarGrpType="1">
@@ -2507,15 +2507,19 @@ External Setpoint Generation:
 							<Type GUID="{25521FAA-EA5F-4C7F-8864-BBCCDACD2E98}" Namespace="MC">NCTOPLC_AXIS_REF</Type>
 						</Var>
 						<Var>
-							<Name>G.fn_value</Name>
+							<Name>G.ft_1_value</Name>
 							<Type>INT</Type>
 						</Var>
 						<Var>
-							<Name>G.ft_value</Name>
+							<Name>G.fn_1_value</Name>
 							<Type>INT</Type>
 						</Var>
 						<Var>
-							<Name>G.test_value</Name>
+							<Name>G.fn_2_value</Name>
+							<Type>INT</Type>
+						</Var>
+						<Var>
+							<Name>G.ft_2_value</Name>
 							<Type>INT</Type>
 						</Var>
 					</Vars>
@@ -2567,6 +2571,11 @@ External Setpoint Generation:
 						<Var>
 							<Name>G.cylinder4_value</Name>
 							<Comment><![CDATA[ 电缸4控制值 (安装在轴6机构上)]]></Comment>
+							<Type>WORD</Type>
+						</Var>
+						<Var>
+							<Name>G.cylinder5_value</Name>
+							<Comment><![CDATA[ 电缸5控制值 (安装在轴3机构上控制y阀)]]></Comment>
 							<Type>WORD</Type>
 						</Var>
 					</Vars>
@@ -2922,7 +2931,7 @@ External Setpoint Generation:
 					</EtherCAT>
 				</Box>
 				<Box Id="3" BoxType="9099" BoxFlags="#x00000020">
-					<Name>Box 3 (EtherCat-control-node)</Name>
+					<Name>Box 3</Name>
 					<ImageId>1000</ImageId>
 					<EtherCAT SlaveType="2" PdiType="#x0e05" MboxDataLinkLayer="true" StateMBoxPolling="true" CycleMBoxPollingTime="0" CoeType="35" VendorId="#x00000009" ProductCode="#x26483052" RevisionNo="#x00020111" InfoDataAddr="true" TimeoutStateChange1="2000" TimeoutStateChange2="9000" TimeoutMailbox2="2000" PortPhys="17" MaxSlotCount="256" MaxSlotGroupCount="1" SlotPdoIncrement="1" SlotIndexIncrement="16" Type="EtherCat-control-V1.6" Desc="EtherCat-control-node" PortABoxInfo="#x01000002">
 						<SyncMan>001080002600010001000000220080008000001026010000</SyncMan>
@@ -3739,7 +3748,7 @@ External Setpoint Generation:
 		<MappingInfo Identifier="{00000000-2001-0850-0020-500821000403}" Id="#x02030020"/>
 		<MappingInfo Identifier="{00000000-0050-0304-1000-040350000403}" Id="#x02030010"/>
 		<MappingInfo Identifier="{00000000-0060-0304-1000-040362000403}" Id="#x02030040"/>
-		<MappingInfo Identifier="{05000010-2001-0850-1000-040300205008}" Id="#x02030030" Watchdog="04000000280000000400000004000000"/>
+		<MappingInfo Identifier="{05000010-2001-0850-1000-040300205008}" Id="#x02030030" Watchdog="04000000040000000400000004000000"/>
 		<OwnerA Name="TINC^NC-Task 1 SAF^Axes^Axis 1">
 			<OwnerB Name="TIID^Device 5 (EtherCAT)^Drive 4 (Micro 4804 MZ-CAT-STO )">
 				<Link VarA="Drive^Inputs^In^nDataIn1" VarB="Transmit PDO 2 mapping parameters^Following error actual value"/>
@@ -3770,6 +3779,7 @@ External Setpoint Generation:
 				<Link VarA="Drive^Outputs^Out^nCtrl5" VarB="RPDO 1 mapping parameter^Operation mode"/>
 				<Link VarA="Drive^Outputs^Out^nDataOut1" VarB="RPDO 1 mapping parameter^Position set-point"/>
 				<Link VarA="Drive^Outputs^Out^nDataOut2" VarB="RPDO 1 mapping parameter^Velocity set-point"/>
+				<Link VarA="Enc^Inputs^In^nDataIn1" VarB="TPDO 1 mapping parameter^Actual position"/>
 				<Link VarA="Enc^Inputs^In^nDataIn7" VarB="TPDO 1 mapping parameter^Actual velocity"/>
 				<Link VarA="Enc^Inputs^In^nState4" VarB="WcState^InputToggle" Size="1" OffsA="1"/>
 				<Link VarA="Enc^Inputs^In^nState4" VarB="WcState^WcState"/>
@@ -3867,15 +3877,17 @@ External Setpoint Generation:
 		</OwnerA>
 		<OwnerA Name="TIPC^Untitled2^Untitled2 Instance">
 			<OwnerB Name="TIID^Device 5 (EtherCAT)^Box 2 (EtherCat-control-node)">
-				<Link VarA="PlcTask Inputs^G.fn_value" VarB="Data Inputs^fN"/>
-				<Link VarA="PlcTask Inputs^G.ft_value" VarB="Data Inputs^fT"/>
+				<Link VarA="PlcTask Inputs^G.fn_2_value" VarB="Data Inputs^fN"/>
+				<Link VarA="PlcTask Inputs^G.ft_2_value" VarB="Data Inputs^fT"/>
 				<Link VarA="PlcTask Outputs^G.cylinder3_value" VarB="Outputs^Value_1"/>
 				<Link VarA="PlcTask Outputs^G.cylinder4_value" VarB="Outputs^Value_2"/>
 			</OwnerB>
-			<OwnerB Name="TIID^Device 5 (EtherCAT)^Box 3 (EtherCat-control-node)">
-				<Link VarA="PlcTask Inputs^G.test_value" VarB="Data Inputs^Data_1"/>
+			<OwnerB Name="TIID^Device 5 (EtherCAT)^Box 3">
+				<Link VarA="PlcTask Inputs^G.fn_1_value" VarB="Data Inputs^Data_3"/>
+				<Link VarA="PlcTask Inputs^G.ft_1_value" VarB="Data Inputs^Data_4"/>
 				<Link VarA="PlcTask Outputs^G.cylinder1_value" VarB="Outputs^Value_1"/>
 				<Link VarA="PlcTask Outputs^G.cylinder2_value" VarB="Outputs^Value_2"/>
+				<Link VarA="PlcTask Outputs^G.cylinder5_value" VarB="Outputs^Value_3"/>
 			</OwnerB>
 			<OwnerB Name="TINC^NC-Task 1 SAF^Axes^Axis 1">
 				<Link VarA="PlcTask Inputs^G.axis[1].NcToPlc" VarB="Outputs^ToPlc"/>
