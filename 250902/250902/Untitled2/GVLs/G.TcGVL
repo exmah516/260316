@@ -68,6 +68,8 @@ VAR_GLOBAL
 	cylinder3_value		AT %Q* : WORD;		// 电缸3控制值 (安装在轴5机构上)
 	cylinder4_value		AT %Q* : WORD;		// 电缸4控制值 (安装在轴6机构上)
 	cylinder5_value		AT %Q* : WORD;		// 电缸5控制值 (安装在轴3机构上控制y阀)
+	cylinder5_cmd		: WORD := 2000;		// 电缸5命令缓存（上位机写此变量，由 handle 周期下发到输出）
+	cylinder5_press_req	: BOOL := FALSE;	// 电缸5按键请求（TRUE=按下b6，输出0；FALSE=松开b6，输出2000）
 	
 	
 	ft_1_value			AT %I* : INT;

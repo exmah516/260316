@@ -120,6 +120,8 @@ END_IF
 
 // selfcheck 期间固定初始化电缸5，避免阶段切换引入额外切换值。
 G.cylinder5_value := 2000;
+G.cylinder5_cmd := 2000;
+G.cylinder5_press_req := FALSE;
 
 all_reach_limit := TRUE;
 FOR i:=1 TO 7 DO

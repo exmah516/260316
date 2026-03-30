@@ -294,6 +294,12 @@ IF has_axis_error THEN
 END_IF
 
 G.estop_hold_req := FALSE;
+// 电缸5统一由上位机按键请求驱动，避免现场对 WORD 直写链路的不可控覆盖。
+IF G.cylinder5_press_req THEN
+	G.cylinder5_value := 0;
+ELSE
+	G.cylinder5_value := 2000;
+END_IF
 
 FOR i:=1 TO 7 DO
 	spg_enable_exec[i] := FALSE;

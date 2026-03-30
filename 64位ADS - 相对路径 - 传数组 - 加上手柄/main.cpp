@@ -1,6 +1,5 @@
 #include "Handle.h"
 #include <ADSComm1.h>
-
 #include <cmath>
 #include <clocale>
 #include <conio.h>
@@ -211,6 +210,8 @@ namespace AdsSymbol
 	const char* cylinder2_value = "G.cylinder2_value";
 	const char* cylinder3_value = "G.cylinder3_value";
 	const char* cylinder4_value = "G.cylinder4_value";
+	const char* cylinder5_cmd = "G.cylinder5_cmd";
+	const char* cylinder5_press_req = "G.cylinder5_press_req";
 	const char* cylinder5_value = "G.cylinder5_value";
 	const char* self_check_done = "G.self_check_done";
 	const char* handle_reinit_req = "G.handle_reinit_req";
@@ -227,6 +228,8 @@ namespace AdsSymbol
 	const char* axis4_manual_busy = "G.axis4_manual_busy";
 	const char* axis4_manual_error = "G.axis4_manual_error";
 	const char* axis4_manual_error_id = "G.axis4_manual_error_id";
+	const char* gen_state = "G.gen_state";
+	const char* app_name = "TwinCAT_SystemInfoVarList._AppInfo.AppName";
 
 	const AxisReturnAdsSymbols axis1_return = {
 		"G.axis1_return_cmd.Req",
@@ -303,6 +306,8 @@ struct ControlConfig
 	double axis1_window_left_from_left_mm = 3.0;
 	double axis1_window_right_from_left_mm = 18.0;
 	double axis6_independent_window_size_mm = 20.0;
+	// 轴6窗口整体平移：正值表示远离左限位方向平移（单位 mm）。
+	double axis6_window_shift_from_left_mm = 3.0;
 	double axis56_ready_gap_mm = 20.0;
 	double axis3_delivery_stop_from_left_mm = 20.0;
 	double axis3_delivery_release_hysteresis_mm = 2.0;
@@ -352,7 +357,7 @@ struct ControlConfig
 	unsigned short startup_cyl4_open = 0;
 	unsigned short startup_cyl3_clamp = 0;
 	unsigned short startup_cyl4_clamp = 1000;
-	double startup_axis1_ready_from_left_mm = 30.0;
+	double startup_axis1_ready_from_left_mm = 20.0;
 	double startup_axis5_ready_from_left_mm = 290.0;
 	double startup_axis3_ready_from_left_mm = 635.0;
 	// 在 axis3 完全到达目标前提前触发 cylinder2 夹紧；现场调参使其领先约 0.5 s。
@@ -934,6 +939,18 @@ int main(int argc, char* argv[])
 		}
 	}
 
+	// 诊断：打印当前 ADS 实际连接到的 PLC 应用名，排查“连错实例/端口”问题。
+	char plc_app_name[64] = { 0 };
+	if (ads.ADSRead(AdsSymbol::app_name, sizeof(plc_app_name), plc_app_name))
+	{
+		plc_app_name[sizeof(plc_app_name) - 1] = '\0';
+		std::cout << "ADS 目标 PLC 应用: " << plc_app_name << std::endl;
+	}
+	else
+	{
+		std::cout << "警告：读取 PLC 应用名失败，错误: " << ads.GetLastError() << std::endl;
+	}
+
 	// 力输出统一入口：按 setforce(F,N) 语义分别下发到 582/587。
 	auto apply_force_output = [&](double force_582_f, double force_582_n, double force_587_f, double force_587_n)
 	{
@@ -1177,11 +1194,12 @@ int main(int argc, char* argv[])
 	// window_right_abs 为窗口右端，左端按窗口长度回推，并自动钳制到左限位。
 	auto set_axis6_independent_window = [&](double window_right_abs, bool log_clamp) -> bool
 	{
-		const double requested_left_abs = window_right_abs - cfg.axis6_independent_window_size_mm;
+		const double shifted_window_right_abs = window_right_abs + cfg.axis6_window_shift_from_left_mm;
+		const double requested_left_abs = shifted_window_right_abs - cfg.axis6_independent_window_size_mm;
 		const double clamped_left_abs = (requested_left_abs < plc_leftlimit[5]) ? plc_leftlimit[5] : requested_left_abs;
 
 		axis6_crawl.start_abs = clamped_left_abs;
-		axis6_crawl.end_abs = window_right_abs;
+		axis6_crawl.end_abs = shifted_window_right_abs;
 
 		if ((axis6_crawl.end_abs - axis6_crawl.start_abs) < cfg.crawl_arrive_tol_mm)
 		{
@@ -1766,6 +1784,8 @@ int main(int argc, char* argv[])
 	ForceSampleFrame force_sample;
 	int loop_count = 0;
 	DWORD force_log_warn_last_ms = 0;
+	bool cylinder5_diag_edge_pending = false;
+	DWORD cylinder5_diag_last_log_ms = 0;
 	startup_smoothing_bypass = false;
 	ads.ADSWrite(AdsSymbol::startup_smoothing_bypass, sizeof(startup_smoothing_bypass), &startup_smoothing_bypass);
 
@@ -1928,6 +1948,7 @@ int main(int argc, char* argv[])
 		else if (pause_pressed != pause_pressed_prev)
 		{
 			// 正式控制阶段下，b6 仅用于切换电缸5，不再触发 freeze/pause。
+			cylinder5_diag_edge_pending = true;
 			std::cout << "582 b6："
 				<< (pause_pressed ? "按下，电缸5 -> 0。" : "松开，电缸5 -> 2000。")
 				<< std::endl;
@@ -3066,14 +3087,71 @@ int main(int argc, char* argv[])
 		}
 
 		// 10) 仅在运动激活时驱动气缸；快速回退标志始终会写入。
+		bool cylinder5_write_attempted = false;
+		bool cylinder5_write_ok = false;
+		bool cylinder5_req = formal_control_stage ? pause_pressed : false;
 		if (!freeze_active && (control_active || motion_startup_active))
 		{
 			ads.ADSWrite(AdsSymbol::cylinder1_value, sizeof(cylinder1_cmd), &cylinder1_cmd);
 			ads.ADSWrite(AdsSymbol::cylinder2_value, sizeof(cylinder2_cmd), &cylinder2_cmd);
 			ads.ADSWrite(AdsSymbol::cylinder3_value, sizeof(cylinder3_cmd), &cylinder3_cmd);
 			ads.ADSWrite(AdsSymbol::cylinder4_value, sizeof(cylinder4_cmd), &cylinder4_cmd);
-			ads.ADSWrite(AdsSymbol::cylinder5_value, sizeof(cylinder5_cmd), &cylinder5_cmd);
+			cylinder5_write_attempted = true;
+			// 电缸5改为写 BOOL 请求，再由 PLC handle 周期映射为 0/2000。
+			cylinder5_write_ok = ads.ADSWrite(AdsSymbol::cylinder5_press_req, sizeof(cylinder5_req), &cylinder5_req);
 		}
+
+		const DWORD cylinder5_diag_now_ms = GetTickCount();
+		// const bool cylinder5_need_diag = cylinder5_diag_edge_pending || (cylinder5_write_attempted && !cylinder5_write_ok);
+		const bool cylinder5_need_diag = false;
+		if (cylinder5_need_diag &&
+			(cylinder5_diag_edge_pending || (cylinder5_diag_now_ms - cylinder5_diag_last_log_ms) >= 500))
+		{
+			bool cylinder5_req_readback = false;
+			const bool cylinder5_req_read_ok =
+				ads.ADSRead(AdsSymbol::cylinder5_press_req, sizeof(cylinder5_req_readback), &cylinder5_req_readback);
+			unsigned short cylinder5_cmd_readback = 0;
+			const bool cylinder5_cmd_read_ok =
+				ads.ADSRead(AdsSymbol::cylinder5_cmd, sizeof(cylinder5_cmd_readback), &cylinder5_cmd_readback);
+			unsigned short cylinder5_out_readback = 0;
+			const bool cylinder5_out_read_ok =
+				ads.ADSRead(AdsSymbol::cylinder5_value, sizeof(cylinder5_out_readback), &cylinder5_out_readback);
+			unsigned short gen_state_now = 0;
+			const bool gen_state_read_ok =
+				ads.ADSRead(AdsSymbol::gen_state, sizeof(gen_state_now), &gen_state_now);
+			bool self_check_done_now = false;
+			const bool self_check_read_ok =
+				ads.ADSRead(AdsSymbol::self_check_done, sizeof(self_check_done_now), &self_check_done_now);
+			std::cout << "电缸5诊断：cmd=" << cylinder5_cmd
+				<< "，write_attempt=" << (cylinder5_write_attempted ? "Y" : "N")
+				<< "，write_ok=" << (cylinder5_write_ok ? "Y" : "N")
+				<< "，req=" << (cylinder5_req ? "1" : "0")
+				<< "，req_read_ok=" << (cylinder5_req_read_ok ? "Y" : "N")
+				<< "，req_readback=" << (cylinder5_req_read_ok ? (cylinder5_req_readback ? "1" : "0") : "N/A")
+				<< "，cmd_read_ok=" << (cylinder5_cmd_read_ok ? "Y" : "N")
+				<< "，cmd_readback=" << (cylinder5_cmd_read_ok ? std::to_string(cylinder5_cmd_readback) : "N/A")
+				<< "，out_read_ok=" << (cylinder5_out_read_ok ? "Y" : "N")
+				<< "，out_readback=" << (cylinder5_out_read_ok ? std::to_string(cylinder5_out_readback) : "N/A")
+				<< "，gen_state=" << (gen_state_read_ok ? std::to_string(gen_state_now) : "N/A")
+				<< "，self_check_done=" << (self_check_read_ok ? (self_check_done_now ? "1" : "0") : "N/A")
+				<< "，formal=" << (formal_control_stage ? "Y" : "N")
+				<< "，pause=" << (pause_pressed ? "1" : "0")
+				<< "，freeze=" << (freeze_active ? "Y" : "N")
+				<< "，estop_hold=" << (estop_hold_active ? "Y" : "N")
+				<< "，control_active=" << (control_active ? "Y" : "N")
+				<< "，startup_active=" << (motion_startup_active ? "Y" : "N");
+			if (cylinder5_write_attempted && !cylinder5_write_ok)
+			{
+				std::cout << "，write_err=" << ads.GetLastError();
+			}
+			if (!cylinder5_req_read_ok || !cylinder5_cmd_read_ok || !cylinder5_out_read_ok)
+			{
+				std::cout << "，read_err=" << ads.GetLastError();
+			}
+			std::cout << std::endl;
+			cylinder5_diag_last_log_ms = cylinder5_diag_now_ms;
+		}
+		cylinder5_diag_edge_pending = false;
 
 		write_axis4_manual_requests(axis4_manual_forward_req, axis4_manual_reverse_req);
 		ads.ADSWrite(AdsSymbol::startup_smoothing_bypass, sizeof(startup_smoothing_bypass), &startup_smoothing_bypass);
