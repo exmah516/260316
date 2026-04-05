@@ -524,8 +524,8 @@ struct ForceLogState
 			return false;
 		}
 
-		// 表头固定为 Force_sensor 约定字段顺序。
-		file << "timestamp,ft_1_value,fn_1_value,fn_2_value,ft_2_value\n";
+		// 表头固定为 Force_sensor 约定字段顺序，并在末尾追加运行态编码列。
+		file << "timestamp,ft_1_value,fn_1_value,fn_2_value,ft_2_value,mode_code,reverse_code,push_pull_code,rot_sign_code\n";
 		last_sample_ms = 0;
 		last_buffer_flush_ms = GetTickCount();
 		return true;
@@ -544,7 +544,16 @@ struct ForceLogState
 		return (last_sample_ms == 0) || ((now_ms - last_sample_ms) >= period_ms);
 	}
 
-	void append_sample(DWORD now_ms, short ft1, short fn1, short fn2, short ft2)
+	void append_sample(
+		DWORD now_ms,
+		short ft1,
+		short fn1,
+		short fn2,
+		short ft2,
+		int mode_code,
+		int reverse_code,
+		int push_pull_code,
+		int rot_sign_code)
 	{
 		last_sample_ms = now_ms;
 		if (!file.is_open())
@@ -562,6 +571,14 @@ struct ForceLogState
 		line_buffer += std::to_string(static_cast<int>(fn2));
 		line_buffer += ",";
 		line_buffer += std::to_string(static_cast<int>(ft2));
+		line_buffer += ",";
+		line_buffer += std::to_string(mode_code);
+		line_buffer += ",";
+		line_buffer += std::to_string(reverse_code);
+		line_buffer += ",";
+		line_buffer += std::to_string(push_pull_code);
+		line_buffer += ",";
+		line_buffer += std::to_string(rot_sign_code);
 		line_buffer += "\n";
 
 		++buffered_lines;
@@ -1192,6 +1209,8 @@ int main(int argc, char* argv[])
 	// 线性增量控制：上一拍滤波值与当前累计目标（绝对坐标）。
 	double axis1_prev_linear_filtered = 0.0;
 	double axis6_prev_linear_filtered = 0.0;
+	double axis1_prev_rot_filtered = 0.0;
+	double axis6_prev_rot_filtered = 0.0;
 	double axis1_follow_cmd_abs = 0.0;
 	double axis6_follow_cmd_abs = 0.0;
 	// 正反切换一次性触发保护：仅在同模式内切换正反时拉起。
@@ -1329,6 +1348,7 @@ int main(int argc, char* argv[])
 		get_average_handle_pose(*axis1_input_handle, samples, axis1_crawl.handle_ref, axis1_crawl.rot_ref);
 		axis1_handle_filter.reset(axis1_crawl.handle_ref, axis1_crawl.rot_ref);
 		axis1_prev_linear_filtered = axis1_handle_filter.axis0_filtered;
+		axis1_prev_rot_filtered = axis1_handle_filter.axis1_filtered;
 		axis1_crawl.base_rel = plc_act_pos[0];
 		axis1_crawl.rot_base_rel = preserved_axis2_hold_rel;
 		axis1_follow_cmd_abs = plc_act_pos[0] + plc_init_pos[0];
@@ -1389,6 +1409,7 @@ int main(int argc, char* argv[])
 		get_average_handle_pose(*axis6_input_handle, samples, axis6_crawl.handle_ref, axis6_crawl.rot_ref);
 		axis6_handle_filter.reset(axis6_crawl.handle_ref, axis6_crawl.rot_ref);
 		axis6_prev_linear_filtered = axis6_handle_filter.axis0_filtered;
+		axis6_prev_rot_filtered = axis6_handle_filter.axis1_filtered;
 		axis6_crawl.base_rel = plc_act_pos[5];
 		axis6_crawl.rot_base_rel = preserved_axis7_hold_rel;
 		axis6_follow_cmd_abs = plc_act_pos[5] + plc_init_pos[5];
@@ -1478,6 +1499,8 @@ int main(int argc, char* argv[])
 		axis6_handle_filter.reset(axis6_crawl.handle_ref, axis6_crawl.rot_ref);
 		axis1_prev_linear_filtered = axis1_handle_filter.axis0_filtered;
 		axis6_prev_linear_filtered = axis6_handle_filter.axis0_filtered;
+		axis1_prev_rot_filtered = axis1_handle_filter.axis1_filtered;
+		axis6_prev_rot_filtered = axis6_handle_filter.axis1_filtered;
 
 		if (!read_plc_state())
 		{
@@ -1605,6 +1628,7 @@ int main(int argc, char* argv[])
 		get_average_handle_pose(*axis6_input_handle, 20, axis6_crawl.handle_ref, axis6_crawl.rot_ref);
 		axis6_handle_filter.reset(axis6_crawl.handle_ref, axis6_crawl.rot_ref);
 		axis6_prev_linear_filtered = axis6_handle_filter.axis0_filtered;
+		axis6_prev_rot_filtered = axis6_handle_filter.axis1_filtered;
 		axis6_crawl.base_rel = plc_act_pos[5];
 		axis6_crawl.rot_base_rel = axis7_hold_rel;
 		axis6_follow_cmd_abs = plc_act_pos[5] + plc_init_pos[5];
@@ -1798,6 +1822,8 @@ int main(int argc, char* argv[])
 	axis6_follow_cmd_abs = plc_act_pos[5] + plc_init_pos[5];
 	axis1_prev_linear_filtered = axis1_handle_filter.axis0_filtered;
 	axis6_prev_linear_filtered = axis6_handle_filter.axis0_filtered;
+	axis1_prev_rot_filtered = axis1_handle_filter.axis1_filtered;
+	axis6_prev_rot_filtered = axis6_handle_filter.axis1_filtered;
 	axis1_prev_abs_for_trigger = axis1_follow_cmd_abs;
 	axis6_prev_abs_for_trigger = axis6_follow_cmd_abs;
 	axis1_prev_abs_valid = true;
@@ -2376,6 +2402,19 @@ int main(int argc, char* argv[])
 		{
 			prompt_startup_mode();
 		}
+		// 力感 CSV 元数据编码：
+		// mode_code: 0=导管, 1=导丝
+		// reverse_code: 活动模式对应的正反向键状态(0/1)
+		// push_pull_code: +1/-1/0（活动模式线性增量方向）
+		// rot_sign_code: +1/-1/0（活动模式旋转关节增量符号）
+		int force_mode_code = (guidewire_mode == GuidewireMode::None) ? 0 : 1;
+		int force_reverse_code =
+			(guidewire_mode == GuidewireMode::None)
+			? (axis1_reverse_pressed ? 1 : 0)
+			: (axis6_effective_reverse_pressed ? 1 : 0);
+		int force_push_pull_code = 0;
+		int force_rot_sign_code = 0;
+		const double force_rot_sign_deadband_rad = 1e-4;
 
 		unsigned short cylinder1_cmd = cyl.cyl1_open;
 		unsigned short cylinder2_cmd = cyl.cyl2_clamp;
@@ -2430,6 +2469,30 @@ int main(int argc, char* argv[])
 			const bool axis6_linear_increment_active = std::abs(axis6_linear_increment_mm) > 0.0;
 			const double axis6_window_left_abs_now = axis6_crawl.start_abs;
 			const double axis6_window_right_abs_now = axis6_crawl.end_abs;
+			const bool force_is_catheter_mode = (guidewire_mode == GuidewireMode::None);
+			const double active_linear_increment_mm =
+				force_is_catheter_mode ? axis1_linear_increment_mm : axis6_linear_increment_mm;
+			if (active_linear_increment_mm > 0.0)
+			{
+				force_push_pull_code = 1;
+			}
+			else if (active_linear_increment_mm < 0.0)
+			{
+				force_push_pull_code = -1;
+			}
+
+			const double axis1_rot_increment_rad = axis1_rot_filtered - axis1_prev_rot_filtered;
+			const double axis6_rot_increment_rad = axis6_rot_filtered - axis6_prev_rot_filtered;
+			const double active_rot_increment_rad =
+				force_is_catheter_mode ? axis1_rot_increment_rad : axis6_rot_increment_rad;
+			if (active_rot_increment_rad > force_rot_sign_deadband_rad)
+			{
+				force_rot_sign_code = 1;
+			}
+			else if (active_rot_increment_rad < -force_rot_sign_deadband_rad)
+			{
+				force_rot_sign_code = -1;
+			}
 
 			auto hold_axis1_mirror_axes_for_return = [&]()
 			{
@@ -3139,6 +3202,8 @@ int main(int argc, char* argv[])
 
 			axis1_prev_linear_filtered = axis1_linear_filtered;
 			axis6_prev_linear_filtered = axis6_linear_filtered;
+			axis1_prev_rot_filtered = axis1_rot_filtered;
+			axis6_prev_rot_filtered = axis6_rot_filtered;
 			axis1_prev_abs_for_trigger = axis1_abs;
 			axis6_prev_abs_for_trigger = axis6_abs;
 			axis1_prev_abs_valid = true;
@@ -3254,7 +3319,11 @@ int main(int argc, char* argv[])
 					force_sample.ft_1_value,
 					force_sample.fn_1_value,
 					force_sample.fn_2_value,
-					force_sample.ft_2_value);
+					force_sample.ft_2_value,
+					force_mode_code,
+					force_reverse_code,
+					force_push_pull_code,
+					force_rot_sign_code);
 			}
 			else if ((force_log_now_ms - force_log_warn_last_ms) >= 1000)
 			{
@@ -3279,6 +3348,8 @@ int main(int argc, char* argv[])
 		// 无论本拍是否进入控制分支，都更新线性差分基准，避免暂停/等待期间累积大跳变。
 		axis1_prev_linear_filtered = axis1_handle_filter.axis0_filtered;
 		axis6_prev_linear_filtered = axis6_handle_filter.axis0_filtered;
+		axis1_prev_rot_filtered = axis1_handle_filter.axis1_filtered;
+		axis6_prev_rot_filtered = axis6_handle_filter.axis1_filtered;
 	}
 
 	startup_smoothing_bypass = false;
