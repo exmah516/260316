@@ -505,8 +505,8 @@ struct ForceOutputCmd
 
 struct ForceLogState
 {
-	// 力感记录默认开启；period_ms=0 表示每个主循环都记录。
-	bool enabled = true;
+	// 力感记录与采样使能；period_ms=0 表示每个主循环都记录。
+	bool enabled = false;
 	DWORD period_ms = 0;
 	DWORD last_sample_ms = 0;
 	DWORD last_buffer_flush_ms = 0;
@@ -1837,21 +1837,31 @@ int main(int argc, char* argv[])
 	std::cout << "力反馈：关闭（按 F 键切换）。" << std::endl;
 	clear_force_output();
 
-	// 力感记录默认随 main 启动；文件名包含日期与 24 小时制时间（到秒）。
-	force_log.enabled = true;
+	// 力感记录改为在用户选择 C/S 后再启动；文件名包含日期与 24 小时制时间（到秒）。
 	force_log.period_ms = cfg.force_log_period_ms;
-	const std::string force_log_filename = build_force_log_filename();
-	if (force_log.open_file(force_log_filename))
+	force_log.enabled = false;
+	bool force_log_started = false;
+	auto ensure_force_log_started = [&]()
 	{
-		std::cout << "传感数据已保存到："
-			<< force_log_filename
-			<< "（采样周期 ms=" << force_log.period_ms << "）"
-			<< std::endl;
-	}
-	else
-	{
-		std::cout << "传感数据记录已关闭（文件打开失败）。" << std::endl;
-	}
+		if (force_log_started)
+		{
+			return;
+		}
+		force_log.enabled = true;
+		const std::string force_log_filename = build_force_log_filename();
+		if (force_log.open_file(force_log_filename))
+		{
+			std::cout << "传感数据已保存到："
+				<< force_log_filename
+				<< "（采样周期 ms=" << force_log.period_ms << "）"
+				<< std::endl;
+		}
+		else
+		{
+			std::cout << "传感数据文件打开失败：将继续采样但不写入 CSV。" << std::endl;
+		}
+		force_log_started = true;
+	};
 
 	if (!has_self_check_flag || self_check_done)
 	{
@@ -2122,6 +2132,7 @@ int main(int argc, char* argv[])
 						startup.completed = true;
 						startup.prompted = false;
 						control_active = true;
+						ensure_force_log_started();
 						std::cout << "已进入直接控制。" << std::endl;
 					}
 					else
@@ -2149,6 +2160,7 @@ int main(int argc, char* argv[])
 					else if (start_startup_sequence())
 					{
 						control_active = false;
+						ensure_force_log_started();
 						std::cout << "启动准备流程已开始。" << std::endl;
 					}
 					else
