@@ -367,8 +367,8 @@ struct ControlConfig
 struct CylinderPreset
 {
 	// 命名遵循当前接线方式：
-	// cyl1/cyl2 属于导管侧爬行夹爪对，
-	// cyl3/cyl4 属于导丝侧爬行夹爪对。
+	// cyl1/cyl2 属于导管侧夹爪对，
+	// cyl3/cyl4 属于导丝侧夹爪对。
 	unsigned short cyl1_open = 400;
 	unsigned short cyl1_clamp = 00;
 	unsigned short cyl1_preclamp = 320;
@@ -899,25 +899,70 @@ int main(int argc, char* argv[])
 	CADSComm ads;
 	HandleFilterState axis1_handle_filter;
 	HandleFilterState axis6_handle_filter;
-
-	if (!handle_axis1.init())
+	const bool axis1_handle_ready = handle_axis1.init();
+	if (!axis1_handle_ready)
 	{
 		std::cout << "手柄初始化失败，序列号: " << serial_axis1_handle << std::endl;
+	}
+	const bool axis6_handle_ready = handle_axis6.init();
+	if (!axis6_handle_ready)
+	{
+		std::cout << "手柄初始化失败，序列号: " << serial_axis6_handle << std::endl;
+	}
+	if (!axis1_handle_ready && !axis6_handle_ready)
+	{
 		return 0;
 	}
 
-	if (!handle_axis6.init())
+	bool single_handle_mode = false;
+	GuidewireMode single_handle_requested_mode = GuidewireMode::None;
+	Handle* axis1_input_handle = &handle_axis1;
+	Handle* axis6_input_handle = &handle_axis6;
+	if (!(axis1_handle_ready && axis6_handle_ready))
 	{
-		std::cout << "手柄初始化失败，序列号: " << serial_axis6_handle << std::endl;
-		handle_axis1.close();
-		return 0;
+		Handle* single_handle = axis1_handle_ready ? &handle_axis1 : &handle_axis6;
+		const DWORD single_serial = axis1_handle_ready ? serial_axis1_handle : serial_axis6_handle;
+		std::cout << "仅识别到一个手柄（序列号: " << single_serial << "）。" << std::endl;
+		std::cout << "按回车继续单手柄控制，按 ESC 或 q 退出。" << std::endl;
+		while (true)
+		{
+			if (_kbhit())
+			{
+				const int ch = _getch();
+				if (ch == '\r')
+				{
+					single_handle_mode = true;
+					axis1_input_handle = single_handle;
+					axis6_input_handle = single_handle;
+					single_handle_requested_mode = GuidewireMode::None;
+					std::cout << "已进入单手柄模式（默认导管/582语义）。" << std::endl;
+					std::cout << "数字1：导管(582语义)，数字2：导丝(587语义)。" << std::endl;
+					std::cout << "按键说明：b0方向，b6 Y阀，b7/b5 轴4点动。" << std::endl;
+					break;
+				}
+				if (ch == 27 || ch == 'q' || ch == 'Q')
+				{
+					handle_axis1.close();
+					handle_axis6.close();
+					return 0;
+				}
+			}
+			Sleep(20);
+		}
 	}
 
 	Sleep(1000);
-	handle_axis1.poll();
-	handle_axis6.poll();
-	axis1_handle_filter.reset(handle_axis1.fJoints2[0], handle_axis1.fJoints2[1]);
-	axis6_handle_filter.reset(handle_axis6.fJoints2[0], handle_axis6.fJoints2[1]);
+	if (axis1_input_handle == axis6_input_handle)
+	{
+		axis1_input_handle->poll();
+	}
+	else
+	{
+		axis1_input_handle->poll();
+		axis6_input_handle->poll();
+	}
+	axis1_handle_filter.reset(axis1_input_handle->fJoints2[0], axis1_input_handle->fJoints2[1]);
+	axis6_handle_filter.reset(axis6_input_handle->fJoints2[0], axis6_input_handle->fJoints2[1]);
 
 	if (ads.OpenComm_inside())
 	{
@@ -1281,7 +1326,7 @@ int main(int argc, char* argv[])
 		pos[1] = preserved_axis2_hold_rel;
 		pos[6] = axis7_hold_rel;
 
-		get_average_handle_pose(handle_axis1, samples, axis1_crawl.handle_ref, axis1_crawl.rot_ref);
+		get_average_handle_pose(*axis1_input_handle, samples, axis1_crawl.handle_ref, axis1_crawl.rot_ref);
 		axis1_handle_filter.reset(axis1_crawl.handle_ref, axis1_crawl.rot_ref);
 		axis1_prev_linear_filtered = axis1_handle_filter.axis0_filtered;
 		axis1_crawl.base_rel = plc_act_pos[0];
@@ -1341,7 +1386,7 @@ int main(int argc, char* argv[])
 		pos[1] = axis2_hold_rel;
 		pos[6] = preserved_axis7_hold_rel;
 
-		get_average_handle_pose(handle_axis6, samples, axis6_crawl.handle_ref, axis6_crawl.rot_ref);
+		get_average_handle_pose(*axis6_input_handle, samples, axis6_crawl.handle_ref, axis6_crawl.rot_ref);
 		axis6_handle_filter.reset(axis6_crawl.handle_ref, axis6_crawl.rot_ref);
 		axis6_prev_linear_filtered = axis6_handle_filter.axis0_filtered;
 		axis6_crawl.base_rel = plc_act_pos[5];
@@ -1422,8 +1467,8 @@ int main(int argc, char* argv[])
 		}
 
 		get_average_dual_pos(
-			handle_axis1,
-			handle_axis6,
+			*axis1_input_handle,
+			*axis6_input_handle,
 			samples,
 			axis1_crawl.handle_ref,
 			axis1_crawl.rot_ref,
@@ -1557,7 +1602,7 @@ int main(int argc, char* argv[])
 
 		axis7_hold_rel = preserved_axis7_hold_rel;
 
-		get_average_handle_pose(handle_axis6, 20, axis6_crawl.handle_ref, axis6_crawl.rot_ref);
+		get_average_handle_pose(*axis6_input_handle, 20, axis6_crawl.handle_ref, axis6_crawl.rot_ref);
 		axis6_handle_filter.reset(axis6_crawl.handle_ref, axis6_crawl.rot_ref);
 		axis6_prev_linear_filtered = axis6_handle_filter.axis0_filtered;
 		axis6_crawl.base_rel = plc_act_pos[5];
@@ -1822,17 +1867,24 @@ int main(int argc, char* argv[])
 
 	while (true)
 	{
-		// 1) 采样两个手柄，并生成按键边沿触发状态。
-		handle_axis1.poll();
-		handle_axis6.poll();
+		// 1) 采样逻辑手柄输入，并生成按键边沿触发状态。
+		if (axis1_input_handle == axis6_input_handle)
+		{
+			axis1_input_handle->poll();
+		}
+		else
+		{
+			axis1_input_handle->poll();
+			axis6_input_handle->poll();
+		}
 		axis1_handle_filter.update(
-			handle_axis1.fJoints2[0],
-			handle_axis1.fJoints2[1],
+			axis1_input_handle->fJoints2[0],
+			axis1_input_handle->fJoints2[1],
 			cfg.linear_handle_alpha,
 			cfg.rotational_handle_alpha);
 		axis6_handle_filter.update(
-			handle_axis6.fJoints2[0],
-			handle_axis6.fJoints2[1],
+			axis6_input_handle->fJoints2[0],
+			axis6_input_handle->fJoints2[1],
 			cfg.linear_handle_alpha,
 			cfg.rotational_handle_alpha);
 
@@ -1859,11 +1911,12 @@ int main(int argc, char* argv[])
 			(void)ads.ADSReadSum(from_left_symbols, from_left_lengths, from_left_outputs, 2);
 		}
 
-		const unsigned char axis1_buttons = handle_axis1.buttons2;
+		const unsigned char axis1_buttons = axis1_input_handle->buttons2;
+		const unsigned char axis6_buttons = axis6_input_handle->buttons2;
 		const bool pause_pressed = (axis1_buttons & axis1_pause_button_mask) != 0;
 		const bool axis1_reverse_pressed = (axis1_buttons & axis1_reverse_button_mask) != 0;
-		const bool guidewire_independent_pressed = (handle_axis6.buttons2 & axis6_independent_button_mask) != 0;
-		const bool guidewire_cooperative_pressed = (handle_axis6.buttons2 & axis6_cooperative_button_mask) != 0;
+		const bool guidewire_independent_pressed = (axis6_buttons & axis6_independent_button_mask) != 0;
+		const bool guidewire_cooperative_pressed = (axis6_buttons & axis6_cooperative_button_mask) != 0;
 		const bool guidewire_reverse_pressed = guidewire_cooperative_pressed && !guidewire_independent_pressed;
 		const bool axis4_base_pressed = (axis1_buttons & axis4_buttons_base_mask) == axis4_buttons_base_mask;
 		const bool axis4_forward_pressed =
@@ -1881,12 +1934,16 @@ int main(int argc, char* argv[])
 		// - b6=1,b0=1 -> Independent（0x47，协同模式入口已取消）
 		// - b6=0,b0=0 -> None（0x06）
 		GuidewireMode requested_guidewire_mode = GuidewireMode::None;
-		if (guidewire_independent_pressed || guidewire_cooperative_pressed)
+		if (single_handle_mode)
+		{
+			requested_guidewire_mode = single_handle_requested_mode;
+		}
+		else if (guidewire_independent_pressed || guidewire_cooperative_pressed)
 		{
 			requested_guidewire_mode = GuidewireMode::Independent;
 		}
 		// 反向有效键仅在“独立且 b0 按下（0x07）”时生效。
-		const bool axis6_effective_reverse_pressed = guidewire_reverse_pressed;
+		const bool axis6_effective_reverse_pressed = single_handle_mode ? axis1_reverse_pressed : guidewire_reverse_pressed;
 		const bool startup_sequence_active = startup.is_active();
 		// 正式控制阶段：启动流程已完成，b6 从“暂停键”切换为“电缸5开关键”。
 		const bool formal_control_stage = startup.completed && (startup.phase == StartupPhase::Done);
@@ -2117,13 +2174,25 @@ int main(int argc, char* argv[])
 					clear_force_output();
 				}
 			}
+			else if (single_handle_mode && ch == '1')
+			{
+				single_handle_requested_mode = GuidewireMode::None;
+				std::cout << "单手柄模式：已切换到导管(582语义)。" << std::endl;
+				std::cout << "按键说明：b0方向，b6 Y阀，b7/b5 轴4点动，数字2切导丝。" << std::endl;
+			}
+			else if (single_handle_mode && ch == '2')
+			{
+				single_handle_requested_mode = GuidewireMode::Independent;
+				std::cout << "单手柄模式：已切换到导丝(587语义)。" << std::endl;
+				std::cout << "按键说明：b0方向，b6 Y阀，b7/b5 轴4点动，数字1回导管。" << std::endl;
+			}
 			else if (ch == 0 || ch == 224)
 			{
 				_getch();
 			}
 		}
 
-		// 5) 导丝模式由 handle 587 的边沿触发（0x46独立、0x07独立反向、0x47也按独立处理），并在切换时重同步。
+		// 5) 导丝模式切换：双手柄时由 587 按键触发；单手柄时由键盘 1/2 触发，并复用同一重同步链路。
 		if (requested_guidewire_mode != requested_guidewire_mode_prev)
 		{
 			if (requested_guidewire_mode == GuidewireMode::None)
