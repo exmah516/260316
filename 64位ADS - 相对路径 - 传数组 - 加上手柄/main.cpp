@@ -4,6 +4,7 @@
 #include "motion_sync.h"
 #include "plc_io.h"
 #include "startup_sequence.h"
+#include "tcp_force_daq.h"
 
 #include <cmath>
 #include <conio.h>
@@ -147,6 +148,7 @@ int main(int argc, char* argv[])
 	Handle handle_axis1(serial_axis1_handle);
 	Handle handle_axis6(serial_axis6_handle);
 	CADSComm ads;
+	TcpForceDaqClient tcp_force_daq;
 	HandleFilterState axis1_handle_filter;
 	HandleFilterState axis6_handle_filter;
 	const bool axis1_handle_ready = handle_axis1.init();
@@ -280,6 +282,8 @@ int main(int argc, char* argv[])
 	ctx.axis6_handle_filter = &axis6_handle_filter;
 	ctx.cfg = &cfg;
 	ctx.cyl = &cyl;
+	ctx.force_sample_source = cfg.force_sample_source;
+	ctx.tcp_force_daq = &tcp_force_daq;
 	ctx.pos = pos;
 	ctx.plc_act_pos = plc_act_pos;
 	ctx.plc_init_pos = plc_init_pos;
@@ -566,6 +570,22 @@ int main(int argc, char* argv[])
 		if (force_log_started)
 		{
 			return;
+		}
+		if (ctx.force_sample_source == ForceSampleSource::TCP_DAQ)
+		{
+			if (tcp_force_daq.start(cfg.tcp_force_daq_ip, cfg.tcp_force_daq_port))
+			{
+				std::cout << "CSV采样源：TCP_DAQ（" << cfg.tcp_force_daq_ip << ":" << cfg.tcp_force_daq_port
+					<< "），其中 ft_1/fn_1 来自 TCP 第0/1通道。" << std::endl;
+			}
+			else
+			{
+				std::cout << "CSV采样源：TCP_DAQ 启动失败，日志将等待 TCP 有效帧后再写入。" << std::endl;
+			}
+		}
+		else
+		{
+			std::cout << "CSV采样源：ADS（ft_1/fn_1/fn_2/ft_2 均来自 PLC）。" << std::endl;
 		}
 		force_log.enabled = true;
 		const std::string force_log_filename = build_force_log_filename();
@@ -2125,17 +2145,46 @@ int main(int argc, char* argv[])
 			if (read_force_sample(sampled_frame))
 			{
 				force_sample = sampled_frame;
-				force_log.append_sample(
-					force_log_now_ms,
-					force_sample.ft_1_value,
-					force_sample.fn_1_value,
-					force_sample.fn_2_value,
-					force_sample.ft_2_value,
-					force_mode_code,
-					force_reverse_code,
-					force_push_pull_code,
-					force_rot_sign_code,
-					force_sample.axis1_pos_rel);
+				double log_ft1_value = static_cast<double>(force_sample.ft_1_value);
+				double log_fn1_value = static_cast<double>(force_sample.fn_1_value);
+				bool ready_to_log = true;
+
+				// 仅替换 CSV 中 ft_1/fn_1 的来源：TCP 第0/1通道。
+				if (ctx.force_sample_source == ForceSampleSource::TCP_DAQ)
+				{
+					double tcp_ft1_value = 0.0;
+					double tcp_fn1_value = 0.0;
+					std::uint64_t tcp_tick_ms = 0;
+					if (tcp_force_daq.get_latest_ft1_fn1(tcp_ft1_value, tcp_fn1_value, tcp_tick_ms))
+					{
+						log_ft1_value = tcp_ft1_value;
+						log_fn1_value = tcp_fn1_value;
+					}
+					else
+					{
+						ready_to_log = false;
+						if ((force_log_now_ms - force_log_warn_last_ms) >= 1000)
+						{
+							std::cout << "力传感器告警：TCP_DAQ 当前无有效采样帧，已跳过本周期 CSV 行写入。" << std::endl;
+							force_log_warn_last_ms = force_log_now_ms;
+						}
+					}
+				}
+
+				if (ready_to_log)
+				{
+					force_log.append_sample(
+						force_log_now_ms,
+						log_ft1_value,
+						log_fn1_value,
+						force_sample.fn_2_value,
+						force_sample.ft_2_value,
+						force_mode_code,
+						force_reverse_code,
+						force_push_pull_code,
+						force_rot_sign_code,
+						force_sample.axis1_pos_rel);
+				}
 			}
 			else if ((force_log_now_ms - force_log_warn_last_ms) >= 1000)
 			{
@@ -2168,6 +2217,7 @@ int main(int argc, char* argv[])
 	ads.ADSWrite(AdsSymbol::startup_smoothing_bypass, sizeof(startup_smoothing_bypass), &startup_smoothing_bypass);
 	clear_force_output();
 	force_log.close();
+	tcp_force_daq.stop();
 	handle_axis1.close();
 	handle_axis6.close();
 	return 0;

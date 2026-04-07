@@ -128,7 +128,7 @@ bool ForceLogState::open_file(const std::string& output_name)
 		return false;
 	}
 
-	// 表头固定为 Force_sensor 约定字段顺序，并在末尾追加运行态编码列。
+	// 表头沿用历史格式：仅替换 ft_1/fn_1 的来源，不改变列结构。
 	file << "timestamp,ft_1_value,fn_1_value,fn_2_value,ft_2_value,mode_code,reverse_code,push_pull_code,rot_sign_code,axis1_pos_rel\n";
 	last_sample_ms = 0;
 	last_buffer_flush_ms = GetTickCount();
@@ -150,10 +150,10 @@ bool ForceLogState::should_sample(DWORD now_ms) const
 
 void ForceLogState::append_sample(
 	DWORD now_ms,
-	short ft1,
-	short fn1,
-	short fn2,
-	short ft2,
+	double ft1_value,
+	double fn1_value,
+	short fn2_value,
+	short ft2_value,
 	int mode_code,
 	int reverse_code,
 	int push_pull_code,
@@ -167,26 +167,21 @@ void ForceLogState::append_sample(
 	}
 
 	// 先写入内存缓冲，减少每周期磁盘写入对控制环的影响。
-	line_buffer += build_force_log_timestamp();
-	line_buffer += ",";
-	line_buffer += std::to_string(static_cast<int>(ft1));
-	line_buffer += ",";
-	line_buffer += std::to_string(static_cast<int>(fn1));
-	line_buffer += ",";
-	line_buffer += std::to_string(static_cast<int>(fn2));
-	line_buffer += ",";
-	line_buffer += std::to_string(static_cast<int>(ft2));
-	line_buffer += ",";
-	line_buffer += std::to_string(mode_code);
-	line_buffer += ",";
-	line_buffer += std::to_string(reverse_code);
-	line_buffer += ",";
-	line_buffer += std::to_string(push_pull_code);
-	line_buffer += ",";
-	line_buffer += std::to_string(rot_sign_code);
-	line_buffer += ",";
-	line_buffer += std::to_string(axis1_pos_rel);
-	line_buffer += "\n";
+	char line[512] = { 0 };
+	sprintf_s(
+		line,
+		"%s,%.6f,%.6f,%d,%d,%d,%d,%d,%d,%.6f\n",
+		build_force_log_timestamp().c_str(),
+		ft1_value,
+		fn1_value,
+		static_cast<int>(fn2_value),
+		static_cast<int>(ft2_value),
+		mode_code,
+		reverse_code,
+		push_pull_code,
+		rot_sign_code,
+		axis1_pos_rel);
+	line_buffer += line;
 
 	++buffered_lines;
 
@@ -224,4 +219,3 @@ void ForceLogState::close()
 		file.close();
 	}
 }
-

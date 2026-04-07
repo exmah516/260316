@@ -18,6 +18,9 @@
     <ClCompile Include="control_types.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
+    <ClCompile Include="tcp_force_daq.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
     <ClCompile Include="plc_io.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
@@ -51,6 +54,9 @@
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="control_types.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="tcp_force_daq.h">
       <Filter>头文件</Filter>
     </ClInclude>
     <ClInclude Include="plc_io.h">

@@ -1,69 +1,49 @@
-力感 CSV 编码列说明（mode_code / reverse_code / push_pull_code / rot_sign_code）
+力感 CSV 字段说明（仅替换 ft_1/fn_1 来源）
 ====================================================================
 
 文件对应：
 - 主程序：main.cpp
+- 日志结构：control_types.cpp / ForceLogState
 - CSV 列顺序：
-  timestamp,ft_1_value,fn_1_value,fn_2_value,ft_2_value,mode_code,reverse_code,push_pull_code,rot_sign_code
+  timestamp,ft_1_value,fn_1_value,fn_2_value,ft_2_value,mode_code,reverse_code,push_pull_code,rot_sign_code,axis1_pos_rel
 
 --------------------------------------------------------------------
-1) mode_code（当前模式编码）
+1) 数据来源规则
 --------------------------------------------------------------------
-- 0：导管模式（guidewire_mode == None）
-- 1：导丝模式（guidewire_mode != None，当前工程主要为 Independent）
+- 当 force_sample_source = ADS：
+  ft_1/fn_1/fn_2/ft_2 均来自 ADS（PLC 变量）。
+
+- 当 force_sample_source = TCP_DAQ：
+  ft_1/fn_1 由 TCP 采集卡第0/1通道替换（0->ft_1，1->fn_1，按 INT16/1000.0 输出）；
+  fn_2/ft_2 与其余字段继续来自 ADS 原有链路。
 
 说明：
-- 该值按当前活动模式写入，不依赖力传感器数值大小。
+- TCP 的第2通道及之后在当前日志链路中不使用。
+- 若该周期 TCP 无有效帧，则跳过该周期 CSV 行写入，并限频告警（1秒一次）。
 
 --------------------------------------------------------------------
-2) reverse_code（当前模式下的正反向状态）
+2) mode_code（当前模式编码）
+--------------------------------------------------------------------
+- 0：导管模式（guidewire_mode == None）
+- 1：导丝模式（guidewire_mode != None）
+
+--------------------------------------------------------------------
+3) reverse_code（当前模式下的正反向状态）
 --------------------------------------------------------------------
 - 0：正向（未按下反向键）
 - 1：反向（按下反向键）
 
-具体取值来源：
-- mode_code = 0（导管）时：
-  reverse_code = axis1_reverse_pressed ? 1 : 0
-- mode_code = 1（导丝）时：
-  reverse_code = axis6_effective_reverse_pressed ? 1 : 0
-
 --------------------------------------------------------------------
-3) push_pull_code（推拉方向编码）
+4) push_pull_code（推拉方向编码）
 --------------------------------------------------------------------
 - +1：活动模式下线性增量为正
 - -1：活动模式下线性增量为负
--  0：线性增量为 0（包括静止、死区内、小抖动被抑制）
-
-活动模式对应来源：
-- mode_code = 0：使用 axis1_linear_increment_mm
-- mode_code = 1：使用 axis6_linear_increment_mm
-
-备注：
-- axis*_linear_increment_mm 已经过线性增量抗噪死区处理（cfg.linear_increment_noise_deadband_mm）。
-- 因此 0 不一定是“完全静止”，也可能是“增量落在死区内”。
+-  0：线性增量为 0（静止或死区内）
 
 --------------------------------------------------------------------
-4) rot_sign_code（旋转符号方向编码）
+5) rot_sign_code（旋转符号方向编码）
 --------------------------------------------------------------------
 - +1：活动模式下旋转增量 > 死区
 - -1：活动模式下旋转增量 < -死区
--  0：旋转增量在死区内（静止/微小抖动）
-
-活动模式对应来源：
-- mode_code = 0：使用 axis1_rot_increment_rad
-- mode_code = 1：使用 axis6_rot_increment_rad
-
-其中：
-- axis1_rot_increment_rad = axis1_rot_filtered - axis1_prev_rot_filtered
-- axis6_rot_increment_rad = axis6_rot_filtered - axis6_prev_rot_filtered
-- 旋转死区阈值：force_rot_sign_deadband_rad = 1e-4（rad）
-
---------------------------------------------------------------------
-5) 非控制帧行为（便于解释日志）
---------------------------------------------------------------------
-在未进入控制分支（例如 freeze/estop/未激活等）时：
-- mode_code / reverse_code：仍按当前状态变量写入
-- push_pull_code / rot_sign_code：保持为 0
-
-这样可以避免沿用上一拍的动作符号，便于离线分析时区分“状态存在”与“动作存在”。
+-  0：旋转增量在死区内
 

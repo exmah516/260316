@@ -26,6 +26,8 @@ void get_average_dual_pos(
 	double& b_axis1);
 void copy_positions(const double* src, double* dst, int count);
 
+class TcpForceDaqClient;
+
 struct AxisReturnAdsSymbols
 {
 	const char* req = nullptr;
@@ -72,6 +74,12 @@ struct HandleFilterState
 		axis0_filtered += axis0_alpha * (axis0_raw - axis0_filtered);
 		axis1_filtered += axis1_alpha * (axis1_raw - axis1_filtered);
 	}
+};
+
+enum class ForceSampleSource
+{
+	ADS,
+	TCP_DAQ
 };
 
 struct ControlConfig
@@ -141,6 +149,11 @@ struct ControlConfig
 	double linear_handle_alpha = 0.25;
 	double rotational_handle_alpha = 0.20;
 	bool cooperative_debug_log = false;
+	// CSV 中 ft_1/fn_1 的采样来源：ADS(PLC变量) 或 TCP_DAQ(采集卡直连)。
+	ForceSampleSource force_sample_source = ForceSampleSource::ADS;
+	// TCP 采集卡连接参数（仅 force_sample_source=TCP_DAQ 时生效）。
+	const char* tcp_force_daq_ip = "192.168.1.30";
+	unsigned short tcp_force_daq_port = 502;
 	// 力感记录周期：0=每循环记录；>0=按毫秒周期记录。
 	DWORD force_log_period_ms = 0;
 
@@ -318,10 +331,10 @@ struct ForceLogState
 	bool should_sample(DWORD now_ms) const;
 	void append_sample(
 		DWORD now_ms,
-		short ft1,
-		short fn1,
-		short fn2,
-		short ft2,
+		double ft1_value,
+		double fn1_value,
+		short fn2_value,
+		short ft2_value,
 		int mode_code,
 		int reverse_code,
 		int push_pull_code,
@@ -374,6 +387,8 @@ struct AppContext
 	// 配置与预设。
 	const ControlConfig* cfg = nullptr;
 	const CylinderPreset* cyl = nullptr;
+	ForceSampleSource force_sample_source = ForceSampleSource::ADS;
+	TcpForceDaqClient* tcp_force_daq = nullptr;
 
 	// PLC 镜像缓存。
 	double* pos = nullptr;
@@ -436,4 +451,3 @@ struct AppContext
 	double* axis6_coop_prev_axis1_cmd_abs = nullptr;
 	bool* startup_smoothing_bypass = nullptr;
 };
-

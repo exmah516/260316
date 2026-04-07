@@ -115,6 +115,7 @@ namespace plc_io
 
 	bool read_force_sample(AppContext& ctx, ForceSampleFrame& sample)
 	{
+		// 力采样仅保留 ADS 原有链路；TCP 仅用于日志替换 ft_1/fn_1，不进入控制链路。
 		double act_pos_snapshot[7] = { 0.0 };
 		const char* symbols[] = {
 			AdsSymbol::ft_1_value,
@@ -238,4 +239,3 @@ namespace plc_io
 		ctx.ads->ADSWrite(AdsSymbol::handle_reinit_req, sizeof(clear_val), &clear_val);
 	}
 }
-
