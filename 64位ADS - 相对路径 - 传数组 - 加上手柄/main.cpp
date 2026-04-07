@@ -1,797 +1,22 @@
-#include "Handle.h"
-#include <ADSComm1.h>
+#include "control_types.h"
+#include "force_feedback.h"
+#include "guidewire_mode.h"
+#include "motion_sync.h"
+#include "plc_io.h"
+#include "startup_sequence.h"
+
 #include <cmath>
-#include <clocale>
 #include <conio.h>
-#include <cstdio>
 #include <cstdlib>
 #include <cstring>
-#include <fstream>
 #include <iostream>
 #include <string>
 #include <windows.h>
 
-// 说明：
-// 1) 本文件是 ADS 主控制程序入口，负责上位机状态机、手柄采样、ADS 读写与气缸/轴指令下发。
-// 2) 坐标体系以左限位为基准：绝对位置 abs = plc_act_pos + plc_init_pos。
-// 3) 关键运行模式：
-//    - 普通导管模式（axis1 主导，axis3/5 随动）
-//    - 导丝独立模式（axis6/7 独立）
-//    - 导丝协同模式（axis1 链路保留，axis6 使用叠速前馈）
-namespace
-{
-
-// 统一控制台编码为 UTF-8，避免中文提示乱码。
-void setup_console_utf8()
-{
-	SetConsoleOutputCP(CP_UTF8);
-	SetConsoleCP(CP_UTF8);
-	std::setlocale(LC_ALL, ".UTF-8");
-}
-
-// 生成 Force_sensor 日志文件名：Force_sensor_YYYYMMDD_HHMMSS.csv
-std::string build_force_log_filename()
-{
-	SYSTEMTIME st;
-	GetLocalTime(&st);
-	char name[128] = { 0 };
-	sprintf_s(
-		name,
-		"Force_sensor_%04u%02u%02u_%02u%02u%02u.csv",
-		static_cast<unsigned>(st.wYear),
-		static_cast<unsigned>(st.wMonth),
-		static_cast<unsigned>(st.wDay),
-		static_cast<unsigned>(st.wHour),
-		static_cast<unsigned>(st.wMinute),
-		static_cast<unsigned>(st.wSecond));
-	return std::string(name);
-}
-
-// 生成带毫秒时间戳：YYYY-MM-DD HH:MM:SS.mmm
-std::string build_force_log_timestamp()
-{
-	SYSTEMTIME st;
-	GetLocalTime(&st);
-	char ts[64] = { 0 };
-	sprintf_s(
-		ts,
-		"%04u-%02u-%02u %02u:%02u:%02u.%03u",
-		static_cast<unsigned>(st.wYear),
-		static_cast<unsigned>(st.wMonth),
-		static_cast<unsigned>(st.wDay),
-		static_cast<unsigned>(st.wHour),
-		static_cast<unsigned>(st.wMinute),
-		static_cast<unsigned>(st.wSecond),
-		static_cast<unsigned>(st.wMilliseconds));
-	return std::string(ts);
-}
-
-// 当前运行流程使用 G.leftlimit，并将所有启动/爬行
-// 窗口都从左限位参考的绝对位置推导出来。
-
-// 将标量值限制在闭区间内。
-// 将标量值限制在闭区间 [low, high]，用于目标位置与速度派生值的安全裁剪。
-double clamp_double(double value, double low, double high)
-{
-	if (value < low) return low;
-	if (value > high) return high;
-	return value;
-}
-
-// 带容差的区间判断，用于窗口激活和到位检测。
-// 带容差的区间判定，常用于窗口激活判断与“到位”判定。
-bool is_within_range(double value, double low, double high, double tol = 0.0)
-{
-	return (value >= (low - tol)) && (value <= (high + tol));
-}
-
-// 在同一短时间窗内采集单个手柄姿态，确保平移/旋转基准对齐。
-// 在固定采样窗口内取均值，降低手柄瞬时抖动对重同步基准的影响。
-void get_average_handle_pose(Handle& handle, int samples, double& axis0, double& axis1)
-{
-	double axis0_sum = 0.0;
-	double axis1_sum = 0.0;
-
-	for (int i = 0; i < samples; ++i)
-	{
-		handle.poll();
-		axis0_sum += handle.fJoints2[0];
-		axis1_sum += handle.fJoints2[1];
-		Sleep(10);
-	}
-
-	const double inv = 1.0 / static_cast<double>(samples);
-	axis0 = axis0_sum * inv;
-	axis1 = axis1_sum * inv;
-}
-
-// 在同一时间窗内同时采集两个手柄，确保共享重同步基准一致。
-// 同时采样两把手柄，保证两路基准在同一时刻对齐。
-void get_average_dual_pos(
-	Handle& handle_a,
-	Handle& handle_b,
-	int samples,
-	double& a_axis0,
-	double& a_axis1,
-	double& b_axis0,
-	double& b_axis1)
-{
-	double a0_sum = 0.0;
-	double a1_sum = 0.0;
-	double b0_sum = 0.0;
-	double b1_sum = 0.0;
-
-	for (int i = 0; i < samples; ++i)
-	{
-		handle_a.poll();
-		handle_b.poll();
-		a0_sum += handle_a.fJoints2[0];
-		a1_sum += handle_a.fJoints2[1];
-		b0_sum += handle_b.fJoints2[0];
-		b1_sum += handle_b.fJoints2[1];
-		Sleep(10);
-	}
-
-	const double inv = 1.0 / static_cast<double>(samples);
-	a_axis0 = a0_sum * inv;
-	a_axis1 = a1_sum * inv;
-	b_axis0 = b0_sum * inv;
-	b_axis1 = b1_sum * inv;
-}
-
-// 用于 PLC 镜像数组和 refer 缓冲区的小工具函数。
-// 简单数组拷贝工具：用于 PLC 数组缓存/备份/恢复。
-void copy_positions(const double* src, double* dst, int count)
-{
-	for (int i = 0; i < count; ++i)
-	{
-		dst[i] = src[i];
-	}
-}
-
-struct AxisReturnAdsSymbols
-{
-	const char* req = nullptr;
-	const char* busy = nullptr;
-	const char* done = nullptr;
-	const char* error = nullptr;
-	const char* error_id = nullptr;
-	const char* target_abs = nullptr;
-	const char* velocity = nullptr;
-	const char* acc = nullptr;
-	const char* dec = nullptr;
-	const char* jerk = nullptr;
-};
-
-struct AxisReturnStatus
-{
-	bool busy = false;
-	bool done = false;
-	bool error = false;
-	unsigned long error_id = 0;
-};
-
-struct HandleFilterState
-{
-	double axis0_filtered = 0.0;
-	double axis1_filtered = 0.0;
-	bool inited = false;
-
-	void reset(double axis0, double axis1)
-	{
-		axis0_filtered = axis0;
-		axis1_filtered = axis1;
-		inited = true;
-	}
-
-	void update(double axis0_raw, double axis1_raw, double axis0_alpha, double axis1_alpha)
-	{
-		if (!inited)
-		{
-			reset(axis0_raw, axis1_raw);
-			return;
-		}
-
-		axis0_filtered += axis0_alpha * (axis0_raw - axis0_filtered);
-		axis1_filtered += axis1_alpha * (axis1_raw - axis1_filtered);
-	}
-};
-
-namespace AdsSymbol
-{
-	const char* refer = "G.refer";
-	const char* act_pos = "G.Act_pos";
-	const char* init_pos = "G.init_pos";
-	const char* leftlimit = "G.leftlimit";
-	const char* act_pos_from_left = "G.act_pos_from_left";
-	const char* refer_from_left = "G.refer_from_left";
-	const char* v_limit = "G.v_limit";
-	const char* cylinder1_value = "G.cylinder1_value";
-	const char* cylinder2_value = "G.cylinder2_value";
-	const char* cylinder3_value = "G.cylinder3_value";
-	const char* cylinder4_value = "G.cylinder4_value";
-	const char* cylinder5_cmd = "G.cylinder5_cmd";
-	const char* cylinder5_press_req = "G.cylinder5_press_req";
-	const char* cylinder5_value = "G.cylinder5_value";
-	const char* self_check_done = "G.self_check_done";
-	const char* handle_reinit_req = "G.handle_reinit_req";
-	const char* estop_hold_req = "G.estop_hold_req";
-	const char* ft_1_value = "G.ft_1_value";
-	const char* fn_1_value = "G.fn_1_value";
-	const char* fn_2_value = "G.fn_2_value";
-	const char* ft_2_value = "G.ft_2_value";
-	const char* axis1_fast_return = "G.axis1_fast_return";
-	const char* axis6_fast_retract = "G.axis6_fast_retract";
-	const char* startup_smoothing_bypass = "G.startup_smoothing_bypass";
-	const char* axis4_fwd_req = "G.axis4_fwd_req";
-	const char* axis4_rev_req = "G.axis4_rev_req";
-	const char* axis4_manual_busy = "G.axis4_manual_busy";
-	const char* axis4_manual_error = "G.axis4_manual_error";
-	const char* axis4_manual_error_id = "G.axis4_manual_error_id";
-	const char* gen_state = "G.gen_state";
-	const char* app_name = "TwinCAT_SystemInfoVarList._AppInfo.AppName";
-
-	const AxisReturnAdsSymbols axis1_return = {
-		"G.axis1_return_cmd.Req",
-		"G.axis1_return_cmd.Busy",
-		"G.axis1_return_cmd.Done",
-		"G.axis1_return_cmd.Error",
-		"G.axis1_return_cmd.ErrorId",
-		"G.axis1_return_cmd.TargetAbs",
-		"G.axis1_return_cmd.Velocity",
-		"G.axis1_return_cmd.Acc",
-		"G.axis1_return_cmd.Dec",
-		"G.axis1_return_cmd.Jerk"
-	};
-
-	const AxisReturnAdsSymbols axis3_return = {
-		"G.axis3_return_cmd.Req",
-		"G.axis3_return_cmd.Busy",
-		"G.axis3_return_cmd.Done",
-		"G.axis3_return_cmd.Error",
-		"G.axis3_return_cmd.ErrorId",
-		"G.axis3_return_cmd.TargetAbs",
-		"G.axis3_return_cmd.Velocity",
-		"G.axis3_return_cmd.Acc",
-		"G.axis3_return_cmd.Dec",
-		"G.axis3_return_cmd.Jerk"
-	};
-
-	const AxisReturnAdsSymbols axis5_return = {
-		"G.axis5_return_cmd.Req",
-		"G.axis5_return_cmd.Busy",
-		"G.axis5_return_cmd.Done",
-		"G.axis5_return_cmd.Error",
-		"G.axis5_return_cmd.ErrorId",
-		"G.axis5_return_cmd.TargetAbs",
-		"G.axis5_return_cmd.Velocity",
-		"G.axis5_return_cmd.Acc",
-		"G.axis5_return_cmd.Dec",
-		"G.axis5_return_cmd.Jerk"
-	};
-
-	const AxisReturnAdsSymbols axis6_return = {
-		"G.axis6_return_cmd.Req",
-		"G.axis6_return_cmd.Busy",
-		"G.axis6_return_cmd.Done",
-		"G.axis6_return_cmd.Error",
-		"G.axis6_return_cmd.ErrorId",
-		"G.axis6_return_cmd.TargetAbs",
-		"G.axis6_return_cmd.Velocity",
-		"G.axis6_return_cmd.Acc",
-		"G.axis6_return_cmd.Dec",
-		"G.axis6_return_cmd.Jerk"
-	};
-}
-
-struct ControlConfig
-{
-	// 手柄运动缩放系数与符号约定。
-	double k_handle_to_mm = 500.0 * (75.0 / 50.0); // 手柄线性位移差 -> 轴位移增量(mm)
-	double axis_push_sign = -1.0; // 手柄“推/拉”到轴“正/负”方向的映射符号
-	double axis_rot_scale_deg = Rad;
-
-	// 力反馈输出配置：当前主路径统一使用 setforce(F,N) 的 axis=0 语义。
-	// axial_force_* 保留为兼容旧配置，本轮不再参与映射。
-	int axial_force_axis = 1;
-	double axial_force_sign = -1.0;
-
-	// 按键映射来自 buttons2 位掩码。
-	unsigned char btn_b0 = 0x01;
-	unsigned char btn_b5 = 0x20;
-	unsigned char btn_b6 = 0x40;
-	unsigned char btn_b7 = 0x80;
-
-	// 基于左限位参考的爬行窗口。
-	double axis1_window_left_from_left_mm = 3.0;
-	double axis1_window_right_from_left_mm = 18.0;
-	double axis6_independent_window_size_mm = 20.0;
-	// 轴6窗口整体平移：正值表示远离左限位方向平移（单位 mm）。
-	double axis6_window_shift_from_left_mm = 3.0;
-	double axis56_ready_gap_mm = 20.0;
-	double axis3_delivery_stop_from_left_mm = 20.0;
-	double axis3_delivery_release_hysteresis_mm = 2.0;
-	double guidewire_entry_axis6_from_left_max_mm = 665.0;
-	// 导丝入模时的窗口覆盖判定阈值：delta<18mm 时按轴5参考重建 axis6 窗口。
-	double axis6_window_cover_threshold_mm = 18.0;
-
-	// 爬行触发/到位阈值。
-	double crawl_trigger_deadband_mm = 0.3; // |delta| 小于此值视为无效输入（不触发 push/pull）
-	double crawl_rearm_threshold_mm = 0.3; // 快退后允许再次触发前需要越过的同向阈值
-	double crawl_arrive_tol_mm = 0.2;
-	double hold_recover_rearm_mm = 0.6;
-	// 线性增量抗噪死区：仅用于抑制差分噪声，不承担方向门控。
-	double linear_increment_noise_deadband_mm = 0.02;
-	// 正反切换一次性触发保护距离（离开该距离后重新允许触发）。
-	double reverse_switch_trigger_guard_mm = 2.0;
-
-	// PLC 规划快速回退参数。
-	double axis1_return_velocity_mm_s = 200.0;
-	double axis1_return_acc_mm_s2 = 2400.0;
-	double axis1_return_dec_mm_s2 = 2400.0;
-	double axis1_return_jerk_mm_s3 = 35000.0;
-	// 快退前先切缸等待（轴1主链路）。
-	DWORD axis1_pre_move_cylinder_wait_ms = 100;
-	// 轴1切缸顺序中两步动作之间的等待（导管正/反向共用）。
-	DWORD axis1_cylinder_interstep_wait_ms = 100;
-	// 快退完成后切回最终缸态等待（轴1主链路）。
-	DWORD axis1_post_return_cylinder_wait_ms = 100;
-	double axis6_return_velocity_mm_s = 200.0;
-	double axis6_return_acc_mm_s2 = 2400.0;
-	double axis6_return_dec_mm_s2 = 2400.0;
-	double axis6_return_jerk_mm_s3 = 35000.0;
-	// 快退前先切缸等待（轴6链路）。
-	DWORD axis6_pre_move_cylinder_wait_ms = 80;
-	// 轴6切缸顺序中两步动作之间的等待（导丝正/反向共用）。
-	DWORD axis6_cylinder_interstep_wait_ms = 100;
-	// 快退完成后切回最终缸态等待（轴6链路）。
-	DWORD axis6_post_return_cylinder_wait_ms = 80;
-
-	// 手柄低通滤波。
-	double linear_handle_alpha = 0.25;
-	double rotational_handle_alpha = 0.20;
-	bool cooperative_debug_log = false;
-	// 力感记录周期：0=每循环记录；>0=按毫秒周期记录。
-	DWORD force_log_period_ms = 0;
-
-	// 启动准备阶段目标。
-	DWORD startup_clamp_settle_delay_ms = 300;
-	double startup_motion_speed_scale = 0.5;
-	unsigned short startup_cyl3_open = 500;
-	unsigned short startup_cyl4_open = 0;
-	unsigned short startup_cyl3_clamp = 0;
-	unsigned short startup_cyl4_clamp = 1000;
-	double startup_axis1_ready_from_left_mm = 20.0;
-	double startup_axis5_ready_from_left_mm = 290.0;
-	double startup_axis3_ready_from_left_mm = 635.0;
-	// 在 axis3 完全到达目标前提前触发 cylinder2 夹紧；现场调参使其领先约 0.5 s。
-	double startup_axis3_cyl2_clamp_advance_mm = 50.0;
-};
-
-struct CylinderPreset
-{
-	// 命名遵循当前接线方式：
-	// cyl1/cyl2 属于导管侧夹爪对，
-	// cyl3/cyl4 属于导丝侧夹爪对。
-	unsigned short cyl1_open = 400;
-	unsigned short cyl1_clamp = 00;
-	unsigned short cyl1_preclamp = 320;
-	unsigned short cyl2_open = 0;
-	unsigned short cyl2_clamp = 600;
-	unsigned short cyl2_preopen = 300;
-	unsigned short cyl2_preclamp = 400;
-	unsigned short cyl3_open = 320;
-	unsigned short cyl3_clamp = 0;
-	unsigned short cyl3_preclamp = 200;
-	unsigned short cyl4_open = 0;
-	unsigned short cyl4_clamp = 500;
-	unsigned short cyl4_preopen = 300;
-	unsigned short cyl4_preclamp = 300;
-	unsigned short cyl3_follow_release = 150;
-	unsigned short cyl4_follow_release = 100;
-};
-
-enum class GuidewireMode
-{
-	None,
-	Independent,
-	Cooperative
-};
-
-// 启动准备是在自检后进入的显式上位机流程。
-enum class StartupPhase
-{
-	WaitForEnter,
-	ReleaseClamps,
-	MoveAxis56ToLeftReady,
-	ClampCylinder34Wait,
-	MoveAxis356BackToReady,
-	ClampCylinder2AfterAxis3,
-	Done
-};
-
-struct CrawlState
-{
-	// Follow：在激活窗口内直接映射手柄输入。
-	// Switch/Clamp/Restore：围绕快速回退/推进动作的夹爪时序封装。
-	enum class Phase
-	{
-		Follow,
-		SwitchWait,
-		FastMove,
-		SettleHold,
-		ClampWait,
-		RestoreWait
-	};
-
-	bool enabled = false;
-	Phase phase = Phase::Follow;
-	bool wait_rearm = false;
-	bool window_active = false;
-	int rearm_dir = 0;
-	double handle_ref = 0.0; // 当前控制段的手柄线性基准（重同步/重建基线时更新）
-	double rot_ref = 0.0; // 当前控制段的手柄旋转基准
-	double base_rel = 0.0; // 当前控制段的轴相对基线（PLC Act_pos 坐标）
-	double rot_base_rel = 0.0; // 当前控制段的旋转轴相对基线
-	double start_abs = 0.0; // 窗口起点绝对坐标(mm)
-	double end_abs = 0.0; // 窗口终点绝对坐标(mm)
-	double target_abs = 0.0; // 本次快退目标绝对坐标(mm)
-	bool plc_move_requested = false;
-	DWORD phase_t0 = 0;
-	// 顺序切缸子阶段：
-	// 0=未启用/已完成，1=第一步已下发，2=第二步已下发（进入旧等待计时）
-	int cyl_seq_stage = 0;
-	DWORD cyl_seq_t0 = 0;
-
-	double min_abs() const { return (start_abs < end_abs) ? start_abs : end_abs; }
-	double max_abs() const { return (start_abs > end_abs) ? start_abs : end_abs; }
-};
-
-struct ForceFeedbackState
-{
-	// 力反馈开关：F=ON 时允许输出，F=OFF 时强制双手柄归零。
-	bool enabled = false;
-	// 当前输出命令缓存（用于调试与冻结保持）。
-	double force_582_f = 0.0;
-	double force_582_n = 0.0;
-	double force_587_f = 0.0;
-	double force_587_n = 0.0;
-	// 导管快进/快退期间冻结 582 输出，保持进入冻结时最后一拍命令。
-	bool freeze_582_active = false;
-	double freeze_582_f = 0.0;
-	double freeze_582_n = 0.0;
-	// 调试观测缓存。
-	short last_fn_1_raw = 0;
-	short last_ft_1_raw = 0;
-	short last_fn_2_raw = 0;
-	short last_ft_2_raw = 0;
-	bool last_fast_move = false;
-	GuidewireMode last_mode = GuidewireMode::None;
-
-	void reset()
-	{
-		force_582_f = 0.0;
-		force_582_n = 0.0;
-		force_587_f = 0.0;
-		force_587_n = 0.0;
-		freeze_582_active = false;
-		freeze_582_f = 0.0;
-		freeze_582_n = 0.0;
-		last_fast_move = false;
-		last_mode = GuidewireMode::None;
-	}
-
-	void clear_output()
-	{
-		force_582_f = 0.0;
-		force_582_n = 0.0;
-		force_587_f = 0.0;
-		force_587_n = 0.0;
-		freeze_582_active = false;
-		freeze_582_f = 0.0;
-		freeze_582_n = 0.0;
-	}
-};
-
-struct ForceSampleFrame
-{
-	short ft_1_value = 0;
-	short fn_1_value = 0;
-	short fn_2_value = 0;
-	short ft_2_value = 0;
-	bool valid = false;
-	DWORD tick_ms = 0;
-};
-
-struct ForceOutputCmd
-{
-	double force_582_f = 0.0;
-	double force_582_n = 0.0;
-	double force_587_f = 0.0;
-	double force_587_n = 0.0;
-};
-
-struct ForceLogState
-{
-	// 力感记录与采样使能；period_ms=0 表示每个主循环都记录。
-	bool enabled = false;
-	DWORD period_ms = 0;
-	DWORD last_sample_ms = 0;
-	DWORD last_buffer_flush_ms = 0;
-	std::ofstream file;
-	std::string filename;
-	std::string line_buffer;
-	size_t buffered_lines = 0;
-
-	bool open_file(const std::string& output_name)
-	{
-		filename = output_name;
-		file.open(filename.c_str(), std::ios::out | std::ios::trunc);
-		if (!file.is_open())
-		{
-			return false;
-		}
-
-		// 表头固定为 Force_sensor 约定字段顺序，并在末尾追加运行态编码列。
-		file << "timestamp,ft_1_value,fn_1_value,fn_2_value,ft_2_value,mode_code,reverse_code,push_pull_code,rot_sign_code\n";
-		last_sample_ms = 0;
-		last_buffer_flush_ms = GetTickCount();
-		return true;
-	}
-
-	bool should_sample(DWORD now_ms) const
-	{
-		if (!enabled)
-		{
-			return false;
-		}
-		if (period_ms == 0)
-		{
-			return true;
-		}
-		return (last_sample_ms == 0) || ((now_ms - last_sample_ms) >= period_ms);
-	}
-
-	void append_sample(
-		DWORD now_ms,
-		short ft1,
-		short fn1,
-		short fn2,
-		short ft2,
-		int mode_code,
-		int reverse_code,
-		int push_pull_code,
-		int rot_sign_code)
-	{
-		last_sample_ms = now_ms;
-		if (!file.is_open())
-		{
-			return;
-		}
-
-		// 先写入内存缓冲，减少每周期磁盘写入对控制环的影响。
-		line_buffer += build_force_log_timestamp();
-		line_buffer += ",";
-		line_buffer += std::to_string(static_cast<int>(ft1));
-		line_buffer += ",";
-		line_buffer += std::to_string(static_cast<int>(fn1));
-		line_buffer += ",";
-		line_buffer += std::to_string(static_cast<int>(fn2));
-		line_buffer += ",";
-		line_buffer += std::to_string(static_cast<int>(ft2));
-		line_buffer += ",";
-		line_buffer += std::to_string(mode_code);
-		line_buffer += ",";
-		line_buffer += std::to_string(reverse_code);
-		line_buffer += ",";
-		line_buffer += std::to_string(push_pull_code);
-		line_buffer += ",";
-		line_buffer += std::to_string(rot_sign_code);
-		line_buffer += "\n";
-
-		++buffered_lines;
-
-		// 行数达到阈值或超过时间间隔就刷入文件。
-		if (buffered_lines >= 100 || (now_ms - last_buffer_flush_ms) >= 500)
-		{
-			flush(false);
-		}
-	}
-
-	void flush(bool force_flush)
-	{
-		if (!file.is_open())
-		{
-			return;
-		}
-		if (!line_buffer.empty())
-		{
-			file << line_buffer;
-			line_buffer.clear();
-			buffered_lines = 0;
-		}
-		if (force_flush)
-		{
-			file.flush();
-		}
-		last_buffer_flush_ms = GetTickCount();
-	}
-
-	void close()
-	{
-		flush(true);
-		if (file.is_open())
-		{
-			file.close();
-		}
-	}
-};
-
-struct StartupState
-{
-	// 启动序列开始时一次性采集保持位姿。
-	// move_base_rel 是启动第二段运动的跟随基准。
-	StartupPhase phase = StartupPhase::WaitForEnter;
-	bool completed = false;
-	bool prompted = false;
-	DWORD phase_t0 = 0;
-
-	double axis1_hold_rel = 0.0;
-	double axis2_hold_rel = 0.0;
-	double axis3_hold_rel = 0.0;
-	double axis5_hold_rel = 0.0;
-	double axis6_hold_rel = 0.0;
-	double axis7_hold_rel = 0.0;
-
-	double axis3_move_base_rel = 0.0;
-	double axis5_move_base_rel = 0.0;
-	double axis6_move_base_rel = 0.0;
-
-	double v_limit_backup[7] = {};
-	bool v_limit_scaled = false;
-
-	bool is_active() const
-	{
-		return phase != StartupPhase::WaitForEnter && phase != StartupPhase::Done;
-	}
-};
-
-// 582 导管模式映射：fn_1 -> setforce 第一位(F)。
-double map_fn1_to_force_582(short fn_1_raw)
-{
-	const double x = static_cast<double>(fn_1_raw);
-	double y = 0.0;
-	if (x >= 1150.0 && x <= 1200.0)
-	{
-		y = 0.0;
-	}
-	else if (x > 1200.0)
-	{
-		y = (x - 1200.0) * (2.0 / (3000.0 - 1200.0));
-	}
-	else
-	{
-		y = (x - 1150.0) * ((-2.0 - 0.0) / (-1000.0 - 1150.0));
-	}
-	return clamp_double(y, -2.0, 2.0);
-}
-
-// 582 导管模式映射：ft_1 -> setforce 第二位(N)。
-double map_ft1_to_torque_582(short ft_1_raw)
-{
-	const double x = static_cast<double>(ft_1_raw);
-	double y = 0.0;
-	if (x >= -350.0 && x <= -300.0)
-	{
-		y = 0.0;
-	}
-	else if (x > -300.0)
-	{
-		y = (x + 300.0) * ((-2.0 - 0.0) / (500.0 - (-300.0)));
-	}
-	else
-	{
-		y = (x + 350.0) * ((2.0 - 0.0) / (-1150.0 - (-350.0)));
-	}
-	return clamp_double(y, -2.0, 2.0);
-}
-
-// 587 导丝模式映射占位：当前按需求先输出 0，但链路完整保留。
-void map_force_587_placeholder(short fn_2_raw, short ft_2_raw, double& out_f, double& out_n)
-{
-	(void)fn_2_raw;
-	(void)ft_2_raw;
-	out_f = 0.0;
-	out_n = 0.0;
-}
-
-// 力反馈与运动生成有意解耦；当运动冻结、
-// 保持或尚未激活时，会在不改动运动状态的情况下将双手柄力输出归零。
-void process_force_feedback(
-	ForceFeedbackState& ff,
-	const ForceSampleFrame& sample,
-	Handle& handle_582,
-	Handle& handle_587,
-	GuidewireMode guidewire_mode,
-	bool control_active,
-	bool freeze_active,
-	bool estop_hold_active,
-	bool axis1_fast_return,
-	bool axis6_fast_retract,
-	int loop_count)
-{
-	(void)loop_count;
-	ForceOutputCmd out_cmd;
-	const bool fast_move_active = axis1_fast_return || axis6_fast_retract;
-	const bool output_enabled =
-		ff.enabled &&
-		control_active &&
-		!freeze_active &&
-		!estop_hold_active &&
-		sample.valid;
-
-	if (output_enabled)
-	{
-		if (guidewire_mode == GuidewireMode::None)
-		{
-			const double mapped_582_f = map_fn1_to_force_582(sample.fn_1_value);
-			const double mapped_582_n = map_ft1_to_torque_582(sample.ft_1_value);
-			if (fast_move_active)
-			{
-				if (!ff.freeze_582_active)
-				{
-					ff.freeze_582_f = mapped_582_f;
-					ff.freeze_582_n = mapped_582_n;
-					ff.freeze_582_active = true;
-				}
-				out_cmd.force_582_f = ff.freeze_582_f;
-				out_cmd.force_582_n = ff.freeze_582_n;
-			}
-			else
-			{
-				ff.freeze_582_active = false;
-				out_cmd.force_582_f = mapped_582_f;
-				out_cmd.force_582_n = mapped_582_n;
-			}
-			out_cmd.force_587_f = 0.0;
-			out_cmd.force_587_n = 0.0;
-		}
-		else
-		{
-			ff.freeze_582_active = false;
-			out_cmd.force_582_f = 0.0;
-			out_cmd.force_582_n = 0.0;
-			map_force_587_placeholder(sample.fn_2_value, sample.ft_2_value, out_cmd.force_587_f, out_cmd.force_587_n);
-		}
-	}
-	else
-	{
-		ff.freeze_582_active = false;
-		out_cmd.force_582_f = 0.0;
-		out_cmd.force_582_n = 0.0;
-		out_cmd.force_587_f = 0.0;
-		out_cmd.force_587_n = 0.0;
-	}
-
-	// 使用 setforce(F,N) 直接对应 SDK axis=0 通道语义。
-	handle_582.setforce(out_cmd.force_582_f, out_cmd.force_582_n);
-	handle_587.setforce(out_cmd.force_587_f, out_cmd.force_587_n);
-
-	ff.force_582_f = out_cmd.force_582_f;
-	ff.force_582_n = out_cmd.force_582_n;
-	ff.force_587_f = out_cmd.force_587_f;
-	ff.force_587_n = out_cmd.force_587_n;
-
-	if (sample.valid)
-	{
-		ff.last_fn_1_raw = sample.fn_1_value;
-		ff.last_ft_1_raw = sample.ft_1_value;
-		ff.last_fn_2_raw = sample.fn_2_value;
-		ff.last_ft_2_raw = sample.ft_2_value;
-	}
-}
-
-} // 命名空间
+// 文件职责说明：
+// 1) 本文件是 ADS 控制程序入口与主循环调度层。
+// 2) 运动同步、导丝模式、启动流程、力反馈与 ADS 读写已拆分到独立模块。
+// 3) 本文件保留原有业务时序与按键行为，不改变控制策略。
 
 int main(int argc, char* argv[])
 {
@@ -1044,110 +269,48 @@ int main(int argc, char* argv[])
 	double plc_v_limit[7] = { 0 };
 	bool startup_smoothing_bypass = false;
 
-	// 读取上位机运动环所需的最小状态集合。
-	auto read_plc_state = [&]() -> bool
-	{
-		const char* symbols[] = {
-			AdsSymbol::act_pos,
-			AdsSymbol::init_pos,
-			AdsSymbol::leftlimit
-		};
-		const unsigned long lengths[] = {
-			static_cast<unsigned long>(sizeof(plc_act_pos)),
-			static_cast<unsigned long>(sizeof(plc_init_pos)),
-			static_cast<unsigned long>(sizeof(plc_leftlimit))
-		};
-		void* outputs[] = {
-			plc_act_pos,
-			plc_init_pos,
-			plc_leftlimit
-		};
-		return ads.ADSReadSum(symbols, lengths, outputs, 3);
-	};
+	// 主循环共享上下文：集中收敛模块调用所需的运行态对象与缓存指针。
+	AppContext ctx;
+	ctx.ads = &ads;
+	ctx.axis1_input_handle = axis1_input_handle;
+	ctx.axis6_input_handle = axis6_input_handle;
+	ctx.handle_axis1 = &handle_axis1;
+	ctx.handle_axis6 = &handle_axis6;
+	ctx.axis1_handle_filter = &axis1_handle_filter;
+	ctx.axis6_handle_filter = &axis6_handle_filter;
+	ctx.cfg = &cfg;
+	ctx.cyl = &cyl;
+	ctx.pos = pos;
+	ctx.plc_act_pos = plc_act_pos;
+	ctx.plc_init_pos = plc_init_pos;
+	ctx.plc_leftlimit = plc_leftlimit;
+	ctx.plc_act_pos_from_left = plc_act_pos_from_left;
+	ctx.plc_refer_from_left = plc_refer_from_left;
+	ctx.plc_v_limit = plc_v_limit;
+	ctx.startup_smoothing_bypass = &startup_smoothing_bypass;
 
-	// 单次读取 4 路力传感器：ft_1/fn_1/fn_2/ft_2（通过 ADSReadSum 合并为一次通讯）。
-	auto read_force_sample = [&](ForceSampleFrame& sample) -> bool
-	{
-		const char* symbols[] = {
-			AdsSymbol::ft_1_value,
-			AdsSymbol::fn_1_value,
-			AdsSymbol::fn_2_value,
-			AdsSymbol::ft_2_value
-		};
-		const unsigned long lengths[] = {
-			static_cast<unsigned long>(sizeof(sample.ft_1_value)),
-			static_cast<unsigned long>(sizeof(sample.fn_1_value)),
-			static_cast<unsigned long>(sizeof(sample.fn_2_value)),
-			static_cast<unsigned long>(sizeof(sample.ft_2_value))
-		};
-		void* outputs[] = {
-			&sample.ft_1_value,
-			&sample.fn_1_value,
-			&sample.fn_2_value,
-			&sample.ft_2_value
-		};
-		if (!ads.ADSReadSum(symbols, lengths, outputs, 4))
-		{
-			return false;
-		}
-		sample.valid = true;
-		sample.tick_ms = GetTickCount();
-		return true;
-	};
-
-	auto write_refer = [&]() -> bool
-	{
-		// 将当前 pos[7] 写回 PLC 参考位数组 G.refer。
-		return ads.ADSWrite(AdsSymbol::refer, sizeof(pos), pos);
-	};
-
-	auto read_v_limit = [&]() -> bool
-	{
-		// 读取 PLC 当前速度上限（用于启动准备阶段缩放/恢复）。
-		return ads.ADSRead(AdsSymbol::v_limit, sizeof(plc_v_limit), plc_v_limit);
-	};
-
-	auto write_v_limit = [&](const double* values) -> bool
-	{
-		return ads.ADSWrite(AdsSymbol::v_limit, sizeof(plc_v_limit), const_cast<double*>(values));
-	};
-
-	auto load_pos_from_actual = [&]()
-	{
-		// 以当前实际位置为基线重建一帧 refer，避免直接使用旧参考引发跳变。
-		copy_positions(plc_act_pos, pos, 7);
-	};
-
+	auto read_plc_state = [&]() -> bool { return plc_io::read_plc_state(ctx); };
+	auto read_force_sample = [&](ForceSampleFrame& sample) -> bool { return plc_io::read_force_sample(ctx, sample); };
+	auto write_refer = [&]() -> bool { return plc_io::write_refer(ctx); };
+	auto read_v_limit = [&]() -> bool { return plc_io::read_v_limit(ctx); };
+	auto write_v_limit = [&](const double* values) -> bool { return plc_io::write_v_limit(ctx, values); };
+	auto load_pos_from_actual = [&]() { plc_io::load_pos_from_actual(ctx); };
 	auto from_left_to_abs = [&](int axis_index, double from_left_mm) -> double
 	{
-		// 左限位参考坐标 -> PLC 绝对坐标。
-		return plc_leftlimit[axis_index] + from_left_mm;
+		return motion_sync::from_left_to_abs(ctx, axis_index, from_left_mm);
 	};
-
 	auto from_left_to_rel = [&](int axis_index, double from_left_mm) -> double
 	{
-		// 左限位参考坐标 -> 上位机相对坐标（refer 使用的坐标系）。
-		return from_left_to_abs(axis_index, from_left_mm) - plc_init_pos[axis_index];
+		return motion_sync::from_left_to_rel(ctx, axis_index, from_left_mm);
 	};
-
 	auto read_axis_return_status = [&](const AxisReturnAdsSymbols& symbols, AxisReturnStatus& status) -> bool
 	{
-		// 轮询 PLC 计划回退命令状态位（Busy/Done/Error/ErrorId）。
-		bool ok = true;
-		ok = ads.ADSRead(symbols.busy, sizeof(status.busy), &status.busy) && ok;
-		ok = ads.ADSRead(symbols.done, sizeof(status.done), &status.done) && ok;
-		ok = ads.ADSRead(symbols.error, sizeof(status.error), &status.error) && ok;
-		ok = ads.ADSRead(symbols.error_id, sizeof(status.error_id), &status.error_id) && ok;
-		return ok;
+		return plc_io::read_axis_return_status(ctx, symbols, status);
 	};
-
 	auto clear_axis_return_request = [&](const AxisReturnAdsSymbols& symbols) -> bool
 	{
-		// 清除单轴计划回退触发位 Req。
-		bool req = false;
-		return ads.ADSWrite(symbols.req, sizeof(req), &req);
+		return plc_io::clear_axis_return_request(ctx, symbols);
 	};
-
 	auto request_axis_return = [&](const AxisReturnAdsSymbols& symbols,
 		double target_abs,
 		double velocity,
@@ -1155,37 +318,15 @@ int main(int argc, char* argv[])
 		double dec,
 		double jerk) -> bool
 	{
-		// 下发一次计划回退参数并置位 Req：
-		// target_abs(mm), velocity(mm/s), acc/dec(mm/s^2), jerk(mm/s^3)。
-		bool req = true;
-		bool ok = true;
-		ok = ads.ADSWrite(symbols.target_abs, sizeof(target_abs), &target_abs) && ok;
-		ok = ads.ADSWrite(symbols.velocity, sizeof(velocity), &velocity) && ok;
-		ok = ads.ADSWrite(symbols.acc, sizeof(acc), &acc) && ok;
-		ok = ads.ADSWrite(symbols.dec, sizeof(dec), &dec) && ok;
-		ok = ads.ADSWrite(symbols.jerk, sizeof(jerk), &jerk) && ok;
-		ok = ads.ADSWrite(symbols.req, sizeof(req), &req) && ok;
-		return ok;
+		return plc_io::request_axis_return(ctx, symbols, target_abs, velocity, acc, dec, jerk);
 	};
-
 	auto clear_axis1_group_return_requests = [&]() -> bool
 	{
-		// axis1 相关轴群共用的回退请求清理（1/3/5/6）。
-		bool ok = true;
-		ok = clear_axis_return_request(AdsSymbol::axis1_return) && ok;
-		ok = clear_axis_return_request(AdsSymbol::axis3_return) && ok;
-		ok = clear_axis_return_request(AdsSymbol::axis5_return) && ok;
-		ok = clear_axis_return_request(AdsSymbol::axis6_return) && ok;
-		return ok;
+		return plc_io::clear_axis1_group_return_requests(ctx);
 	};
-
 	auto write_axis4_manual_requests = [&](bool forward_req, bool reverse_req) -> bool
 	{
-		// Axis4 点动请求由 PLC 侧状态机执行，本处仅负责写入请求位。
-		bool ok = true;
-		ok = ads.ADSWrite(AdsSymbol::axis4_fwd_req, sizeof(forward_req), &forward_req) && ok;
-		ok = ads.ADSWrite(AdsSymbol::axis4_rev_req, sizeof(reverse_req), &reverse_req) && ok;
-		return ok;
+		return plc_io::write_axis4_manual_requests(ctx, forward_req, reverse_req);
 	};
 
 	// 常规导管模式的跟随基准。
@@ -1251,150 +392,71 @@ int main(int argc, char* argv[])
 	CrawlState axis6_crawl;
 	axis1_crawl.enabled = true;
 
-	// Axis1 使用固定左限位参考窗口；Axis6 动态捕获其窗口。
-	auto axis1_window_left_abs = [&]() -> double
-	{
-		return from_left_to_abs(0, cfg.axis1_window_left_from_left_mm);
-	};
+	// 绑定上下文中的长生命周期状态，替代大段 lambda capture。
+	ctx.guidewire_mode = &guidewire_mode;
+	ctx.axis1_crawl = &axis1_crawl;
+	ctx.axis6_crawl = &axis6_crawl;
+	ctx.startup = &startup;
+	ctx.ff = &ff;
+	ctx.force_log = &force_log;
+	ctx.axis3_base_rel = &axis3_base_rel;
+	ctx.axis5_base_rel = &axis5_base_rel;
+	ctx.axis6_mirror_base_rel = &axis6_mirror_base_rel;
+	ctx.axis1_return_entry_rel = &axis1_return_entry_rel;
+	ctx.axis1_return_settle_rel = &axis1_return_settle_rel;
+	ctx.axis6_return_entry_rel = &axis6_return_entry_rel;
+	ctx.axis6_return_settle_rel = &axis6_return_settle_rel;
+	ctx.axis1_return_hold_axis3_rel = &axis1_return_hold_axis3_rel;
+	ctx.axis1_return_hold_axis5_rel = &axis1_return_hold_axis5_rel;
+	ctx.axis1_fast_entry_abs = &axis1_fast_entry_abs;
+	ctx.axis6_fast_entry_abs = &axis6_fast_entry_abs;
+	ctx.axis6_coupled_target_abs = &axis6_coupled_target_abs;
+	ctx.axis6_coupled_settle_rel = &axis6_coupled_settle_rel;
+	ctx.axis6_coupled_active = &axis6_coupled_active;
+	ctx.axis6_coupled_requested = &axis6_coupled_requested;
+	ctx.axis6_coupled_done = &axis6_coupled_done;
+	ctx.axis6_coupled_error = &axis6_coupled_error;
+	ctx.axis6_coupled_error_id = &axis6_coupled_error_id;
+	ctx.axis2_hold_rel = &axis2_hold_rel;
+	ctx.axis7_hold_rel = &axis7_hold_rel;
+	ctx.axis1_prev_linear_filtered = &axis1_prev_linear_filtered;
+	ctx.axis6_prev_linear_filtered = &axis6_prev_linear_filtered;
+	ctx.axis1_prev_rot_filtered = &axis1_prev_rot_filtered;
+	ctx.axis6_prev_rot_filtered = &axis6_prev_rot_filtered;
+	ctx.axis1_follow_cmd_abs = &axis1_follow_cmd_abs;
+	ctx.axis6_follow_cmd_abs = &axis6_follow_cmd_abs;
+	ctx.axis1_reverse_switch_guard_active = &axis1_reverse_switch_guard_active;
+	ctx.axis6_reverse_switch_guard_active = &axis6_reverse_switch_guard_active;
+	ctx.axis1_prev_abs_for_trigger = &axis1_prev_abs_for_trigger;
+	ctx.axis6_prev_abs_for_trigger = &axis6_prev_abs_for_trigger;
+	ctx.axis1_prev_abs_valid = &axis1_prev_abs_valid;
+	ctx.axis6_prev_abs_valid = &axis6_prev_abs_valid;
+	ctx.independent_axis1_hold_rel = &independent_axis1_hold_rel;
+	ctx.independent_axis2_hold_rel = &independent_axis2_hold_rel;
+	ctx.independent_axis3_hold_rel = &independent_axis3_hold_rel;
+	ctx.independent_axis5_hold_rel = &independent_axis5_hold_rel;
+	ctx.axis6_window_locked = &axis6_window_locked;
+	ctx.axis6_locked_window_start_abs = &axis6_locked_window_start_abs;
+	ctx.axis6_locked_window_end_abs = &axis6_locked_window_end_abs;
+	ctx.axis6_coop_ff_inited = &axis6_coop_ff_inited;
+	ctx.axis6_coop_prev_axis1_cmd_abs = &axis6_coop_prev_axis1_cmd_abs;
 
-	auto axis1_window_right_abs = [&]() -> double
-	{
-		return from_left_to_abs(0, cfg.axis1_window_right_from_left_mm);
-	};
-
-	// 设置 axis6 独立/协同通用窗口：
-	// window_right_abs 为窗口右端，左端按窗口长度回推，并自动钳制到左限位。
+	auto axis1_window_left_abs = [&]() -> double { return motion_sync::axis1_window_left_abs(ctx); };
+	auto axis1_window_right_abs = [&]() -> double { return motion_sync::axis1_window_right_abs(ctx); };
 	auto set_axis6_independent_window = [&](double window_right_abs, bool log_clamp) -> bool
 	{
-		const double shifted_window_right_abs = window_right_abs + cfg.axis6_window_shift_from_left_mm;
-		const double requested_left_abs = shifted_window_right_abs - cfg.axis6_independent_window_size_mm;
-		const double clamped_left_abs = (requested_left_abs < plc_leftlimit[5]) ? plc_leftlimit[5] : requested_left_abs;
-
-		axis6_crawl.start_abs = clamped_left_abs;
-		axis6_crawl.end_abs = shifted_window_right_abs;
-
-		if ((axis6_crawl.end_abs - axis6_crawl.start_abs) < cfg.crawl_arrive_tol_mm)
-		{
-			if (log_clamp)
-			{
-				std::cout << "导丝模式切换已忽略：axis6 独立窗口距离左限位过近。" << std::endl;
-			}
-			return false;
-		}
-
-		if (log_clamp && clamped_left_abs > requested_left_abs)
-		{
-			std::cout << "axis6 独立窗口已按左限位进行夹紧修正。" << std::endl;
-		}
-
-		return true;
+		return motion_sync::set_axis6_independent_window(ctx, window_right_abs, log_clamp);
 	};
-
-	// 锁定当前 axis6 窗口边界，避免模式切换期间窗口漂移。
-	auto lock_axis6_window_from_current = [&]()
-	{
-		axis6_window_locked = true;
-		axis6_locked_window_start_abs = axis6_crawl.start_abs;
-		axis6_locked_window_end_abs = axis6_crawl.end_abs;
-	};
-
-	// 恢复已锁定的 axis6 窗口边界。
-	auto apply_locked_axis6_window = [&]()
-	{
-		axis6_crawl.start_abs = axis6_locked_window_start_abs;
-		axis6_crawl.end_abs = axis6_locked_window_end_abs;
-	};
-
-	// 导丝窗口覆盖修正：
-	// 当 axis6 远端相对左限位的位置与 axis5 相对左限位的位置过近时，
-	// 认为窗口被覆盖，按 axis5 的 from-left 值重建 axis6 两端点。
+	auto lock_axis6_window_from_current = [&]() { motion_sync::lock_axis6_window_from_current(ctx); };
+	auto apply_locked_axis6_window = [&]() { motion_sync::apply_locked_axis6_window(ctx); };
 	auto rebuild_axis6_window_if_covered = [&](const char* reason, bool log_result) -> bool
 	{
-		(void)reason;
-		(void)log_result;
-		const double axis6_start_from_left_mm = axis6_crawl.start_abs - plc_leftlimit[5];
-		const double axis6_end_from_left_mm = axis6_crawl.end_abs - plc_leftlimit[5];
-		const double axis6_far_from_left_mm =
-			(axis6_start_from_left_mm > axis6_end_from_left_mm)
-			? axis6_start_from_left_mm
-			: axis6_end_from_left_mm;
-		const double axis5_from_left_mm =
-			(plc_act_pos[4] + plc_init_pos[4]) - plc_leftlimit[4];
-		const double delta_mm = axis6_far_from_left_mm - axis5_from_left_mm;
-
-		if (delta_mm < cfg.axis6_window_cover_threshold_mm)
-		{
-			const double rebuilt_window_left_abs = plc_leftlimit[5] + axis5_from_left_mm;
-			const double rebuilt_window_right_abs =
-				rebuilt_window_left_abs + cfg.axis6_independent_window_size_mm;
-			if (!set_axis6_independent_window(rebuilt_window_right_abs, true))
-			{
-				return false;
-			}
-			lock_axis6_window_from_current();
-		}
-		return true;
+		return motion_sync::rebuild_axis6_window_if_covered(ctx, reason, log_result);
 	};
-
-	// 仅在模式边沿或一次爬行循环完成后，重同步导管侧爬行状态。
 	auto sync_axis1 = [&](int samples, bool wait_rearm, int rearm_dir) -> bool
 	{
-		(void)wait_rearm;
-		(void)rearm_dir;
-		const double preserved_axis2_hold_rel = axis2_hold_rel;
-		clear_axis1_group_return_requests();
-
-		if (!read_plc_state())
-		{
-			return false;
-		}
-
-		load_pos_from_actual();
-		pos[1] = preserved_axis2_hold_rel;
-		pos[6] = axis7_hold_rel;
-
-		get_average_handle_pose(*axis1_input_handle, samples, axis1_crawl.handle_ref, axis1_crawl.rot_ref);
-		axis1_handle_filter.reset(axis1_crawl.handle_ref, axis1_crawl.rot_ref);
-		axis1_prev_linear_filtered = axis1_handle_filter.axis0_filtered;
-		axis1_prev_rot_filtered = axis1_handle_filter.axis1_filtered;
-		axis1_crawl.base_rel = plc_act_pos[0];
-		axis1_crawl.rot_base_rel = preserved_axis2_hold_rel;
-		axis1_follow_cmd_abs = plc_act_pos[0] + plc_init_pos[0];
-		axis1_crawl.start_abs = axis1_window_left_abs();
-		axis1_crawl.end_abs = axis1_window_right_abs();
-		axis1_crawl.target_abs = axis1_crawl.end_abs;
-		axis1_crawl.plc_move_requested = false;
-		axis1_crawl.window_active = is_within_range(
-			plc_act_pos[0] + plc_init_pos[0],
-			axis1_crawl.min_abs(),
-		axis1_crawl.max_abs(),
-			cfg.crawl_arrive_tol_mm);
-		axis1_crawl.phase = CrawlState::Phase::Follow;
-		axis1_crawl.phase_t0 = GetTickCount();
-		axis1_crawl.cyl_seq_stage = 0;
-		axis1_crawl.cyl_seq_t0 = axis1_crawl.phase_t0;
-		axis1_crawl.wait_rearm = false;
-		axis1_crawl.rearm_dir = 0;
-
-		axis2_hold_rel = preserved_axis2_hold_rel;
-		axis1_reverse_switch_guard_active = false;
-		axis1_prev_abs_for_trigger = plc_act_pos[0] + plc_init_pos[0];
-		axis1_prev_abs_valid = true;
-
-		axis3_base_rel = plc_act_pos[2];
-		axis5_base_rel = plc_act_pos[4];
-		axis6_mirror_base_rel = plc_act_pos[5];
-		axis6_coupled_active = false;
-		axis6_coupled_requested = false;
-		axis6_coupled_done = false;
-		axis6_coupled_error = false;
-		axis6_coupled_error_id = 0;
-
-		return write_refer();
+		return motion_sync::sync_axis1(ctx, samples, wait_rearm, rearm_dir);
 	};
-
-	// 仅重同步导丝侧爬行状态。进入独立模式时可选择基于
-	// 当前 axis6 绝对位置重建窗口。
 	auto sync_axis6 = [&](int samples,
 		bool capture_window,
 		bool wait_rearm,
@@ -1402,427 +464,41 @@ int main(int argc, char* argv[])
 		bool check_window_cover,
 		bool log_window_cover) -> bool
 	{
-		(void)wait_rearm;
-		(void)rearm_dir;
-		const double preserved_axis7_hold_rel = axis7_hold_rel;
-		clear_axis_return_request(AdsSymbol::axis6_return);
-
-		if (!read_plc_state())
-		{
-			return false;
-		}
-
-		load_pos_from_actual();
-		pos[1] = axis2_hold_rel;
-		pos[6] = preserved_axis7_hold_rel;
-
-		get_average_handle_pose(*axis6_input_handle, samples, axis6_crawl.handle_ref, axis6_crawl.rot_ref);
-		axis6_handle_filter.reset(axis6_crawl.handle_ref, axis6_crawl.rot_ref);
-		axis6_prev_linear_filtered = axis6_handle_filter.axis0_filtered;
-		axis6_prev_rot_filtered = axis6_handle_filter.axis1_filtered;
-		axis6_crawl.base_rel = plc_act_pos[5];
-		axis6_crawl.rot_base_rel = preserved_axis7_hold_rel;
-		axis6_follow_cmd_abs = plc_act_pos[5] + plc_init_pos[5];
-		if (capture_window || !axis6_crawl.enabled)
-		{
-			if (!axis6_window_locked)
-			{
-				if (!set_axis6_independent_window(plc_act_pos[5] + plc_init_pos[5], capture_window))
-				{
-					return false;
-				}
-				lock_axis6_window_from_current();
-			}
-			else
-			{
-				apply_locked_axis6_window();
-			}
-		}
-		else if (axis6_window_locked)
-		{
-			apply_locked_axis6_window();
-		}
-		if (check_window_cover)
-		{
-			if (!rebuild_axis6_window_if_covered("sync_axis6", log_window_cover))
-			{
-				return false;
-			}
-		}
-		axis6_crawl.target_abs = axis6_crawl.end_abs;
-		axis6_crawl.plc_move_requested = false;
-		axis6_crawl.window_active = is_within_range(
-			plc_act_pos[5] + plc_init_pos[5],
-			axis6_crawl.min_abs(),
-		axis6_crawl.max_abs(),
-			cfg.crawl_arrive_tol_mm);
-		axis6_crawl.phase = CrawlState::Phase::Follow;
-		axis6_crawl.phase_t0 = GetTickCount();
-		axis6_crawl.cyl_seq_stage = 0;
-		axis6_crawl.cyl_seq_t0 = axis6_crawl.phase_t0;
-		axis6_crawl.wait_rearm = false;
-		axis6_crawl.rearm_dir = 0;
-		axis6_crawl.enabled = true;
-		axis6_coop_ff_inited = false;
-		axis6_coop_prev_axis1_cmd_abs = 0.0;
-
-		axis7_hold_rel = preserved_axis7_hold_rel;
-		axis6_reverse_switch_guard_active = false;
-		axis6_prev_abs_for_trigger = plc_act_pos[5] + plc_init_pos[5];
-		axis6_prev_abs_valid = true;
-
-		return write_refer();
-	};
-
-	// 全局重同步会将两个手柄及全部镜像基准对齐到当前 PLC 位置。
-	auto sync_all = [&](int samples) -> bool
-	{
-		double preserved_axis2_hold_rel = axis2_hold_rel;
-		double preserved_axis7_hold_rel = axis7_hold_rel;
-		clear_axis1_group_return_requests();
-		clear_axis_return_request(AdsSymbol::axis6_return);
-		write_axis4_manual_requests(false, false);
-
-		if (!read_plc_state())
-		{
-			return false;
-		}
-		// 使用“当前轴实际位置”重置旋转保持基准，避免复用陈旧 hold 值导致意外回零。
-		preserved_axis2_hold_rel = plc_act_pos[1];
-		preserved_axis7_hold_rel = plc_act_pos[6];
-
-		load_pos_from_actual();
-		pos[1] = preserved_axis2_hold_rel;
-		pos[6] = preserved_axis7_hold_rel;
-		if (!write_refer())
-		{
-			return false;
-		}
-
-		get_average_dual_pos(
-			*axis1_input_handle,
-			*axis6_input_handle,
+		return motion_sync::sync_axis6(
+			ctx,
 			samples,
-			axis1_crawl.handle_ref,
-			axis1_crawl.rot_ref,
-			axis6_crawl.handle_ref,
-			axis6_crawl.rot_ref);
-		axis1_handle_filter.reset(axis1_crawl.handle_ref, axis1_crawl.rot_ref);
-		axis6_handle_filter.reset(axis6_crawl.handle_ref, axis6_crawl.rot_ref);
-		axis1_prev_linear_filtered = axis1_handle_filter.axis0_filtered;
-		axis6_prev_linear_filtered = axis6_handle_filter.axis0_filtered;
-		axis1_prev_rot_filtered = axis1_handle_filter.axis1_filtered;
-		axis6_prev_rot_filtered = axis6_handle_filter.axis1_filtered;
-
-		if (!read_plc_state())
-		{
-			return false;
-		}
-
-		load_pos_from_actual();
-		pos[1] = preserved_axis2_hold_rel;
-		pos[6] = preserved_axis7_hold_rel;
-		if (!write_refer())
-		{
-			return false;
-		}
-
-		axis1_crawl.base_rel = plc_act_pos[0];
-		axis1_crawl.rot_base_rel = preserved_axis2_hold_rel;
-		axis1_crawl.start_abs = axis1_window_left_abs();
-		axis1_crawl.end_abs = axis1_window_right_abs();
-		axis1_crawl.target_abs = axis1_crawl.end_abs;
-		axis1_crawl.plc_move_requested = false;
-		axis1_crawl.window_active = is_within_range(
-			plc_act_pos[0] + plc_init_pos[0],
-			axis1_crawl.min_abs(),
-			axis1_crawl.max_abs(),
-			cfg.crawl_arrive_tol_mm);
-		axis1_crawl.phase = CrawlState::Phase::Follow;
-		axis1_crawl.phase_t0 = GetTickCount();
-		axis1_crawl.cyl_seq_stage = 0;
-		axis1_crawl.cyl_seq_t0 = axis1_crawl.phase_t0;
-		axis1_crawl.wait_rearm = false;
-		axis1_crawl.rearm_dir = 0;
-		axis1_crawl.enabled = true;
-		axis1_follow_cmd_abs = plc_act_pos[0] + plc_init_pos[0];
-
-		axis2_hold_rel = preserved_axis2_hold_rel;
-		axis1_reverse_switch_guard_active = false;
-		axis1_prev_abs_for_trigger = axis1_follow_cmd_abs;
-		axis1_prev_abs_valid = true;
-
-		axis3_base_rel = plc_act_pos[2];
-		axis5_base_rel = plc_act_pos[4];
-		axis6_mirror_base_rel = plc_act_pos[5];
-
-		axis6_crawl.base_rel = plc_act_pos[5];
-		axis6_crawl.rot_base_rel = preserved_axis7_hold_rel;
-		axis6_crawl.start_abs = plc_act_pos[5] + plc_init_pos[5];
-		axis6_crawl.end_abs = plc_act_pos[5] + plc_init_pos[5];
-		axis6_crawl.target_abs = axis6_crawl.end_abs;
-		axis6_crawl.plc_move_requested = false;
-		axis6_crawl.window_active = false;
-		axis6_crawl.phase = CrawlState::Phase::Follow;
-		axis6_crawl.phase_t0 = GetTickCount();
-		axis6_crawl.cyl_seq_stage = 0;
-		axis6_crawl.cyl_seq_t0 = axis6_crawl.phase_t0;
-		axis6_crawl.wait_rearm = false;
-		axis6_crawl.rearm_dir = 0;
-		axis6_crawl.enabled = false;
-		axis6_window_locked = false;
-		axis6_coop_ff_inited = false;
-		axis6_coop_prev_axis1_cmd_abs = 0.0;
-		axis6_follow_cmd_abs = plc_act_pos[5] + plc_init_pos[5];
-		axis6_reverse_switch_guard_active = false;
-		axis6_prev_abs_for_trigger = axis6_follow_cmd_abs;
-		axis6_prev_abs_valid = true;
-		axis6_coupled_active = false;
-		axis6_coupled_requested = false;
-		axis6_coupled_done = false;
-		axis6_coupled_error = false;
-		axis6_coupled_error_id = 0;
-
-		axis7_hold_rel = preserved_axis7_hold_rel;
-
-		return true;
+			capture_window,
+			wait_rearm,
+			rearm_dir,
+			check_window_cover,
+			log_window_cover);
 	};
-
-	auto clear_plc_reinit_req = [&]()
-	{
-		bool clear_val = false;
-		ads.ADSWrite(AdsSymbol::handle_reinit_req, sizeof(clear_val), &clear_val);
-	};
-
-	// 当 axis1 首次进入爬行窗口时，刷新常规模式跟随基准。
-	auto capture_axis1_follow_baseline = [&]()
-	{
-		axis1_crawl.handle_ref = axis1_handle_filter.axis0_filtered;
-		axis1_crawl.rot_ref = axis1_handle_filter.axis1_filtered;
-		axis1_crawl.base_rel = plc_act_pos[0];
-		axis1_crawl.rot_base_rel = axis2_hold_rel;
-		axis1_follow_cmd_abs = plc_act_pos[0] + plc_init_pos[0];
-		axis1_crawl.plc_move_requested = false;
-		axis3_base_rel = plc_act_pos[2];
-		axis5_base_rel = plc_act_pos[4];
-		if (!axis6_crawl.enabled)
-		{
-			axis6_mirror_base_rel = plc_act_pos[5];
-		}
-	};
-
+	auto sync_all = [&](int samples) -> bool { return motion_sync::sync_all(ctx, samples); };
+	auto clear_plc_reinit_req = [&]() { plc_io::clear_plc_reinit_req(ctx); };
+	auto capture_axis1_follow_baseline = [&]() { motion_sync::capture_axis1_follow_baseline(ctx); };
 	auto apply_axis1_mirror_from_abs = [&](double axis1_abs_cmd, bool include_axis6)
 	{
-		const double axis1_delta_rel = axis1_abs_cmd - plc_init_pos[0] - axis1_crawl.base_rel;
-		pos[2] = axis3_base_rel + axis1_delta_rel;
-		pos[4] = axis5_base_rel + axis1_delta_rel;
-		if (include_axis6)
-		{
-			pos[5] = axis6_mirror_base_rel + axis1_delta_rel;
-		}
+		motion_sync::apply_axis1_mirror_from_abs(ctx, axis1_abs_cmd, include_axis6);
 	};
-
-	// 进入导丝独立模式时冻结导管侧各轴在当前
-	// 相对位置；Axis7 保持可控并重同步到当前手柄扭转量。
 	auto enter_independent_guidewire_mode = [&]() -> bool
 	{
-		const double preserved_axis7_hold_rel = axis7_hold_rel;
-
-		if (!read_plc_state())
-		{
-			return false;
-		}
-
-		load_pos_from_actual();
-		independent_axis1_hold_rel = plc_act_pos[0];
-		independent_axis2_hold_rel = axis2_hold_rel;
-		independent_axis3_hold_rel = plc_act_pos[2];
-		independent_axis5_hold_rel = plc_act_pos[4];
-
-		axis7_hold_rel = preserved_axis7_hold_rel;
-
-		get_average_handle_pose(*axis6_input_handle, 20, axis6_crawl.handle_ref, axis6_crawl.rot_ref);
-		axis6_handle_filter.reset(axis6_crawl.handle_ref, axis6_crawl.rot_ref);
-		axis6_prev_linear_filtered = axis6_handle_filter.axis0_filtered;
-		axis6_prev_rot_filtered = axis6_handle_filter.axis1_filtered;
-		axis6_crawl.base_rel = plc_act_pos[5];
-		axis6_crawl.rot_base_rel = axis7_hold_rel;
-		axis6_follow_cmd_abs = plc_act_pos[5] + plc_init_pos[5];
-		if (!axis6_window_locked)
-		{
-			if (!set_axis6_independent_window(plc_act_pos[5] + plc_init_pos[5], true))
-			{
-				return false;
-			}
-			lock_axis6_window_from_current();
-		}
-		else
-		{
-			apply_locked_axis6_window();
-		}
-		if (!rebuild_axis6_window_if_covered("enter_independent", true))
-		{
-			return false;
-		}
-		axis6_crawl.target_abs = axis6_crawl.end_abs;
-		axis6_crawl.plc_move_requested = false;
-		axis6_crawl.phase = CrawlState::Phase::Follow;
-		axis6_crawl.phase_t0 = GetTickCount();
-		axis6_crawl.cyl_seq_stage = 0;
-		axis6_crawl.cyl_seq_t0 = axis6_crawl.phase_t0;
-		axis6_crawl.wait_rearm = false;
-		axis6_crawl.rearm_dir = 0;
-		axis6_crawl.window_active = is_within_range(
-			plc_act_pos[5] + plc_init_pos[5],
-			axis6_crawl.min_abs(),
-		axis6_crawl.max_abs(),
-		cfg.crawl_arrive_tol_mm);
-		axis6_crawl.enabled = true;
-		axis6_coop_ff_inited = false;
-		axis6_coop_prev_axis1_cmd_abs = 0.0;
-		axis6_reverse_switch_guard_active = false;
-		axis6_prev_abs_for_trigger = axis6_follow_cmd_abs;
-		axis6_prev_abs_valid = true;
-
-		pos[0] = plc_act_pos[0];
-		pos[1] = axis2_hold_rel;
-		pos[2] = plc_act_pos[2];
-		pos[4] = plc_act_pos[4];
-		pos[5] = plc_act_pos[5];
-		pos[6] = axis7_hold_rel;
-		return write_refer();
+		return guidewire_mode_ctrl::enter_independent_guidewire_mode(ctx);
 	};
-
-	// 协同模式复用 axis6 爬行状态机，同时保持导管轴链路激活。
-	// 协同模式入口：复用 axis6 的窗口化爬行状态机，不冻结导管轴链路。
 	auto enter_cooperative_guidewire_mode = [&]() -> bool
 	{
-		return sync_axis6(20, true, false, 0, true, true);
+		return guidewire_mode_ctrl::enter_cooperative_guidewire_mode(ctx);
 	};
-
-	// 导丝模式入模门限检查：
-	// 仅在“尝试进入模式”瞬间检查 |axis6-leftlimit| < max，不在运行中强制退出。
 	auto check_axis6_guidewire_entry_gate = [&](double& axis6_from_left_mm) -> bool
 	{
-		if (!read_plc_state())
-		{
-			return false;
-		}
-		const double axis6_abs = plc_act_pos[5] + plc_init_pos[5];
-		axis6_from_left_mm = std::abs(axis6_abs - plc_leftlimit[5]);
-		return axis6_from_left_mm < cfg.guidewire_entry_axis6_from_left_max_mm;
+		return guidewire_mode_ctrl::check_axis6_guidewire_entry_gate(ctx, axis6_from_left_mm);
 	};
-
 	auto exit_guidewire_mode_to_normal = [&]() -> bool
 	{
-		guidewire_mode = GuidewireMode::None;
-		axis6_window_locked = false;
-		axis6_coop_ff_inited = false;
-		axis6_coop_prev_axis1_cmd_abs = 0.0;
-		// 退出导丝时用当前实际值刷新旋转保持位，避免沿用陈旧 hold 导致 axis2 偶发回零。
-		if (!read_plc_state())
-		{
-			return false;
-		}
-		axis2_hold_rel = plc_act_pos[1];
-		axis7_hold_rel = plc_act_pos[6];
-		axis1_reverse_switch_guard_active = false;
-		axis6_reverse_switch_guard_active = false;
-		return sync_axis1(20, false, 0);
+		return guidewire_mode_ctrl::exit_guidewire_mode_to_normal(ctx);
 	};
-
-	// 启动准备是叠加在 PLC 自检之上的上位机流程。
-	// 它会临时降低 3/5/6 轴的 v_limit，并在完成后恢复。
-	// 启动准备流程（上位机侧）：
-	// 在 PLC 自检完成后执行，期间会临时缩放 3/5/6 速度上限并在结束时恢复。
-	auto start_startup_sequence = [&]() -> bool
-	{
-		if (!read_plc_state())
-		{
-			return false;
-		}
-
-		load_pos_from_actual();
-		startup.axis1_hold_rel = plc_act_pos[0];
-		startup.axis2_hold_rel = axis2_hold_rel;
-		startup.axis3_hold_rel = plc_act_pos[2];
-		startup.axis5_hold_rel = plc_act_pos[4];
-		startup.axis6_hold_rel = plc_act_pos[5];
-		startup.axis7_hold_rel = axis7_hold_rel;
-
-		pos[1] = axis2_hold_rel;
-		pos[6] = axis7_hold_rel;
-
-		if (!startup.v_limit_scaled)
-		{
-			if (!read_v_limit())
-			{
-				return false;
-			}
-
-			copy_positions(plc_v_limit, startup.v_limit_backup, 7);
-			double scaled_v_limit[7] = { 0 };
-			copy_positions(plc_v_limit, scaled_v_limit, 7);
-			scaled_v_limit[2] *= cfg.startup_motion_speed_scale;
-			scaled_v_limit[4] *= cfg.startup_motion_speed_scale;
-			scaled_v_limit[5] *= cfg.startup_motion_speed_scale;
-			if (!write_v_limit(scaled_v_limit))
-			{
-				return false;
-			}
-			startup.v_limit_scaled = true;
-		}
-
-		guidewire_mode = GuidewireMode::None;
-		axis6_crawl.enabled = false;
-		axis6_window_locked = false;
-		axis6_coop_ff_inited = false;
-		axis6_coop_prev_axis1_cmd_abs = 0.0;
-		startup.phase = StartupPhase::ReleaseClamps;
-		startup.phase_t0 = GetTickCount();
-		startup.completed = false;
-		startup.prompted = false;
-
-		if (!write_refer())
-		{
-			if (startup.v_limit_scaled)
-			{
-				write_v_limit(startup.v_limit_backup);
-				startup.v_limit_scaled = false;
-			}
-			return false;
-		}
-
-		return true;
-	};
-
-	// 在启动完成或启动中断后恢复 PLC 运动限值。
-	auto restore_startup_v_limit = [&]() -> bool
-	{
-		if (!startup.v_limit_scaled)
-		{
-			return true;
-		}
-
-		if (!write_v_limit(startup.v_limit_backup))
-		{
-			return false;
-		}
-
-		startup.v_limit_scaled = false;
-		return true;
-	};
-
-	auto prompt_startup_mode = [&]()
-	{
-		if (!startup.prompted)
-		{
-			std::cout << "请安装器械。" << std::endl;
-			std::cout << "进入启动姿态请按键盘 S 键。" << std::endl;
-			std::cout << "直接继续控制请按键盘 C 键。" << std::endl;
-			startup.prompted = true;
-		}
-	};
+	auto start_startup_sequence = [&]() -> bool { return startup_sequence::start_startup_sequence(ctx); };
+	auto restore_startup_v_limit = [&]() -> bool { return startup_sequence::restore_startup_v_limit(ctx); };
+	auto prompt_startup_mode = [&]() { startup_sequence::prompt_startup_mode(ctx); };
 
 	// 在交互循环开始前，用初始 PLC 快照初始化各保持位姿。
 	if (!read_plc_state())
@@ -3458,11 +2134,12 @@ int main(int argc, char* argv[])
 					force_mode_code,
 					force_reverse_code,
 					force_push_pull_code,
-					force_rot_sign_code);
+					force_rot_sign_code,
+					force_sample.axis1_pos_rel);
 			}
 			else if ((force_log_now_ms - force_log_warn_last_ms) >= 1000)
 			{
-				std::cout << "力传感器告警：ft_1/fn_1/fn_2/ft_2 的 ADSReadSum 读取失败。" << std::endl;
+				std::cout << "力传感器告警：ft_1/fn_1/fn_2/ft_2 与 axis1_pos_rel 的 ADSReadSum 读取失败。" << std::endl;
 				force_log_warn_last_ms = force_log_now_ms;
 			}
 		}

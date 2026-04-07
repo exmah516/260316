@@ -151,6 +151,12 @@
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
+    <ClCompile Include="control_types.cpp" />
+    <ClCompile Include="plc_io.cpp" />
+    <ClCompile Include="motion_sync.cpp" />
+    <ClCompile Include="guidewire_mode.cpp" />
+    <ClCompile Include="force_feedback.cpp" />
+    <ClCompile Include="startup_sequence.cpp" />
     <ClCompile Include="main.cpp">
       <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">false</ExcludedFromBuild>
     </ClCompile>
@@ -166,6 +172,12 @@
     </ClCompile>
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="control_types.h" />
+    <ClInclude Include="plc_io.h" />
+    <ClInclude Include="motion_sync.h" />
+    <ClInclude Include="guidewire_mode.h" />
+    <ClInclude Include="force_feedback.h" />
+    <ClInclude Include="startup_sequence.h" />
     <ClInclude Include="ADS\Include\ADSComm1.h" />
     <ClInclude Include="ADS\Include\TcAdsAPI.h" />
     <ClInclude Include="ADS\Include\TcAdsDef.h" />

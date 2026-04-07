@@ -15,6 +15,24 @@
     </Filter>
   </ItemGroup>
   <ItemGroup>
+    <ClCompile Include="control_types.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="plc_io.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="motion_sync.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="guidewire_mode.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="force_feedback.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="startup_sequence.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
     <ClCompile Include="ADSComm.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
@@ -32,6 +50,24 @@
     </ClCompile>
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="control_types.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="plc_io.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="motion_sync.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="guidewire_mode.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="force_feedback.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="startup_sequence.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
     <ClInclude Include="ADS\Include\ADSComm1.h">
       <Filter>头文件</Filter>
     </ClInclude>
