@@ -37,7 +37,6 @@ object_script.*
 
 # Logs and Data files
 *.log
-*.csv
 *.svdx
 
 # Archives (usually backups or large binaries)

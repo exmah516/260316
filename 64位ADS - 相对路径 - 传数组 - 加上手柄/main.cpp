@@ -1237,8 +1237,7 @@ int main(int argc, char* argv[])
 				double axis6_increment_mm,
 				bool axis6_reverse_mode,
 				bool axis6_user_increment_active,
-				bool require_user_increment_for_trigger,
-				bool use_sequential_cylinder)
+				bool require_user_increment_for_trigger)
 			{
 				if (axis6_crawl.phase == CrawlState::Phase::Follow)
 				{
@@ -1292,51 +1291,21 @@ int main(int argc, char* argv[])
 						axis6_crawl.rearm_dir = 0;
 						axis6_crawl.plc_move_requested = false;
 						cylinder3_cmd = cyl.cyl3_clamp;
-						cylinder4_cmd = use_sequential_cylinder ? cyl.cyl4_clamp : cyl.cyl4_open;
+						cylinder4_cmd = cyl.cyl4_open;
 					}
 				}
 				else if (axis6_crawl.phase == CrawlState::Phase::SwitchWait)
 				{
 					axis6_fast_retract = true;
 					pos[5] = axis6_return_entry_rel;
-					if (!use_sequential_cylinder)
+					cylinder3_cmd = cyl.cyl3_clamp;
+					cylinder4_cmd = cyl.cyl4_open;
+					if ((now_ms - axis6_crawl.phase_t0) >= cfg.axis6_pre_move_cylinder_wait_ms)
 					{
-						cylinder3_cmd = cyl.cyl3_clamp;
-						cylinder4_cmd = cyl.cyl4_open;
-						if ((now_ms - axis6_crawl.phase_t0) >= cfg.axis6_pre_move_cylinder_wait_ms)
-						{
-							axis6_crawl.phase = CrawlState::Phase::FastMove;
-							axis6_crawl.phase_t0 = now_ms;
-							axis6_crawl.plc_move_requested = false;
-							axis6_crawl.cyl_seq_stage = 0;
-						}
-					}
-					else
-					{
-						if (axis6_crawl.cyl_seq_stage <= 1)
-						{
-							// 第一步：先夹紧电缸3，再等待后切电缸4松开。
-							cylinder3_cmd = cyl.cyl3_clamp;
-							cylinder4_cmd = cyl.cyl4_clamp;
-							if ((now_ms - axis6_crawl.cyl_seq_t0) >= cfg.axis6_cylinder_interstep_wait_ms)
-							{
-								axis6_crawl.cyl_seq_stage = 2;
-								axis6_crawl.phase_t0 = now_ms; // 第二步完成后开始旧 pre_move 等待
-							}
-						}
-						else
-						{
-							// 第二步：保持3夹紧，同时松开4。
-							cylinder3_cmd = cyl.cyl3_clamp;
-							cylinder4_cmd = cyl.cyl4_open;
-							if ((now_ms - axis6_crawl.phase_t0) >= cfg.axis6_pre_move_cylinder_wait_ms)
-							{
-								axis6_crawl.phase = CrawlState::Phase::FastMove;
-								axis6_crawl.phase_t0 = now_ms;
-								axis6_crawl.plc_move_requested = false;
-								axis6_crawl.cyl_seq_stage = 0;
-							}
-						}
+						axis6_crawl.phase = CrawlState::Phase::FastMove;
+						axis6_crawl.phase_t0 = now_ms;
+						axis6_crawl.plc_move_requested = false;
+						axis6_crawl.cyl_seq_stage = 0;
 					}
 				}
 				else if (axis6_crawl.phase == CrawlState::Phase::FastMove)
@@ -1377,6 +1346,9 @@ int main(int argc, char* argv[])
 							clear_axis_return_request(AdsSymbol::axis6_return);
 							axis6_crawl.plc_move_requested = false;
 							axis6_return_settle_rel = axis6_crawl.target_abs - plc_init_pos[5];
+							// 快退完成后立即切回最终缸态，再进入短等待。
+							cylinder3_cmd = cyl.cyl3_open;
+							cylinder4_cmd = cyl.cyl4_clamp;
 							axis6_crawl.phase = CrawlState::Phase::RestoreWait;
 							axis6_crawl.phase_t0 = now_ms;
 							axis6_crawl.cyl_seq_stage = 1;
@@ -1388,50 +1360,17 @@ int main(int argc, char* argv[])
 				{
 					axis6_fast_retract = true;
 					pos[5] = axis6_return_settle_rel;
-					if (!use_sequential_cylinder)
+					cylinder3_cmd = cyl.cyl3_open;
+					cylinder4_cmd = cyl.cyl4_clamp;
+					if ((now_ms - axis6_crawl.phase_t0) >= cfg.axis6_post_return_cylinder_wait_ms)
 					{
-						cylinder3_cmd = cyl.cyl3_open;
-						cylinder4_cmd = cyl.cyl4_clamp;
-						if ((now_ms - axis6_crawl.phase_t0) >= cfg.axis6_post_return_cylinder_wait_ms)
+						if (!sync_axis6(3, false, false, 0, false, false))
 						{
-							if (!sync_axis6(3, false, false, 0, false, false))
-							{
-								std::cout << "轴6 计划回退后重同步失败。" << std::endl;
-								axis6_crawl.phase = CrawlState::Phase::Follow;
-								axis6_crawl.cyl_seq_stage = 0;
-							}
+							std::cout << "轴6 计划回退后重同步失败。" << std::endl;
+							axis6_crawl.phase = CrawlState::Phase::Follow;
 							axis6_crawl.cyl_seq_stage = 0;
 						}
-					}
-					else
-					{
-						if (axis6_crawl.cyl_seq_stage <= 1)
-						{
-							// 第一步：先夹紧电缸4。
-							cylinder3_cmd = cyl.cyl3_clamp;
-							cylinder4_cmd = cyl.cyl4_clamp;
-							if ((now_ms - axis6_crawl.cyl_seq_t0) >= cfg.axis6_cylinder_interstep_wait_ms)
-							{
-								axis6_crawl.cyl_seq_stage = 2;
-								axis6_crawl.phase_t0 = now_ms; // 第二步完成后开始旧 post_return 等待
-							}
-						}
-						else
-						{
-							// 第二步：保持4夹紧，同时松开3。
-							cylinder3_cmd = cyl.cyl3_open;
-							cylinder4_cmd = cyl.cyl4_clamp;
-							if ((now_ms - axis6_crawl.phase_t0) >= cfg.axis6_post_return_cylinder_wait_ms)
-							{
-								if (!sync_axis6(3, false, false, 0, false, false))
-								{
-									std::cout << "轴6 计划回退后重同步失败。" << std::endl;
-									axis6_crawl.phase = CrawlState::Phase::Follow;
-									axis6_crawl.cyl_seq_stage = 0;
-								}
-								axis6_crawl.cyl_seq_stage = 0;
-							}
-						}
+						axis6_crawl.cyl_seq_stage = 0;
 					}
 				}
 			};
@@ -1573,8 +1512,7 @@ int main(int argc, char* argv[])
 					axis6_linear_increment_mm,
 					axis6_effective_reverse_pressed,
 					axis6_linear_increment_active,
-					false,
-					true);
+					false);
 			}
 			else
 			{
@@ -1729,7 +1667,7 @@ int main(int argc, char* argv[])
 								axis1_crawl.rearm_dir = 0;
 								axis1_crawl.plc_move_requested = false;
 								cylinder1_cmd = cyl.cyl1_clamp;
-								cylinder2_cmd = cyl.cyl2_clamp;
+								cylinder2_cmd = cyl.cyl2_open;
 								if (!cooperative_mode)
 								{
 									cylinder3_cmd = cyl.cyl3_clamp;
@@ -1751,23 +1689,9 @@ int main(int argc, char* argv[])
 					pos[0] = axis1_return_entry_rel;
 					hold_axis1_mirror_axes_for_return();
 					pos[1] = axis2_hold_rel;
-					if (axis1_crawl.cyl_seq_stage <= 1)
-					{
-						// 第一步：先夹紧电缸1，并保持电缸2夹紧。
-						cylinder1_cmd = cyl.cyl1_clamp;
-						cylinder2_cmd = cyl.cyl2_clamp;
-						if ((now_ms - axis1_crawl.cyl_seq_t0) >= cfg.axis1_cylinder_interstep_wait_ms)
-						{
-							axis1_crawl.cyl_seq_stage = 2;
-							axis1_crawl.phase_t0 = now_ms; // 第二步完成后开始旧 pre_move 等待
-						}
-					}
-					else
-					{
-						// 第二步：保持电缸1夹紧，再张开电缸2。
-						cylinder1_cmd = cyl.cyl1_clamp;
-						cylinder2_cmd = cyl.cyl2_open;
-					}
+					// 快退触发后立即并行切到运动期缸态，不再分步切缸。
+					cylinder1_cmd = cyl.cyl1_clamp;
+					cylinder2_cmd = cyl.cyl2_open;
 					if (axis6_coupled_active)
 					{
 						axis6_fast_retract = true;
@@ -1775,8 +1699,7 @@ int main(int argc, char* argv[])
 						cylinder3_cmd = cyl.cyl3_clamp;
 						cylinder4_cmd = cyl.cyl4_open;
 					}
-					if (axis1_crawl.cyl_seq_stage >= 2 &&
-						(now_ms - axis1_crawl.phase_t0) >= coupled_pre_move_wait_ms)
+					if ((now_ms - axis1_crawl.phase_t0) >= coupled_pre_move_wait_ms)
 					{
 						axis1_crawl.phase = CrawlState::Phase::FastMove;
 						axis1_crawl.phase_t0 = now_ms;
@@ -1911,6 +1834,11 @@ int main(int argc, char* argv[])
 									axis1_crawl.plc_move_requested = false;
 									axis1_return_settle_rel = axis1_crawl.target_abs - plc_init_pos[0];
 									axis6_return_settle_rel = axis6_coupled_settle_rel;
+									// 回退完成后立即并行切到最终缸态，再进入收尾短等待。
+									cylinder1_cmd = cyl.cyl1_open;
+									cylinder2_cmd = cyl.cyl2_clamp;
+									cylinder3_cmd = cyl.cyl3_open;
+									cylinder4_cmd = cyl.cyl4_clamp;
 									axis1_crawl.phase = CrawlState::Phase::RestoreWait;
 									axis1_crawl.phase_t0 = now_ms;
 									axis1_crawl.cyl_seq_stage = 1;
@@ -1922,6 +1850,9 @@ int main(int argc, char* argv[])
 								clear_axis_return_request(AdsSymbol::axis1_return);
 								axis1_crawl.plc_move_requested = false;
 								axis1_return_settle_rel = axis1_crawl.target_abs - plc_init_pos[0];
+								// 回退完成后立即并行切到最终缸态，再进入收尾短等待。
+								cylinder1_cmd = cyl.cyl1_open;
+								cylinder2_cmd = cyl.cyl2_clamp;
 								axis1_crawl.phase = CrawlState::Phase::RestoreWait;
 								axis1_crawl.phase_t0 = now_ms;
 								axis1_crawl.cyl_seq_stage = 1;
@@ -1942,23 +1873,9 @@ int main(int argc, char* argv[])
 					pos[0] = axis1_return_settle_rel;
 					hold_axis1_mirror_axes_for_return();
 					pos[1] = axis2_hold_rel;
-					if (axis1_crawl.cyl_seq_stage <= 1)
-					{
-						// 第一步：先夹紧电缸2，并保持电缸1夹紧。
-						cylinder1_cmd = cyl.cyl1_clamp;
-						cylinder2_cmd = cyl.cyl2_clamp;
-						if ((now_ms - axis1_crawl.cyl_seq_t0) >= cfg.axis1_cylinder_interstep_wait_ms)
-						{
-							axis1_crawl.cyl_seq_stage = 2;
-							axis1_crawl.phase_t0 = now_ms; // 第二步完成后开始旧 post_return 等待
-						}
-					}
-					else
-					{
-						// 第二步：保持电缸2夹紧，再张开电缸1。
-						cylinder1_cmd = cyl.cyl1_open;
-						cylinder2_cmd = cyl.cyl2_clamp;
-					}
+					// 收尾阶段保持最终缸态，不再分步切缸。
+					cylinder1_cmd = cyl.cyl1_open;
+					cylinder2_cmd = cyl.cyl2_clamp;
 					if (axis6_coupled_active)
 					{
 						axis6_fast_retract = true;
@@ -1966,8 +1883,7 @@ int main(int argc, char* argv[])
 						cylinder3_cmd = cyl.cyl3_open;
 						cylinder4_cmd = cyl.cyl4_clamp;
 					}
-					if (axis1_crawl.cyl_seq_stage >= 2 &&
-						(now_ms - axis1_crawl.phase_t0) >= coupled_post_return_wait_ms)
+					if ((now_ms - axis1_crawl.phase_t0) >= coupled_post_return_wait_ms)
 					{
 						if (!sync_axis1(3, false, 0))
 						{
@@ -2013,8 +1929,7 @@ int main(int argc, char* argv[])
 							axis6_combined_increment_mm,
 							axis6_effective_reverse_pressed,
 							axis6_linear_increment_active,
-							true,
-							false);
+							true);
 					}
 					else
 					{
@@ -2025,8 +1940,7 @@ int main(int argc, char* argv[])
 							0.0,
 							axis6_effective_reverse_pressed,
 							false,
-							true,
-							false);
+							true);
 					}
 				}
 			}

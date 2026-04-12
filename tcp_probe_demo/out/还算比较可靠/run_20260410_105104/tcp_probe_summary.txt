@@ -1,0 +1,35 @@
+TCP Probe Summary
+============================================================
+ip: 192.168.1.30
+port: 502
+duration_s: 60.0
+samples: 21475
+connect_fail: 0
+io_timeout: 0
+io_error: 0
+bad_length: 0
+
+Timing
+mean_dt_ms: 2.793837
+median_dt_ms: 2.803300
+p95_dt_ms: 2.894900
+min_dt_ms: 1.841300
+max_dt_ms: 15.011000
+effective_hz: 357.930669
+instant_hz_mean: 361.088814
+instant_hz_std: 26.228567
+
+likely_sensor_channels: [0, 1]
+channel_metrics(rank):
+  ch0: score=0.899048, std=1.216753, p2p=7.327000, mean_abs_diff=0.002129
+  ch1: score=0.663586, std=0.507159, p2p=4.808000, mean_abs_diff=0.003208
+  ch5: score=0.133280, std=0.001939, p2p=0.007000, mean_abs_diff=0.001415
+  ch4: score=0.075085, std=0.000987, p2p=0.005000, mean_abs_diff=0.000797
+  ch2: score=0.035497, std=0.000474, p2p=0.003000, mean_abs_diff=0.000377
+  ch3: score=0.009882, std=0.000236, p2p=0.004000, mean_abs_diff=0.000103
+
+csv: C:\Users\admin1\Desktop\260316\tcp_probe_demo\out\run_20260410_105104\tcp_probe_20260410_105104.csv
+plots:
+  C:\Users\admin1\Desktop\260316\tcp_probe_demo\out\run_20260410_105104\wave_all.png
+  C:\Users\admin1\Desktop\260316\tcp_probe_demo\out\run_20260410_105104\timing.png
+  C:\Users\admin1\Desktop\260316\tcp_probe_demo\out\run_20260410_105104\top2.png

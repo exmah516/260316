@@ -129,21 +129,21 @@ struct ControlConfig
 	double axis1_return_dec_mm_s2 = 2400.0;
 	double axis1_return_jerk_mm_s3 = 35000.0;
 	// 快退前先切缸等待（轴1主链路）。
-	DWORD axis1_pre_move_cylinder_wait_ms = 100;
-	// 轴1切缸顺序中两步动作之间的等待（导管正/反向共用）。
+	DWORD axis1_pre_move_cylinder_wait_ms = 60;
+	// 轴1顺序切缸两步间等待（当前快退状态机已改为并行切缸，保留仅为兼容参数结构）。
 	DWORD axis1_cylinder_interstep_wait_ms = 100;
 	// 快退完成后切回最终缸态等待（轴1主链路）。
-	DWORD axis1_post_return_cylinder_wait_ms = 100;
+	DWORD axis1_post_return_cylinder_wait_ms = 60;
 	double axis6_return_velocity_mm_s = 200.0;
 	double axis6_return_acc_mm_s2 = 2400.0;
 	double axis6_return_dec_mm_s2 = 2400.0;
 	double axis6_return_jerk_mm_s3 = 35000.0;
 	// 快退前先切缸等待（轴6链路）。
-	DWORD axis6_pre_move_cylinder_wait_ms = 80;
-	// 轴6切缸顺序中两步动作之间的等待（导丝正/反向共用）。
+	DWORD axis6_pre_move_cylinder_wait_ms = 60;
+	// 轴6顺序切缸两步间等待（当前快退状态机已改为并行切缸，保留仅为兼容参数结构）。
 	DWORD axis6_cylinder_interstep_wait_ms = 100;
 	// 快退完成后切回最终缸态等待（轴6链路）。
-	DWORD axis6_post_return_cylinder_wait_ms = 80;
+	DWORD axis6_post_return_cylinder_wait_ms = 60;
 
 	// 手柄低通滤波。
 	double linear_handle_alpha = 0.25;
