@@ -159,7 +159,7 @@ struct ControlConfig
 
 	// 启动准备阶段目标。
 	DWORD startup_clamp_settle_delay_ms = 300;
-	double startup_motion_speed_scale = 0.05;
+	double startup_motion_speed_scale = 0.005;
 	unsigned short startup_cyl3_open = 500;
 	unsigned short startup_cyl4_open = 0;
 	unsigned short startup_cyl3_clamp = 0;
