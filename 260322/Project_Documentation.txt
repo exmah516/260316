@@ -1,0 +1,126 @@
+项目控制逻辑与程序说明文档
+
+1. 项目概述
+本项目用于控制 7 个伺服轴（Axis 1-7），实现从系统上电、自检校准到实时跟随外部位置指令的全流程控制。系统基于 Beckhoff TwinCAT 3 平台开发。
+
+核心功能包括：
+- 自检流程：部分轴（1, 3, 5, 6）自动向正方向运动寻找机械限位，以此作为参考点校准。
+- 跟随控制：在“手柄模式”下，对外部输入的参考位置进行平滑滤波和 PID 闭环修正，生成平滑的运动轨迹。
+- 状态管理：通过有限状态机（FSM）管理系统生命周期。
+
+2. 控制逻辑 (Control Logic)
+系统采用有限状态机 (Finite State Machine) 进行顶层管理，状态变量为 G.gen_state。
+
+状态流转详细说明：
+(1) _init (0): 系统上电初始化
+   - 动作：复位功能块，尝试使能所有轴。
+   - 跳转条件：所有轴使能成功 (Power.Done) -> 跳转至 _self_check。
+   - 异常跳转：任意轴报错 -> 跳转至 _err。
+
+(2) _self_check (13): 自动自检流程
+   - 动作：执行 SelfCheck 功能块，轴 1, 3, 5, 6 寻找右限位。
+   - 跳转条件：自检完成 (G.self_check_done = TRUE) -> 跳转至 _handle。
+
+(3) _handle (12): 正常工作/跟随模式
+   - 动作：执行 handle 功能块，实时跟随外部位置指令 G.refer。
+   - 异常跳转：任意轴报错 (Status.Error) -> 跳转至 _reset（由 handle 内部逻辑或外部监控触发）。
+
+(4) _err (15): 错误处理状态
+   - 动作：停止位置生成。
+   - 跳转条件：检测到轴报错 -> 跳转至 _reset；若无错 -> 跳转至 _init。
+
+(5) _reset (16): 系统复位
+   - 动作：执行 MC_Reset 复位所有轴。
+   - 跳转条件：所有轴复位动作结束（无论成功或失败） -> 跳转至 _init 重启系统。
+
+3. 变量作用 (Variables)
+主要变量定义在全局变量列表 GVL (G) 中。
+
+3.1 核心控制对象
+- axis (ARRAY[1..7] OF axis_REF): 7个物理轴的硬件映射对象。
+- gen_state (state): 当前系统状态枚举。
+- power_, axis_Reset, move_jog: 各轴的运动控制功能块实例。
+- power_output: 存储 MC_Power 的输出状态 (Done, Busy, Error 等)。
+
+3.2 运动控制参数
+- init_pos (ARRAY[1..7] OF LREAL): 轴的上电初始位置，作为绝对位置的基准零点。
+- refer (ARRAY[1..7] OF LREAL): [外部接口] 目标参考位置（相对 init_pos）。
+- Act_pos (ARRAY[1..7] OF LREAL): 当前实际位置（相对 init_pos）。
+- v_limit (ARRAY[1..7] OF LREAL): 速度限制门限，用于平滑参考输入。
+- ref_slow: 经过限幅处理后的中间参考位置。
+- act_h: 经过滑动平均滤波后的最终参考位置。
+
+3.3 PID 控制参数 (用于跟随模式)
+- Kp, Ki, Kd: 7个轴独立的位置环 PID 参数。
+- pid_i, pid_e_prev: PID 积分项和上一次误差（内部状态）。
+- pid_i_limit: 积分限幅值（默认为 100.0）。
+
+3.4 自检相关
+- rightlimit: 自检过程中记录的机械限位位置。
+- self_check_done: 自检完成标志位。
+
+4. 程序逻辑 (Program Logic)
+
+4.1 主程序 (MAIN)
+- 周期性调用：每个 PLC 周期更新所有轴接口 G.axis[i]()。
+- 辅助 Action：调用 POWERED() 刷新使能状态，RESETED() 处理复位。
+- 状态机调度：根据 G.gen_state switch-case 调用对应的功能块 (init_, self_check_, handle1_ 等)。
+
+4.2 自检模块 (SelfCheck)
+针对目标轴（1, 3, 5, 6）执行以下序列：
+1. 启动运动：以 vel_scan (15.0) 速度向正方向大目标运动。
+2. 碰撞检测：
+   - 监控 MC_MoveAbsolute.Error (限位报错)。
+   - 或者监控堵转：指令速度 > 5 但实际速度 < 0.5。
+3. 记录与停止：触发检测后，记录当前位置到 rightlimit，执行急停 (MC_Stop, Decel=500)。
+4. 复位与回退：执行 MC_Reset 清除限位错误，然后反向移动 back_dist 指定的距离。
+5. 完成：所有目标轴回退完成后，系统进入下一状态。
+
+4.3 跟随模块 (handle)
+实现了两级平滑 + PID 补偿的控制算法：
+1. 速度限幅 (Slew Rate Limiter): 限制 G.refer 的变化率不超过 v_limit，输出 ref_slow。
+2. 滑动平均 (Moving Average): 对 ref_slow 进行 20 点滑动平均，输出 act_h，进一步平滑轨迹。
+3. PID 补偿:
+   - 计算 err = act_h - Act_pos。
+   - 计算 PID 输出 value_f。
+4. 指令发送:
+   - 最终目标位置 pos_abs = act_h + value_f + init_pos。
+   - 调用 MC_ExtSetPointGenFeed 将位置发送给驱动器。
+   - 注：这里 PID 输出直接叠加在位置指令上，实际上起到位置前馈或误差修正的作用。
+
+5. 时序逻辑 (Timing Logic)
+
+1. 初始化时序:
+   - 上电 -> 等待所有轴 Power.Active = TRUE -> 记录 init_pos -> 切换状态。
+
+2. 自检时序 (SelfCheck):
+   - Step 1 (Scan): 持续运动直到触碰限位。
+   - Step 2 (Stop): 触发急停，等待速度降为 0 (ABS(ActVelo) < 1.0)。
+   - Step 3 (Reset): 复位操作通常需要 1-3 个 PLC 周期。
+   - Step 4 (Backoff): 回退运动，完成后标志该轴 Ready。
+
+3. 跟随控制时序 (Handle):
+   - 这是一个实时循环，在每个 PLC 周期执行一次。
+   - 包含一个 20 周期的滑动平均窗口，这意味着输出对输入的变化有约 10-20 个周期的延迟响应。
+
+6. 接口说明 (Interfaces)
+
+6.1 外部控制接口
+- 输入: G.refer[1..7] (LREAL)
+  - 说明：外部系统（如上位机、手柄映射）写入的目标参考位置。
+  - 单位：与轴配置一致（通常为 mm 或 degree）。
+
+6.2 硬件接口
+- 输出: 7 个 EtherCAT 伺服轴。
+- 反馈: 读取 Axis.NcToPlc.ActPos (实际位置), Axis.NcToPlc.ActVelo (实际速度)。
+
+6.3 软件功能块接口
+- MC_Power: 用于轴使能。
+- MC_Reset: 用于故障复位。
+- MC_MoveAbsolute / MC_MoveRelative: 用于自检阶段的点位运动。
+- MC_ExtSetPointGenFeed: 用于跟随阶段的外部设定点流式传输。
+
+6.4 异常代码参考
+- 0x4650: 驱动器硬件限位错误（自检时预期会触发此错误）。
+- 0x4B05: 运动控制指令错误。
+

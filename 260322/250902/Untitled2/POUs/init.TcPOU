@@ -1,0 +1,99 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<TcPlcObject Version="1.1.0.1" ProductVersion="3.1.4024.15">
+  <POU Name="init" Id="{e5397997-25e6-4b82-acc7-1cfa1de4bfda}" SpecialFunc="None">
+    <Declaration><![CDATA[FUNCTION_BLOCK init
+VAR_INPUT
+END_VAR
+VAR_OUTPUT
+END_VAR
+VAR
+	i:INT;
+	step:INT:=0;
+	init_watchdog : TON;
+	all_powered : BOOL;
+END_VAR
+]]></Declaration>
+    <Implementation>
+      <ST><![CDATA[(*
+FUNCTION_BLOCK: init
+功能说明:
+  上电初始化流程：给 7 轴上电(MC_Power)，等待 Done；若超时或出现错误则进入 _err。
+
+状态机(step):
+  0) 进入初始化：清理控制命令，启动看门狗
+  1) 等待上电完成：检测 Done/错误/超时并跳转
+*)
+
+CASE step OF
+0:
+	// 进入 init 的第一个周期：清理边沿触发量，避免上一次状态遗留导致重复触发
+	FOR i:=1 TO 7 DO
+		G.SetPointGenEnable[i].Execute := FALSE;
+		G.SetPointGenDisable[i].Execute := FALSE;
+		G.axis_Reset[i].Execute := FALSE;
+		G.power_[i].Enable := TRUE;
+	END_FOR
+	G.self_check_done := FALSE;
+	G.selfcheck_reset_req := TRUE;
+
+	init_watchdog(IN:=TRUE, PT:=T#5S);
+	step := 1;
+
+1:
+	// 持续保持上电请求，并监控上电结果
+	FOR i:=1 TO 7 DO
+		G.power_[i].Enable := TRUE;
+
+		// 若任一轴出现错误：进入 _err(安全态)，避免 init/reset 来回震荡
+		IF G.axis[i].Status.Error OR G.power_output[i].Error THEN
+			init_watchdog(IN:=FALSE);
+			step := 0;
+			G.gen_state := _err;
+			RETURN;
+		END_IF
+	END_FOR
+
+	// 等待上电全部完成
+	all_powered := TRUE;
+	FOR i:=1 TO 7 DO
+		IF NOT G.power_output[i].Done THEN
+			all_powered := FALSE;
+		END_IF
+	END_FOR
+
+	// 超时保护：上电迟迟不完成，进入 _err(安全态)
+	init_watchdog(IN:=TRUE);
+	IF init_watchdog.Q THEN
+		init_watchdog(IN:=FALSE);
+		step := 0;
+		G.gen_state := _err;
+		RETURN;
+	END_IF
+
+	// 上电全部完成：记录各轴当前绝对位置作为 init_pos(用于绝对->相对转换)，进入自检
+	IF all_powered THEN
+		FOR i:=1 TO 7 DO
+			G.init_pos[i] := G.axis[i].NcToPlc.ActPos;
+		END_FOR
+		init_watchdog(IN:=FALSE);
+		step := 0;
+		G.gen_state := _self_check;
+	END_IF
+END_CASE
+]]></ST>
+    </Implementation>
+    <LineIds Name="init">
+      <LineId Id="67" Count="6" />
+      <LineId Id="161" Count="4" />
+      <LineId Id="79" Count="8" />
+      <LineId Id="102" Count="0" />
+      <LineId Id="124" Count="0" />
+      <LineId Id="128" Count="0" />
+      <LineId Id="145" Count="0" />
+      <LineId Id="122" Count="0" />
+      <LineId Id="32" Count="0" />
+      <LineId Id="36" Count="0" />
+      <LineId Id="2" Count="0" />
+    </LineIds>
+  </POU>
+</TcPlcObject>

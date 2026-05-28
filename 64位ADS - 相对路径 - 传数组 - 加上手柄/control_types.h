@@ -159,7 +159,7 @@ struct ControlConfig
 
 	// 启动准备阶段目标。
 	DWORD startup_clamp_settle_delay_ms = 300;
-	double startup_motion_speed_scale = 0.5;
+	double startup_motion_speed_scale = 0.05;
 	unsigned short startup_cyl3_open = 500;
 	unsigned short startup_cyl4_open = 0;
 	unsigned short startup_cyl3_clamp = 0;
@@ -168,7 +168,7 @@ struct ControlConfig
 	double startup_axis5_ready_from_left_mm = 290.0;
 	double startup_axis3_ready_from_left_mm = 635.0;
 	// 在 axis3 完全到达目标前提前触发 cylinder2 夹紧；现场调参使其领先约 0.5 s。
-	double startup_axis3_cyl2_clamp_advance_mm = 50.0;
+	double startup_axis3_cyl2_clamp_advance_mm = 10.0;
 };
 
 struct CylinderPreset
@@ -181,16 +181,16 @@ struct CylinderPreset
 	unsigned short cyl1_preclamp = 320;
 	unsigned short cyl2_open = 0;
 	unsigned short cyl2_clamp = 600;
-	unsigned short cyl2_preopen = 300;
+	unsigned short cyl2_preopen = 150;
 	unsigned short cyl2_preclamp = 400;
-	unsigned short cyl3_open = 320;
+	unsigned short cyl3_open = 80;
 	unsigned short cyl3_clamp = 0;
 	unsigned short cyl3_preclamp = 200;
 	unsigned short cyl4_open = 0;
 	unsigned short cyl4_clamp = 500;
 	unsigned short cyl4_preopen = 300;
 	unsigned short cyl4_preclamp = 300;
-	unsigned short cyl3_follow_release = 150;
+	unsigned short cyl3_follow_release = 400;
 	unsigned short cyl4_follow_release = 100;
 };
 

@@ -19,8 +19,6 @@ VAR
     init_target_from_left : ARRAY[1..7] OF LREAL:= [96,0,280,0,430,580,0];  // 左限位寻参后回到的工作位（距左限位）
     target_axes : ARRAY[1..7] OF BOOL:= [TRUE,FALSE,TRUE,FALSE,TRUE,TRUE,FALSE];	// 目标轴（平移轴）
     stagger_delay : ARRAY[1..7] OF TIME := [T#3s,T#0ms,T#2s,T#0ms,T#1s,T#0ms,T#0ms];
-    scan_stagger_delay : ARRAY[1..7] OF TIME := [T#0ms,T#0ms,T#300ms,T#0ms,T#600ms,T#900ms,T#0ms];
-    scan_stagger_timer : ARRAY[1..7] OF TON;
     stagger_started : BOOL := FALSE;
     
     all_done : BOOL;
@@ -79,7 +77,6 @@ IF G.selfcheck_reset_req THEN
         scan_start_pos[i] := 0.0;
         G.selfcheck_stu[i] := 0;
         wait_timer[i](IN:=FALSE);
-        scan_stagger_timer[i](IN:=FALSE);
         power_pulse_timer[i](IN:=FALSE);
         power_wait_timer[i](IN:=FALSE);
         G.SetPointGenDisable[i](Axis:=G.axis[i], Execute:=FALSE);
@@ -92,13 +89,26 @@ IF G.selfcheck_reset_req THEN
     stagger_started := FALSE;
     stagger_timer(IN:=FALSE);
     G.selfcheck_all_reach_limit := FALSE;
-    FOR i:=1 TO 7 DO
-        G.return_cmd[i].Req := FALSE;
-        G.return_cmd[i].Busy := FALSE;
-        G.return_cmd[i].Done := FALSE;
-        G.return_cmd[i].Error := FALSE;
-        G.return_cmd[i].ErrorId := 0;
-    END_FOR
+    G.axis1_return_cmd.Req := FALSE;
+    G.axis1_return_cmd.Busy := FALSE;
+    G.axis1_return_cmd.Done := FALSE;
+    G.axis1_return_cmd.Error := FALSE;
+    G.axis1_return_cmd.ErrorId := 0;
+    G.axis3_return_cmd.Req := FALSE;
+    G.axis3_return_cmd.Busy := FALSE;
+    G.axis3_return_cmd.Done := FALSE;
+    G.axis3_return_cmd.Error := FALSE;
+    G.axis3_return_cmd.ErrorId := 0;
+    G.axis5_return_cmd.Req := FALSE;
+    G.axis5_return_cmd.Busy := FALSE;
+    G.axis5_return_cmd.Done := FALSE;
+    G.axis5_return_cmd.Error := FALSE;
+    G.axis5_return_cmd.ErrorId := 0;
+    G.axis6_return_cmd.Req := FALSE;
+    G.axis6_return_cmd.Busy := FALSE;
+    G.axis6_return_cmd.Done := FALSE;
+    G.axis6_return_cmd.Error := FALSE;
+    G.axis6_return_cmd.ErrorId := 0;
     G.axis4_fwd_req := FALSE;
     G.axis4_rev_req := FALSE;
     G.axis4_manual_busy := FALSE;
@@ -143,7 +153,7 @@ FOR i:=1 TO 7 DO
                 stu[i] := 1;
             END_IF
             
-        1: // 错开启动，避免多轴同时加速导致电流竞争触发跟随误差
+        1: // 步骤1：启动正向低速逼近
             IF i = 1 THEN
                 G.cylinder1_value := 1000;
                 G.cylinder2_value := 0;
@@ -151,14 +161,10 @@ FOR i:=1 TO 7 DO
 				G.cylinder4_value := 0;
             END_IF
 
-            scan_stagger_timer[i](IN:=TRUE, PT:=scan_stagger_delay[i]);
-            IF scan_stagger_timer[i].Q OR scan_stagger_delay[i] = T#0ms THEN
-                scan_stagger_timer[i](IN:=FALSE);
-                scan_start_pos[i] := G.axis[i].NcToPlc.ActPos;
-                mv_vel_vel[i] := vel_scan;
-                mv_vel_exec[i] := TRUE;
-                stu[i] := 2;
-            END_IF
+            scan_start_pos[i] := G.axis[i].NcToPlc.ActPos;
+            mv_vel_vel[i] := vel_scan;
+            mv_vel_exec[i] := TRUE;
+            stu[i] := 2;
             
         2:  // 步骤2：监控逼近过程（到限位/堵转判据）
             mv_vel_vel[i] := vel_scan;
@@ -456,7 +462,7 @@ FOR i:=1 TO 7 DO
         Axis:=G.axis[i],
         Execute:=mv_vel_exec[i],
         Velocity:=mv_vel_vel[i],
-        Acceleration:=50,
+        Acceleration:=100,
         Deceleration:=100,
         Jerk:=100,
         Direction:=MC_Direction.MC_Negative_Direction

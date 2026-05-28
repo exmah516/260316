@@ -38,7 +38,10 @@ VAR_GLOBAL
 	axis6_fast_retract	: BOOL := FALSE;
 	axis1_fast_return	: BOOL := FALSE;
 	startup_smoothing_bypass : BOOL := FALSE;
-	return_cmd			: ARRAY[1..7] OF ST_AxisPlannedReturnCmd;
+	axis1_return_cmd	: ST_AxisPlannedReturnCmd;
+	axis3_return_cmd	: ST_AxisPlannedReturnCmd;
+	axis5_return_cmd	: ST_AxisPlannedReturnCmd;
+	axis6_return_cmd	: ST_AxisPlannedReturnCmd;
 	axis4_fwd_req		: BOOL := FALSE;
 	axis4_rev_req		: BOOL := FALSE;
 	axis4_manual_busy	: BOOL := FALSE;
