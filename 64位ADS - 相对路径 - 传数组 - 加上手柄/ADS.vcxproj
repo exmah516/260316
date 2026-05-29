@@ -153,6 +153,7 @@
   <ItemGroup>
     <ClCompile Include="control_types.cpp" />
     <ClCompile Include="tcp_force_daq.cpp" />
+    <ClCompile Include="force_logger.cpp" />
     <ClCompile Include="plc_io.cpp" />
     <ClCompile Include="motion_sync.cpp" />
     <ClCompile Include="guidewire_mode.cpp" />
@@ -175,6 +176,7 @@
   <ItemGroup>
     <ClInclude Include="control_types.h" />
     <ClInclude Include="tcp_force_daq.h" />
+    <ClInclude Include="force_logger.h" />
     <ClInclude Include="plc_io.h" />
     <ClInclude Include="motion_sync.h" />
     <ClInclude Include="guidewire_mode.h" />

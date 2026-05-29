@@ -6,6 +6,7 @@
 
 #include <atomic>
 #include <cstdint>
+#include <functional>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -13,6 +14,8 @@
 class TcpForceDaqClient
 {
 public:
+	using SampleCallback = std::function<void(std::uint64_t tick_ms, const double v[6])>;
+
 	TcpForceDaqClient() = default;
 	~TcpForceDaqClient();
 
@@ -25,6 +28,9 @@ public:
 	bool get_latest_ft1_fn1(double& out_ft1, double& out_fn1, std::uint64_t& timestamp_ms) const;
 	bool is_running() const { return running_.load(); }
 
+	// 注册推送回调；每解析一帧立即在 worker 线程上同步触发。传 nullptr 取消。
+	void set_on_sample(SampleCallback cb);
+
 private:
 	void worker_loop(std::string ip, unsigned short port);
 
@@ -32,6 +38,9 @@ private:
 	bool has_frame_ = false;
 	double latest_v_[6] = { 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 };
 	std::uint64_t latest_tick_ms_ = 0;
+
+	mutable std::mutex callback_mutex_;
+	SampleCallback on_sample_;
 
 	std::atomic<bool> running_{ false };
 	std::atomic<bool> stop_requested_{ false };

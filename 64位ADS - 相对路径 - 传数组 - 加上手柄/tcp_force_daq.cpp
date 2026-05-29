@@ -131,6 +131,12 @@ bool TcpForceDaqClient::get_latest_ft1_fn1(double& out_ft1, double& out_fn1, std
 	return true;
 }
 
+void TcpForceDaqClient::set_on_sample(SampleCallback cb)
+{
+	std::lock_guard<std::mutex> lock(callback_mutex_);
+	on_sample_ = std::move(cb);
+}
+
 void TcpForceDaqClient::worker_loop(std::string ip, unsigned short port)
 {
 	WSADATA wsa_data;
@@ -190,14 +196,25 @@ void TcpForceDaqClient::worker_loop(std::string ip, unsigned short port)
 				break;
 			}
 
+			const std::uint64_t sample_tick_ms = static_cast<std::uint64_t>(GetTickCount64());
 			{
 				std::lock_guard<std::mutex> lock(frame_mutex_);
 				for (int i = 0; i < kChannelCount; ++i)
 				{
 					latest_v_[i] = parsed_v[i];
 				}
-				latest_tick_ms_ = static_cast<std::uint64_t>(GetTickCount64());
+				latest_tick_ms_ = sample_tick_ms;
 				has_frame_ = true;
+			}
+
+			SampleCallback cb_local;
+			{
+				std::lock_guard<std::mutex> cb_lock(callback_mutex_);
+				cb_local = on_sample_;
+			}
+			if (cb_local)
+			{
+				cb_local(sample_tick_ms, parsed_v);
 			}
 		}
 

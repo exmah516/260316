@@ -1,5 +1,6 @@
 #include "control_types.h"
 #include "force_feedback.h"
+#include "force_logger.h"
 #include "guidewire_mode.h"
 #include "motion_sync.h"
 #include "plc_io.h"
@@ -149,6 +150,7 @@ int main(int argc, char* argv[])
 	Handle handle_axis6(serial_axis6_handle);
 	CADSComm ads;
 	TcpForceDaqClient tcp_force_daq;
+	ForceLogger force_logger;
 	HandleFilterState axis1_handle_filter;
 	HandleFilterState axis6_handle_filter;
 	const bool axis1_handle_ready = handle_axis1.init();
@@ -562,6 +564,7 @@ int main(int argc, char* argv[])
 	clear_force_output();
 
 	// 力感记录改为在用户选择 C/S 后再启动；文件名包含日期与 24 小时制时间（到秒）。
+	// 旧 ForceLogState 路径已停用（保留结构以兼容其他模块对 ctx.force_log 的引用）。
 	force_log.period_ms = cfg.force_log_period_ms;
 	force_log.enabled = false;
 	bool force_log_started = false;
@@ -576,7 +579,7 @@ int main(int argc, char* argv[])
 			if (tcp_force_daq.start(cfg.tcp_force_daq_ip, cfg.tcp_force_daq_port))
 			{
 				std::cout << "CSV采样源：TCP_DAQ（" << cfg.tcp_force_daq_ip << ":" << cfg.tcp_force_daq_port
-					<< "），其中 ft_1/fn_1 来自 TCP 第0/1通道。" << std::endl;
+					<< "），AIN0/AIN1 原始电压按传感器频率落盘。" << std::endl;
 			}
 			else
 			{
@@ -585,20 +588,19 @@ int main(int argc, char* argv[])
 		}
 		else
 		{
-			std::cout << "CSV采样源：ADS（ft_1/fn_1/fn_2/ft_2 均来自 PLC）。" << std::endl;
+			std::cout << "CSV采样源：ADS（仅主循环节拍粗采样，未启用高频记录）。" << std::endl;
 		}
-		force_log.enabled = true;
-		const std::string force_log_filename = build_force_log_filename();
-		if (force_log.open_file(force_log_filename))
+		if (force_logger.start("."))
 		{
-			std::cout << "传感数据已保存到："
-				<< force_log_filename
-				<< "（采样周期 ms=" << force_log.period_ms << "）"
-				<< std::endl;
+			tcp_force_daq.set_on_sample([&](std::uint64_t tick_ms, const double v[6])
+			{
+				force_logger.on_sensor_sample(tick_ms, v);
+			});
+			std::cout << "高频传感数据记录器已启动（CSV 文件位于工作目录）。" << std::endl;
 		}
 		else
 		{
-			std::cout << "传感数据文件打开失败：将继续采样但不写入 CSV。" << std::endl;
+			std::cout << "高频传感数据记录器启动失败：CSV 文件打开失败。" << std::endl;
 		}
 		force_log_started = true;
 	};
@@ -614,6 +616,8 @@ int main(int argc, char* argv[])
 			prompt_startup_mode();
 		}
 	}
+
+	bool cylinder_manual_open_override[4] = { false, false, false, false };
 
 	while (true)
 	{
@@ -938,6 +942,26 @@ int main(int argc, char* argv[])
 				std::cout << "单手柄模式：已切换到导丝(587语义)。" << std::endl;
 				std::cout << "按键说明：b0方向，b6 Y阀，b7/b5 轴4点动，数字1回导管。" << std::endl;
 			}
+			else if (ch == 'q' || ch == 'Q')
+			{
+				cylinder_manual_open_override[0] = !cylinder_manual_open_override[0];
+				std::cout << "电缸1 手动开覆盖：" << (cylinder_manual_open_override[0] ? "开启" : "关闭") << std::endl;
+			}
+			else if (ch == 'w' || ch == 'W')
+			{
+				cylinder_manual_open_override[1] = !cylinder_manual_open_override[1];
+				std::cout << "电缸2 手动开覆盖：" << (cylinder_manual_open_override[1] ? "开启" : "关闭") << std::endl;
+			}
+			else if (ch == 'e' || ch == 'E')
+			{
+				cylinder_manual_open_override[2] = !cylinder_manual_open_override[2];
+				std::cout << "电缸3 手动开覆盖：" << (cylinder_manual_open_override[2] ? "开启" : "关闭") << std::endl;
+			}
+			else if (ch == 'r' || ch == 'R')
+			{
+				cylinder_manual_open_override[3] = !cylinder_manual_open_override[3];
+				std::cout << "电缸4 手动开覆盖：" << (cylinder_manual_open_override[3] ? "开启" : "关闭") << std::endl;
+			}
 			else if (ch == 0 || ch == 224)
 			{
 				_getch();
@@ -1150,6 +1174,13 @@ int main(int argc, char* argv[])
 			pos[1] = axis2_hold_rel;
 			pos[6] = axis7_hold_rel;
 
+			// 发布最新轴位置给高频日志线程读取（绝对坐标 mm）。
+			force_logger.publish_axis_snapshot(
+				plc_act_pos[0] + plc_init_pos[0],
+				plc_act_pos[1] + plc_init_pos[1],
+				plc_act_pos[5] + plc_init_pos[5],
+				plc_act_pos[6] + plc_init_pos[6]);
+
 			const DWORD now_ms = GetTickCount();
 			const double axis1_linear_filtered = axis1_handle_filter.axis0_filtered;
 			const double axis1_rot_filtered = axis1_handle_filter.axis1_filtered;
@@ -1212,6 +1243,20 @@ int main(int argc, char* argv[])
 			{
 				pos[2] = axis1_return_hold_axis3_rel;
 				pos[4] = axis1_return_hold_axis5_rel;
+			};
+
+			// 错峰切缸：避免一对夹爪同周期同步翻转造成器械瞬间双开释放。
+			// t<stagger_ms 仅下发 close 侧；t>=stagger_ms 才下发 open 侧。
+			// 调用方需在阶段入口将 seq_t0 置为 now_ms。
+			auto staggered_pair = [&](unsigned short& close_cmd, unsigned short close_val,
+				unsigned short& open_cmd, unsigned short open_val,
+				DWORD seq_t0, DWORD stagger_ms)
+			{
+				close_cmd = close_val;
+				if ((now_ms - seq_t0) >= stagger_ms)
+				{
+					open_cmd = open_val;
+				}
 			};
 
 			auto compute_axis7_cmd_rel = [&]() -> double
@@ -1291,17 +1336,20 @@ int main(int argc, char* argv[])
 						axis6_crawl.cyl_seq_t0 = now_ms;
 						axis6_crawl.rearm_dir = 0;
 						axis6_crawl.plc_move_requested = false;
-						cylinder3_cmd = cyl.cyl3_clamp;
-						cylinder4_cmd = cyl.cyl4_open;
+						staggered_pair(cylinder3_cmd, cyl.cyl3_clamp,
+							cylinder4_cmd, cyl.cyl4_open,
+							axis6_crawl.cyl_seq_t0, cfg.axis6_cylinder_interstep_wait_ms);
 					}
 				}
 				else if (axis6_crawl.phase == CrawlState::Phase::SwitchWait)
 				{
 					axis6_fast_retract = true;
 					pos[5] = axis6_return_entry_rel;
-					cylinder3_cmd = cyl.cyl3_clamp;
-					cylinder4_cmd = cyl.cyl4_open;
-					if ((now_ms - axis6_crawl.phase_t0) >= cfg.axis6_pre_move_cylinder_wait_ms)
+					staggered_pair(cylinder3_cmd, cyl.cyl3_clamp,
+						cylinder4_cmd, cyl.cyl4_open,
+						axis6_crawl.cyl_seq_t0, cfg.axis6_cylinder_interstep_wait_ms);
+					if ((now_ms - axis6_crawl.phase_t0) >=
+						(cfg.axis6_cylinder_interstep_wait_ms + cfg.axis6_pre_move_cylinder_wait_ms))
 					{
 						axis6_crawl.phase = CrawlState::Phase::FastMove;
 						axis6_crawl.phase_t0 = now_ms;
@@ -1312,8 +1360,9 @@ int main(int argc, char* argv[])
 				else if (axis6_crawl.phase == CrawlState::Phase::FastMove)
 				{
 					pos[5] = axis6_crawl.target_abs - plc_init_pos[5];
-					cylinder3_cmd = cyl.cyl3_clamp;
-					cylinder4_cmd = cyl.cyl4_open;
+					staggered_pair(cylinder3_cmd, cyl.cyl3_clamp,
+						cylinder4_cmd, cyl.cyl4_open,
+						axis6_crawl.cyl_seq_t0, cfg.axis6_cylinder_interstep_wait_ms);
 					axis6_fast_retract = true;
 
 					if (!axis6_crawl.plc_move_requested)
@@ -1369,9 +1418,11 @@ int main(int argc, char* argv[])
 				{
 					axis6_fast_retract = true;
 					pos[5] = axis6_return_settle_rel;
-					cylinder3_cmd = cyl.cyl3_open;
-					cylinder4_cmd = cyl.cyl4_clamp;
-					if ((now_ms - axis6_crawl.phase_t0) >= cfg.axis6_post_return_cylinder_wait_ms)
+					staggered_pair(cylinder4_cmd, cyl.cyl4_clamp,
+						cylinder3_cmd, cyl.cyl3_open,
+						axis6_crawl.cyl_seq_t0, cfg.axis6_cylinder_interstep_wait_ms);
+					if ((now_ms - axis6_crawl.phase_t0) >=
+						(cfg.axis6_cylinder_interstep_wait_ms + cfg.axis6_post_return_cylinder_wait_ms))
 					{
 						if (!sync_axis6(3, false, false, 0, false, false))
 						{
@@ -1676,12 +1727,14 @@ int main(int argc, char* argv[])
 								axis1_crawl.cyl_seq_t0 = now_ms;
 								axis1_crawl.rearm_dir = 0;
 								axis1_crawl.plc_move_requested = false;
-								cylinder1_cmd = cyl.cyl1_clamp;
-								cylinder2_cmd = cyl.cyl2_open;
+								staggered_pair(cylinder1_cmd, cyl.cyl1_clamp,
+									cylinder2_cmd, cyl.cyl2_open,
+									axis1_crawl.cyl_seq_t0, cfg.axis1_cylinder_interstep_wait_ms);
 								if (!cooperative_mode)
 								{
-									cylinder3_cmd = cyl.cyl3_clamp;
-									cylinder4_cmd = cyl.cyl4_open;
+									staggered_pair(cylinder3_cmd, cyl.cyl3_clamp,
+										cylinder4_cmd, cyl.cyl4_open,
+										axis1_crawl.cyl_seq_t0, cfg.axis6_cylinder_interstep_wait_ms);
 								}
 							}
 						}
@@ -1689,25 +1742,30 @@ int main(int argc, char* argv[])
 				}
 				else if (axis1_crawl.phase == CrawlState::Phase::SwitchWait)
 				{
+					const DWORD pair_pre_move_wait_ms =
+						cfg.axis1_cylinder_interstep_wait_ms + cfg.axis1_pre_move_cylinder_wait_ms;
+					const DWORD axis6_pair_pre_move_wait_ms =
+						cfg.axis6_cylinder_interstep_wait_ms + cfg.axis6_pre_move_cylinder_wait_ms;
 					const DWORD coupled_pre_move_wait_ms =
 						axis6_coupled_active
-						? ((cfg.axis1_pre_move_cylinder_wait_ms > cfg.axis6_pre_move_cylinder_wait_ms)
-							? cfg.axis1_pre_move_cylinder_wait_ms
-							: cfg.axis6_pre_move_cylinder_wait_ms)
-						: cfg.axis1_pre_move_cylinder_wait_ms;
+						? ((pair_pre_move_wait_ms > axis6_pair_pre_move_wait_ms)
+							? pair_pre_move_wait_ms
+							: axis6_pair_pre_move_wait_ms)
+						: pair_pre_move_wait_ms;
 					axis1_fast_return = true;
 					pos[0] = axis1_return_entry_rel;
 					hold_axis1_mirror_axes_for_return();
 					pos[1] = axis2_hold_rel;
-					// 快退前导管夹爪对同时切换：电缸1夹紧，电缸2打开。
-					cylinder1_cmd = cyl.cyl1_clamp;
-					cylinder2_cmd = cyl.cyl2_open;
+					staggered_pair(cylinder1_cmd, cyl.cyl1_clamp,
+						cylinder2_cmd, cyl.cyl2_open,
+						axis1_crawl.cyl_seq_t0, cfg.axis1_cylinder_interstep_wait_ms);
 					if (axis6_coupled_active)
 					{
 						axis6_fast_retract = true;
 						pos[5] = axis6_return_entry_rel;
-						cylinder3_cmd = cyl.cyl3_clamp;
-						cylinder4_cmd = cyl.cyl4_open;
+						staggered_pair(cylinder3_cmd, cyl.cyl3_clamp,
+							cylinder4_cmd, cyl.cyl4_open,
+							axis1_crawl.cyl_seq_t0, cfg.axis6_cylinder_interstep_wait_ms);
 					}
 					if ((now_ms - axis1_crawl.phase_t0) >= coupled_pre_move_wait_ms)
 					{
@@ -1722,16 +1780,17 @@ int main(int argc, char* argv[])
 					pos[0] = axis1_crawl.target_abs - plc_init_pos[0];
 					hold_axis1_mirror_axes_for_return();
 					pos[1] = axis2_hold_rel;
-					cylinder1_cmd = cyl.cyl1_clamp;
-					cylinder2_cmd = cyl.cyl2_open;
+					staggered_pair(cylinder1_cmd, cyl.cyl1_clamp,
+						cylinder2_cmd, cyl.cyl2_open,
+						axis1_crawl.cyl_seq_t0, cfg.axis1_cylinder_interstep_wait_ms);
 					axis1_fast_return = true;
 					if (axis6_coupled_active)
 					{
 						axis6_fast_retract = true;
-						// 回退联动阶段持续覆盖为“联动目标点”，避免接管前后端点注入。
 						pos[5] = axis6_coupled_target_abs - plc_init_pos[5];
-						cylinder3_cmd = cyl.cyl3_clamp;
-						cylinder4_cmd = cyl.cyl4_open;
+						staggered_pair(cylinder3_cmd, cyl.cyl3_clamp,
+							cylinder4_cmd, cyl.cyl4_open,
+							axis1_crawl.cyl_seq_t0, cfg.axis6_cylinder_interstep_wait_ms);
 					}
 					if (!axis1_crawl.plc_move_requested)
 					{
@@ -1891,25 +1950,32 @@ int main(int argc, char* argv[])
 				}
 				else if (axis1_crawl.phase == CrawlState::Phase::RestoreWait)
 				{
+					const DWORD pair_post_return_wait_ms =
+						cfg.axis1_cylinder_interstep_wait_ms + cfg.axis1_post_return_cylinder_wait_ms;
+					const DWORD axis6_pair_post_return_wait_ms =
+						cfg.axis6_cylinder_interstep_wait_ms + cfg.axis6_post_return_cylinder_wait_ms;
 					const DWORD coupled_post_return_wait_ms =
 						axis6_coupled_active
-						? ((cfg.axis1_post_return_cylinder_wait_ms > cfg.axis6_post_return_cylinder_wait_ms)
-							? cfg.axis1_post_return_cylinder_wait_ms
-							: cfg.axis6_post_return_cylinder_wait_ms)
-						: cfg.axis1_post_return_cylinder_wait_ms;
+						? ((pair_post_return_wait_ms > axis6_pair_post_return_wait_ms)
+							? pair_post_return_wait_ms
+							: axis6_pair_post_return_wait_ms)
+						: pair_post_return_wait_ms;
 					axis1_fast_return = true;
 					pos[0] = axis1_return_settle_rel;
 					hold_axis1_mirror_axes_for_return();
 					pos[1] = axis2_hold_rel;
-					// 快退完成后导管夹爪对同时切回最终缸态：电缸1打开，电缸2夹紧。
-					cylinder1_cmd = cyl.cyl1_open;
-					cylinder2_cmd = cyl.cyl2_clamp;
+					// RestoreWait 角色互换：电缸2先合，电缸1后开。
+					staggered_pair(cylinder2_cmd, cyl.cyl2_clamp,
+						cylinder1_cmd, cyl.cyl1_open,
+						axis1_crawl.cyl_seq_t0, cfg.axis1_cylinder_interstep_wait_ms);
 					if (axis6_coupled_active)
 					{
 						axis6_fast_retract = true;
 						pos[5] = axis6_return_settle_rel;
-						cylinder3_cmd = cyl.cyl3_open;
-						cylinder4_cmd = cyl.cyl4_clamp;
+						staggered_pair(cylinder4_cmd, cyl.cyl4_clamp,
+							cylinder3_cmd, cyl.cyl3_open,
+							axis1_crawl.cyl_seq_t0, cfg.axis6_cylinder_interstep_wait_ms);
+					}
 					}
 					if ((now_ms - axis1_crawl.phase_t0) >= coupled_post_return_wait_ms)
 					{
@@ -2013,6 +2079,10 @@ int main(int argc, char* argv[])
 		bool cylinder5_req = formal_control_stage ? pause_pressed : false;
 		if (!freeze_active && (control_active || motion_startup_active))
 		{
+			if (cylinder_manual_open_override[0]) cylinder1_cmd = cyl.cyl1_open;
+			if (cylinder_manual_open_override[1]) cylinder2_cmd = cyl.cyl2_open;
+			if (cylinder_manual_open_override[2]) cylinder3_cmd = cyl.cyl3_open;
+			if (cylinder_manual_open_override[3]) cylinder4_cmd = cyl.cyl4_open;
 			ads.ADSWrite(AdsSymbol::cylinder1_value, sizeof(cylinder1_cmd), &cylinder1_cmd);
 			ads.ADSWrite(AdsSymbol::cylinder2_value, sizeof(cylinder2_cmd), &cylinder2_cmd);
 			ads.ADSWrite(AdsSymbol::cylinder3_value, sizeof(cylinder3_cmd), &cylinder3_cmd);
@@ -2162,6 +2232,7 @@ int main(int argc, char* argv[])
 	clear_force_output();
 	force_log.close();
 	tcp_force_daq.stop();
+	force_logger.stop();
 	handle_axis1.close();
 	handle_axis6.close();
 	return 0;
