@@ -298,6 +298,8 @@ struct ForceSampleFrame
 	short fn_1_value = 0;
 	short fn_2_value = 0;
 	short ft_2_value = 0;
+	double fn_1_value_v = 0.0;
+	double ft_1_value_v = 0.0;
 	double axis1_pos_rel = 0.0;
 	bool valid = false;
 	DWORD tick_ms = 0;

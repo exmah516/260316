@@ -393,6 +393,8 @@ int main(int argc, char* argv[])
 
 	StartupState startup;
 	ForceFeedbackState ff;
+	ForceCalibrationConfig cal_cfg;
+	ForceCalibrationState cal_state;
 	ForceLogState force_log;
 	CrawlState axis1_crawl;
 	CrawlState axis6_crawl;
@@ -928,6 +930,23 @@ int main(int argc, char* argv[])
 				if (!ff.enabled)
 				{
 					clear_force_output();
+				}
+			}
+			else if (ch == 'z' || ch == 'Z')
+			{
+				double raw_v[6] = { 0 };
+				std::uint64_t ts = 0;
+				if (tcp_force_daq.get_latest_raw(raw_v, ts))
+				{
+					cal_state.ft_zero = raw_v[0];
+					cal_state.f_zero = raw_v[1];
+					cal_state.zeroed = true;
+					std::cout << "力传感器零点已采集：ft_zero=" << cal_state.ft_zero
+						<< " V, f_zero=" << cal_state.f_zero << " V" << std::endl;
+				}
+				else
+				{
+					std::cout << "零点采集失败：TCP DAQ 无有效帧。" << std::endl;
 				}
 			}
 			else if (single_handle_mode && ch == '1')
@@ -1976,7 +1995,6 @@ int main(int argc, char* argv[])
 							cylinder3_cmd, cyl.cyl3_open,
 							axis1_crawl.cyl_seq_t0, cfg.axis6_cylinder_interstep_wait_ms);
 					}
-					}
 					if ((now_ms - axis1_crawl.phase_t0) >= coupled_post_return_wait_ms)
 					{
 						if (!sync_axis1(3, false, 0))
@@ -2163,6 +2181,17 @@ int main(int argc, char* argv[])
 				double log_fn1_value = static_cast<double>(force_sample.fn_1_value);
 				bool ready_to_log = true;
 
+				// TCP DAQ 电压填入 force_sample 供标定力反馈使用。
+				{
+					double tcp_raw_v[6] = { 0 };
+					std::uint64_t tcp_ts = 0;
+					if (tcp_force_daq.get_latest_raw(tcp_raw_v, tcp_ts))
+					{
+						force_sample.ft_1_value_v = tcp_raw_v[0];
+						force_sample.fn_1_value_v = tcp_raw_v[1];
+					}
+				}
+
 				// 仅替换 CSV 中 ft_1/fn_1 的来源：TCP 第0/1通道。
 				if (ctx.force_sample_source == ForceSampleSource::TCP_DAQ)
 				{
@@ -2218,7 +2247,9 @@ int main(int argc, char* argv[])
 			estop_hold_active,
 			axis1_fast_return,
 			axis6_fast_retract,
-			loop_count);
+			loop_count,
+			cal_cfg,
+			cal_state);
 
 		// 无论本拍是否进入控制分支，都更新线性差分基准，避免暂停/等待期间累积大跳变。
 		axis1_prev_linear_filtered = axis1_handle_filter.axis0_filtered;

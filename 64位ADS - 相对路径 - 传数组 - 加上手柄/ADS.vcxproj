@@ -177,6 +177,7 @@
     <ClInclude Include="control_types.h" />
     <ClInclude Include="tcp_force_daq.h" />
     <ClInclude Include="force_logger.h" />
+    <ClInclude Include="force_calibration.h" />
     <ClInclude Include="plc_io.h" />
     <ClInclude Include="motion_sync.h" />
     <ClInclude Include="guidewire_mode.h" />
