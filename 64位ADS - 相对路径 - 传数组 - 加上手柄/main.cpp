@@ -6,6 +6,7 @@
 #include "plc_io.h"
 #include "startup_sequence.h"
 #include "tcp_force_daq.h"
+#include "vis_server.h"
 
 #include <cmath>
 #include <conio.h>
@@ -151,6 +152,7 @@ int main(int argc, char* argv[])
 	CADSComm ads;
 	TcpForceDaqClient tcp_force_daq;
 	ForceLogger force_logger;
+	VisServer vis_server;
 	HandleFilterState axis1_handle_filter;
 	HandleFilterState axis6_handle_filter;
 	const bool axis1_handle_ready = handle_axis1.init();
@@ -249,6 +251,8 @@ int main(int argc, char* argv[])
 	{
 		std::cout << "警告：读取 PLC 应用名失败，错误: " << ads.GetLastError() << std::endl;
 	}
+
+	vis_server.start();
 
 	// 力输出统一入口：按 setforce(F,N) 语义分别下发到 582/587。
 	auto apply_force_output = [&](double force_582_f, double force_582_n, double force_587_f, double force_587_n)
@@ -2256,6 +2260,82 @@ int main(int argc, char* argv[])
 		axis6_prev_linear_filtered = axis6_handle_filter.axis0_filtered;
 		axis1_prev_rot_filtered = axis1_handle_filter.axis1_filtered;
 		axis6_prev_rot_filtered = axis6_handle_filter.axis1_filtered;
+
+		// 可视化管道：推送状态快照 + 轮询 UI 命令。
+		{
+			VisState vs{};
+			for (int i = 0; i < 7; ++i)
+			{
+				vs.axis_pos[i] = plc_act_pos[i];
+				vs.axis_pos_from_left[i] = plc_act_pos_from_left[i];
+			}
+			vs.cylinder_cmd[0] = cylinder1_cmd;
+			vs.cylinder_cmd[1] = cylinder2_cmd;
+			vs.cylinder_cmd[2] = cylinder3_cmd;
+			vs.cylinder_cmd[3] = cylinder4_cmd;
+			vs.guidewire_mode = static_cast<int>(guidewire_mode);
+			vs.axis1_phase = static_cast<int>(axis1_crawl.phase);
+			vs.axis6_phase = static_cast<int>(axis6_crawl.phase);
+			vs.startup_phase = static_cast<int>(startup.phase);
+			vs.control_active = control_active;
+			vs.freeze_active = freeze_active;
+			vs.estop_hold = estop_hold_active;
+			vs.axis1_fast_return = axis1_fast_return;
+			vs.axis6_fast_retract = axis6_fast_retract;
+			vs.self_check_done = self_check_done;
+			vs.ff_enabled = ff.enabled;
+			vs.cal_zeroed = cal_state.zeroed;
+			vs.ft_1_v = force_sample.ft_1_value_v;
+			vs.fn_1_v = force_sample.fn_1_value_v;
+			vs.force_582_f = ff.force_582_f;
+			vs.force_582_n = ff.force_582_n;
+			vs.force_587_f = ff.force_587_f;
+			vs.force_587_n = ff.force_587_n;
+			vs.loop_count = loop_count;
+			vs.tick_ms = GetTickCount();
+			vis_server.push_state(vs);
+		}
+
+		{
+			VisCommand vcmd;
+			while (vis_server.poll_command(vcmd))
+			{
+				switch (vcmd.type)
+				{
+				case VisCommandType::SetCylinderOverride:
+					if (vcmd.param1 >= 0 && vcmd.param1 < 4)
+						cylinder_manual_open_override[vcmd.param1] = true;
+					break;
+				case VisCommandType::ClearCylinderOverride:
+					if (vcmd.param1 >= 0 && vcmd.param1 < 4)
+						cylinder_manual_open_override[vcmd.param1] = false;
+					break;
+				case VisCommandType::RequestModeSwitch:
+					if (single_handle_mode)
+						single_handle_requested_mode = static_cast<GuidewireMode>(vcmd.param1);
+					break;
+				case VisCommandType::ZeroForceSensor:
+				{
+					double raw_v[6] = { 0 };
+					std::uint64_t ts = 0;
+					if (tcp_force_daq.get_latest_raw(raw_v, ts))
+					{
+						cal_state.ft_zero = raw_v[0];
+						cal_state.f_zero = raw_v[1];
+						cal_state.zeroed = true;
+					}
+					break;
+				}
+				case VisCommandType::ToggleForceFeedback:
+					ff.enabled = !ff.enabled;
+					ff.reset();
+					if (!ff.enabled) clear_force_output();
+					break;
+				default:
+					break;
+				}
+			}
+		}
 	}
 
 	startup_smoothing_bypass = false;
@@ -2264,6 +2344,7 @@ int main(int argc, char* argv[])
 	force_log.close();
 	tcp_force_daq.stop();
 	force_logger.stop();
+	vis_server.stop();
 	handle_axis1.close();
 	handle_axis6.close();
 	return 0;
