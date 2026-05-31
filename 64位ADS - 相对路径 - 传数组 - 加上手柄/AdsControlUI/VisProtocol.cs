@@ -1,9 +1,4 @@
-using System;
-using System.ComponentModel;
-using System.IO.Pipes;
 using System.Runtime.InteropServices;
-using System.Threading;
-using System.Windows.Threading;
 
 namespace AdsControlUI
 {
@@ -28,6 +23,11 @@ namespace AdsControlUI
         [MarshalAs(UnmanagedType.I1)] public bool self_check_done;
         [MarshalAs(UnmanagedType.I1)] public bool ff_enabled;
         [MarshalAs(UnmanagedType.I1)] public bool cal_zeroed;
+        [MarshalAs(UnmanagedType.I1)] public bool axis1_reverse;
+        [MarshalAs(UnmanagedType.I1)] public bool axis6_reverse;
+        [MarshalAs(UnmanagedType.I1)] public bool force_log_running;
+        [MarshalAs(UnmanagedType.I1)] public bool startup_waiting;
+        [MarshalAs(UnmanagedType.I1)] public bool startup_completed;
         public double ft_1_v;
         public double fn_1_v;
         public double force_582_f;
@@ -46,6 +46,13 @@ namespace AdsControlUI
         RequestModeSwitch = 3,
         ZeroForceSensor = 4,
         ToggleForceFeedback = 5,
+        SetReverseMode = 6,
+        ToggleForceLog = 7,
+        SetStartupAxisPos = 8,
+        SetStartupAxisDeg = 9,
+        SetStartupSpeed = 10,
+        ExecuteStartup = 11,
+        SelectDirectControl = 12,
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 1)]

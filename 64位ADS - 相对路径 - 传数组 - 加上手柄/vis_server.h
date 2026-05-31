@@ -25,6 +25,11 @@ struct VisState
 	bool self_check_done;
 	bool ff_enabled;
 	bool cal_zeroed;
+	bool axis1_reverse;
+	bool axis6_reverse;
+	bool force_log_running;
+	bool startup_waiting;
+	bool startup_completed;
 	double ft_1_v;
 	double fn_1_v;
 	double force_582_f;
@@ -44,6 +49,13 @@ enum class VisCommandType : int
 	RequestModeSwitch = 3,
 	ZeroForceSensor = 4,
 	ToggleForceFeedback = 5,
+	SetReverseMode = 6,
+	ToggleForceLog = 7,
+	SetStartupAxisPos = 8,
+	SetStartupAxisDeg = 9,
+	SetStartupSpeed = 10,
+	ExecuteStartup = 11,
+	SelectDirectControl = 12,
 };
 
 #pragma pack(push, 1)

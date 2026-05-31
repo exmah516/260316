@@ -43,6 +43,12 @@ namespace AdsControlUI
             OnPropertyChanged(nameof(Force582F));
             OnPropertyChanged(nameof(Force582N));
             OnPropertyChanged(nameof(IsConnected));
+            OnPropertyChanged(nameof(Axis1Reverse));
+            OnPropertyChanged(nameof(Axis6Reverse));
+            OnPropertyChanged(nameof(ForceLogRunning));
+            OnPropertyChanged(nameof(StartupWaiting));
+            OnPropertyChanged(nameof(StartupCompleted));
+            OnPropertyChanged(nameof(PhaseText));
         }
 
         public bool IsConnected => _client.IsConnected;
@@ -59,13 +65,31 @@ namespace AdsControlUI
         public bool Cyl3Open => (_state.cylinder_cmd?[2] ?? 0) > 200;
         public bool Cyl4Open => (_state.cylinder_cmd?[3] ?? 0) < 200;
 
-        public string ModeText => _state.guidewire_mode switch
+        public string ModeText
         {
-            0 => "导管",
-            1 => "导丝独立",
-            2 => "协同",
-            _ => "未知"
-        };
+            get
+            {
+                string mode = _state.guidewire_mode == 0 ? "导管" : "导丝";
+                bool rev = _state.guidewire_mode == 0 ? _state.axis1_reverse : _state.axis6_reverse;
+                return mode + (rev ? "撤出" : "递送");
+            }
+        }
+
+        public bool Axis1Reverse => _state.axis1_reverse;
+        public bool Axis6Reverse => _state.axis6_reverse;
+        public bool ForceLogRunning => _state.force_log_running;
+        public bool StartupWaiting => _state.startup_waiting;
+        public bool StartupCompleted => _state.startup_completed;
+
+        public string PhaseText
+        {
+            get
+            {
+                if (_state.startup_completed) return "已就绪";
+                if (_state.startup_waiting) return "等待启动选择...";
+                return "启动准备中...";
+            }
+        }
 
         public bool ControlActive => _state.control_active;
         public bool FreezeActive => _state.freeze_active;
@@ -81,14 +105,32 @@ namespace AdsControlUI
         public void ClearCylinderOverride(int index) =>
             _client.SendCommand(VisCommandType.ClearCylinderOverride, index);
 
-        public void RequestModeSwitch(int mode) =>
-            _client.SendCommand(VisCommandType.RequestModeSwitch, mode);
+        public void SetMode(int guidewireMode, int reverse) =>
+            _client.SendCommand(VisCommandType.SetReverseMode, guidewireMode, reverse);
 
         public void ZeroForceSensor() =>
             _client.SendCommand(VisCommandType.ZeroForceSensor);
 
         public void ToggleForceFeedback() =>
             _client.SendCommand(VisCommandType.ToggleForceFeedback);
+
+        public void ToggleForceLog() =>
+            _client.SendCommand(VisCommandType.ToggleForceLog);
+
+        public void SelectDirectControl() =>
+            _client.SendCommand(VisCommandType.SelectDirectControl);
+
+        public void SendStartupParams(double a1, double a3, double a5, double a6, double a2deg, double a7deg, double speed)
+        {
+            _client.SendCommand(VisCommandType.SetStartupAxisPos, 1, (int)(a1 * 100));
+            _client.SendCommand(VisCommandType.SetStartupAxisPos, 3, (int)(a3 * 100));
+            _client.SendCommand(VisCommandType.SetStartupAxisPos, 5, (int)(a5 * 100));
+            _client.SendCommand(VisCommandType.SetStartupAxisPos, 6, (int)(a6 * 100));
+            _client.SendCommand(VisCommandType.SetStartupAxisDeg, 2, (int)(a2deg * 100));
+            _client.SendCommand(VisCommandType.SetStartupAxisDeg, 7, (int)(a7deg * 100));
+            _client.SendCommand(VisCommandType.SetStartupSpeed, (int)(speed * 100000));
+            _client.SendCommand(VisCommandType.ExecuteStartup);
+        }
 
         public event PropertyChangedEventHandler PropertyChanged;
         private void OnPropertyChanged([CallerMemberName] string name = null) =>

@@ -1,0 +1,58 @@
+{
+  "format": 1,
+  "restore": {
+    "C:\\Users\\admin1\\Desktop\\260316\\64位ADS - 相对路径 - 传数组 - 加上手柄\\AdsControlUI\\AdsControlUI.csproj": {}
+  },
+  "projects": {
+    "C:\\Users\\admin1\\Desktop\\260316\\64位ADS - 相对路径 - 传数组 - 加上手柄\\AdsControlUI\\AdsControlUI.csproj": {
+      "version": "1.0.0",
+      "restore": {
+        "projectUniqueName": "C:\\Users\\admin1\\Desktop\\260316\\64位ADS - 相对路径 - 传数组 - 加上手柄\\AdsControlUI\\AdsControlUI.csproj",
+        "projectName": "AdsControlUI",
+        "projectPath": "C:\\Users\\admin1\\Desktop\\260316\\64位ADS - 相对路径 - 传数组 - 加上手柄\\AdsControlUI\\AdsControlUI.csproj",
+        "packagesPath": "C:\\Users\\admin1\\.nuget\\packages\\",
+        "outputPath": "C:\\Users\\admin1\\Desktop\\260316\\64位ADS - 相对路径 - 传数组 - 加上手柄\\AdsControlUI\\obj\\",
+        "projectStyle": "PackageReference",
+        "configFilePaths": [
+          "C:\\Users\\admin1\\AppData\\Roaming\\NuGet\\NuGet.Config",
+          "C:\\Program Files (x86)\\NuGet\\Config\\Microsoft.VisualStudio.Offline.config"
+        ],
+        "originalTargetFrameworks": [
+          "net472"
+        ],
+        "sources": {
+          "C:\\Program Files (x86)\\Microsoft SDKs\\NuGetPackages\\": {},
+          "https://api.nuget.org/v3/index.json": {}
+        },
+        "frameworks": {
+          "net472": {
+            "targetAlias": "net472",
+            "projectReferences": {}
+          }
+        },
+        "warningProperties": {
+          "warnAsError": [
+            "NU1605"
+          ]
+        },
+        "restoreAuditProperties": {
+          "enableAudit": "true",
+          "auditLevel": "low",
+          "auditMode": "direct"
+        },
+        "SdkAnalysisLevel": "9.0.300"
+      },
+      "frameworks": {
+        "net472": {
+          "targetAlias": "net472",
+          "runtimeIdentifierGraphPath": "C:\\Program Files\\dotnet\\sdk\\9.0.308\\RuntimeIdentifierGraph.json"
+        }
+      },
+      "runtimes": {
+        "win-x64": {
+          "#import": []
+        }
+      }
+    }
+  }
+}

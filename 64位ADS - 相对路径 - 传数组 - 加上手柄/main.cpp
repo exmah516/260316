@@ -122,7 +122,7 @@ int main(int argc, char* argv[])
 		return 0;
 	}
 
-	const ControlConfig cfg;
+	ControlConfig cfg;
 	const CylinderPreset cyl;
 
 	const unsigned char axis1_pause_button_mask = cfg.btn_b6;
@@ -178,33 +178,11 @@ int main(int argc, char* argv[])
 	{
 		Handle* single_handle = axis1_handle_ready ? &handle_axis1 : &handle_axis6;
 		const DWORD single_serial = axis1_handle_ready ? serial_axis1_handle : serial_axis6_handle;
-		std::cout << "仅识别到一个手柄（序列号: " << single_serial << "）。" << std::endl;
-		std::cout << "按回车继续单手柄控制，按 ESC 或 q 退出。" << std::endl;
-		while (true)
-		{
-			if (_kbhit())
-			{
-				const int ch = _getch();
-				if (ch == '\r')
-				{
-					single_handle_mode = true;
-					axis1_input_handle = single_handle;
-					axis6_input_handle = single_handle;
-					single_handle_requested_mode = GuidewireMode::None;
-					std::cout << "已进入单手柄模式（默认导管/582语义）。" << std::endl;
-					std::cout << "数字1：导管(582语义)，数字2：导丝(587语义)。" << std::endl;
-					std::cout << "按键说明：b0方向，b6 Y阀，b7/b5 轴4点动。" << std::endl;
-					break;
-				}
-				if (ch == 27 || ch == 'q' || ch == 'Q')
-				{
-					handle_axis1.close();
-					handle_axis6.close();
-					return 0;
-				}
-			}
-			Sleep(20);
-		}
+		single_handle_mode = true;
+		axis1_input_handle = single_handle;
+		axis6_input_handle = single_handle;
+		single_handle_requested_mode = GuidewireMode::None;
+		std::cout << "单手柄模式已自动启用（序列号: " << single_serial << "）。" << std::endl;
 	}
 
 	Sleep(1000);
@@ -624,6 +602,19 @@ int main(int argc, char* argv[])
 	}
 
 	bool cylinder_manual_open_override[4] = { false, false, false, false };
+	bool vis_reverse_override_active = false;
+	bool vis_reverse_override_value = false;
+	int vis_reverse_override_target = 0;
+
+	struct PendingStartupParams {
+		double axis1_from_left_mm = 20.0;
+		double axis3_from_left_mm = 635.0;
+		double axis5_from_left_mm = 290.0;
+		double axis6_from_left_mm = 310.0;
+		double axis2_deg = 0.0;
+		double axis7_deg = 0.0;
+		double speed_scale = 0.005;
+	} pending_startup;
 
 	while (true)
 	{
@@ -2285,6 +2276,11 @@ int main(int argc, char* argv[])
 			vs.self_check_done = self_check_done;
 			vs.ff_enabled = ff.enabled;
 			vs.cal_zeroed = cal_state.zeroed;
+			vs.axis1_reverse = axis1_reverse_pressed;
+			vs.axis6_reverse = axis6_effective_reverse_pressed;
+			vs.force_log_running = force_logger.is_running();
+			vs.startup_waiting = (!startup.completed && startup.phase == StartupPhase::WaitForEnter);
+			vs.startup_completed = startup.completed;
 			vs.ft_1_v = force_sample.ft_1_value_v;
 			vs.fn_1_v = force_sample.fn_1_value_v;
 			vs.force_582_f = ff.force_582_f;
@@ -2331,6 +2327,106 @@ int main(int argc, char* argv[])
 					ff.reset();
 					if (!ff.enabled) clear_force_output();
 					break;
+				case VisCommandType::SetReverseMode:
+				{
+					// param1: 0=catheter mode+direction, 1=guidewire mode+direction
+					// param2: 0=forward(递送), 1=reverse(撤出)
+					GuidewireMode target_mode = (vcmd.param1 == 0) ? GuidewireMode::None : GuidewireMode::Independent;
+					if (single_handle_mode)
+						single_handle_requested_mode = target_mode;
+					vis_reverse_override_active = true;
+					vis_reverse_override_target = vcmd.param1;
+					vis_reverse_override_value = (vcmd.param2 != 0);
+					break;
+				}
+				case VisCommandType::ToggleForceLog:
+					if (force_logger.is_running())
+					{
+						tcp_force_daq.set_on_sample(nullptr);
+						force_logger.stop();
+						std::cout << "高频力数据记录已停止。" << std::endl;
+					}
+					else
+					{
+						if (force_logger.start("."))
+						{
+							tcp_force_daq.set_on_sample([&](std::uint64_t tick_ms, const double v[6]) {
+								force_logger.on_sensor_sample(tick_ms, v);
+							});
+							std::cout << "高频力数据记录已启动。" << std::endl;
+						}
+					}
+					break;
+				case VisCommandType::SetStartupAxisPos:
+				{
+					double pos_mm = vcmd.param2 / 100.0;
+					switch (vcmd.param1)
+					{
+					case 1: pending_startup.axis1_from_left_mm = pos_mm; break;
+					case 3: pending_startup.axis3_from_left_mm = pos_mm; break;
+					case 5: pending_startup.axis5_from_left_mm = pos_mm; break;
+					case 6: pending_startup.axis6_from_left_mm = pos_mm; break;
+					}
+					break;
+				}
+				case VisCommandType::SetStartupAxisDeg:
+				{
+					double deg = vcmd.param2 / 100.0;
+					if (vcmd.param1 == 2) pending_startup.axis2_deg = deg;
+					else if (vcmd.param1 == 7) pending_startup.axis7_deg = deg;
+					break;
+				}
+				case VisCommandType::SetStartupSpeed:
+					pending_startup.speed_scale = vcmd.param1 / 100000.0;
+					break;
+				case VisCommandType::ExecuteStartup:
+				{
+					bool valid = true;
+					if (pending_startup.axis1_from_left_mm < 5.0 || pending_startup.axis1_from_left_mm > 95.0) valid = false;
+					if (pending_startup.axis3_from_left_mm < 10.0 || pending_startup.axis3_from_left_mm > 650.0) valid = false;
+					if (pending_startup.axis5_from_left_mm < 10.0 || pending_startup.axis5_from_left_mm > 670.0) valid = false;
+					if (pending_startup.axis6_from_left_mm < 10.0 || pending_startup.axis6_from_left_mm > 670.0) valid = false;
+					if (pending_startup.axis6_from_left_mm < pending_startup.axis5_from_left_mm) valid = false;
+					if (pending_startup.axis5_from_left_mm < pending_startup.axis3_from_left_mm) valid = false;
+					if (pending_startup.axis3_from_left_mm < pending_startup.axis1_from_left_mm) valid = false;
+					if (pending_startup.speed_scale < 0.00001 || pending_startup.speed_scale > 0.5) valid = false;
+					if (valid && !startup.completed && startup.phase == StartupPhase::WaitForEnter &&
+						!freeze_active && !estop_hold_active)
+					{
+						cfg.startup_axis1_ready_from_left_mm = pending_startup.axis1_from_left_mm;
+						cfg.startup_axis3_ready_from_left_mm = pending_startup.axis3_from_left_mm;
+						cfg.startup_axis5_ready_from_left_mm = pending_startup.axis5_from_left_mm;
+						cfg.axis56_ready_gap_mm = pending_startup.axis6_from_left_mm - pending_startup.axis5_from_left_mm;
+						cfg.startup_motion_speed_scale = pending_startup.speed_scale;
+						if (start_startup_sequence())
+						{
+							control_active = false;
+							ensure_force_log_started();
+							std::cout << "启动准备流程已开始（UI 参数）。" << std::endl;
+						}
+					}
+					break;
+				}
+				case VisCommandType::SelectDirectControl:
+				{
+					if (!startup.completed &&
+						startup.phase == StartupPhase::WaitForEnter &&
+						!freeze_active &&
+						!estop_hold_active &&
+						(!has_self_check_flag || self_check_done))
+					{
+						if (restore_startup_v_limit() && sync_all(20))
+						{
+							startup.phase = StartupPhase::Done;
+							startup.completed = true;
+							startup.prompted = false;
+							control_active = true;
+							ensure_force_log_started();
+							std::cout << "已进入直接控制（UI 触发）。" << std::endl;
+						}
+					}
+					break;
+				}
 				default:
 					break;
 				}

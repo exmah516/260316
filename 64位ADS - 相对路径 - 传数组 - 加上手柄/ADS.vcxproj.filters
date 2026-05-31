@@ -51,6 +51,12 @@
     <ClCompile Include="手柄\手柄.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
+    <ClCompile Include="force_logger.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="vis_server.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="control_types.h">
@@ -87,6 +93,15 @@
       <Filter>头文件</Filter>
     </ClInclude>
     <ClInclude Include="手柄\Handle.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="force_logger.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="force_calibration.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="vis_server.h">
       <Filter>头文件</Filter>
     </ClInclude>
   </ItemGroup>
