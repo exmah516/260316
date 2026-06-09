@@ -538,6 +538,7 @@ int main(int argc, char* argv[])
 	AxisReturnStatus axis6_return_status;
 	ForceSampleFrame force_sample;
 	int loop_count = 0;
+	DWORD force_sample_last_sample_ms = 0;
 	DWORD force_log_warn_last_ms = 0;
 	bool cylinder5_diag_edge_pending = false;
 	DWORD cylinder5_diag_last_log_ms = 0;
@@ -587,6 +588,34 @@ int main(int argc, char* argv[])
 			std::cout << "高频传感数据记录器启动失败：CSV 文件打开失败。" << std::endl;
 		}
 		force_log_started = true;
+	};
+
+	auto zero_force_sensor = [&](const char* source) -> bool
+	{
+		double raw_v[6] = { 0 };
+		std::uint64_t ts = 0;
+		if (tcp_force_daq.get_latest_raw(raw_v, ts))
+		{
+			cal_state.ft_zero = raw_v[0];
+			cal_state.f_zero = raw_v[1];
+			cal_state.zeroed = true;
+			std::cout << source << "力传感器零点已采集：ft_zero=" << cal_state.ft_zero
+				<< " V, f_zero=" << cal_state.f_zero << " V" << std::endl;
+			return true;
+		}
+
+		if (force_sample.valid)
+		{
+			cal_state.ft_zero = force_sample.ft_1_value_v;
+			cal_state.f_zero = force_sample.fn_1_value_v;
+			cal_state.zeroed = true;
+			std::cout << source << "力传感器零点已采集（ADS 当前采样）：ft_zero=" << cal_state.ft_zero
+				<< ", f_zero=" << cal_state.f_zero << std::endl;
+			return true;
+		}
+
+		std::cout << source << "零点采集失败：当前无 TCP DAQ 有效帧，且 ADS 力采样尚未有效。" << std::endl;
+		return false;
 	};
 
 	if (!has_self_check_flag || self_check_done)
@@ -829,8 +858,11 @@ int main(int argc, char* argv[])
 					if (estop_hold_active)
 					{
 						std::cout << "PLC 保持：关闭。" << std::endl;
-						axis1_push_rearm_after_hold = true;
-						std::cout << "轴1推送已锁定，请先反向回拉手柄完成重接管。" << std::endl;
+						if (formal_control_stage)
+						{
+							axis1_push_rearm_after_hold = true;
+							std::cout << "轴1推送已锁定，请先反向回拉手柄完成重接管。" << std::endl;
+						}
 					}
 					estop_hold_active = false;
 				}
@@ -929,20 +961,7 @@ int main(int argc, char* argv[])
 			}
 			else if (ch == 'z' || ch == 'Z')
 			{
-				double raw_v[6] = { 0 };
-				std::uint64_t ts = 0;
-				if (tcp_force_daq.get_latest_raw(raw_v, ts))
-				{
-					cal_state.ft_zero = raw_v[0];
-					cal_state.f_zero = raw_v[1];
-					cal_state.zeroed = true;
-					std::cout << "力传感器零点已采集：ft_zero=" << cal_state.ft_zero
-						<< " V, f_zero=" << cal_state.f_zero << " V" << std::endl;
-				}
-				else
-				{
-					std::cout << "零点采集失败：TCP DAQ 无有效帧。" << std::endl;
-				}
+				zero_force_sensor("");
 			}
 			else if (single_handle_mode && ch == '1')
 			{
@@ -2162,16 +2181,22 @@ int main(int argc, char* argv[])
 		ads.ADSWrite(AdsSymbol::axis1_fast_return, sizeof(axis1_fast_return), &axis1_fast_return); // 轴1快退平滑旁路
 		ads.ADSWrite(AdsSymbol::axis6_fast_retract, sizeof(axis6_fast_retract), &axis6_fast_retract); // 轴6快退平滑旁路
 
-		// 力传感器采样与 CSV 写入：仅受 force_log_period_ms 控制。
+		// 力传感器采样独立于旧 CSV 开关，避免 force_log.enabled=false 阻断力反馈。
 		const DWORD force_log_now_ms = GetTickCount();
-		if (force_log.should_sample(force_log_now_ms))
+		const bool should_sample_force =
+			(force_log.period_ms == 0) ||
+			(force_sample_last_sample_ms == 0) ||
+			((force_log_now_ms - force_sample_last_sample_ms) >= force_log.period_ms);
+		if (should_sample_force)
 		{
 			// 采样节拍按 period_ms 统一推进，读失败也不打乱节拍。
-			force_log.last_sample_ms = force_log_now_ms;
+			force_sample_last_sample_ms = force_log_now_ms;
 			ForceSampleFrame sampled_frame;
 			if (read_force_sample(sampled_frame))
 			{
 				force_sample = sampled_frame;
+				force_sample.ft_1_value_v = static_cast<double>(force_sample.ft_1_value);
+				force_sample.fn_1_value_v = static_cast<double>(force_sample.fn_1_value);
 				double log_ft1_value = static_cast<double>(force_sample.ft_1_value);
 				double log_fn1_value = static_cast<double>(force_sample.fn_1_value);
 				bool ready_to_log = true;
@@ -2209,8 +2234,9 @@ int main(int argc, char* argv[])
 					}
 				}
 
-				if (ready_to_log)
+				if (force_log.enabled && ready_to_log)
 				{
+					force_log.last_sample_ms = force_log_now_ms;
 					force_log.append_sample(
 						force_log_now_ms,
 						log_ft1_value,
@@ -2312,19 +2338,13 @@ int main(int argc, char* argv[])
 					break;
 				case VisCommandType::ZeroForceSensor:
 				{
-					double raw_v[6] = { 0 };
-					std::uint64_t ts = 0;
-					if (tcp_force_daq.get_latest_raw(raw_v, ts))
-					{
-						cal_state.ft_zero = raw_v[0];
-						cal_state.f_zero = raw_v[1];
-						cal_state.zeroed = true;
-					}
+					zero_force_sensor("UI：");
 					break;
 				}
 				case VisCommandType::ToggleForceFeedback:
 					ff.enabled = !ff.enabled;
 					ff.reset();
+					std::cout << "UI：力反馈：" << (ff.enabled ? "开启" : "关闭") << std::endl;
 					if (!ff.enabled) clear_force_output();
 					break;
 				case VisCommandType::SetReverseMode:

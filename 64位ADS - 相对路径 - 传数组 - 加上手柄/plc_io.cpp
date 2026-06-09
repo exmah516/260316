@@ -39,55 +39,55 @@ namespace AdsSymbol
 	const char* app_name = "TwinCAT_SystemInfoVarList._AppInfo.AppName";
 
 	const AxisReturnAdsSymbols axis1_return = {
-		"G.return_cmd[1].Req",
-		"G.return_cmd[1].Busy",
-		"G.return_cmd[1].Done",
-		"G.return_cmd[1].Error",
-		"G.return_cmd[1].ErrorId",
-		"G.return_cmd[1].TargetAbs",
-		"G.return_cmd[1].Velocity",
-		"G.return_cmd[1].Acc",
-		"G.return_cmd[1].Dec",
-		"G.return_cmd[1].Jerk"
+		"G.axis1_return_cmd.Req",
+		"G.axis1_return_cmd.Busy",
+		"G.axis1_return_cmd.Done",
+		"G.axis1_return_cmd.Error",
+		"G.axis1_return_cmd.ErrorId",
+		"G.axis1_return_cmd.TargetAbs",
+		"G.axis1_return_cmd.Velocity",
+		"G.axis1_return_cmd.Acc",
+		"G.axis1_return_cmd.Dec",
+		"G.axis1_return_cmd.Jerk"
 	};
 
 	const AxisReturnAdsSymbols axis3_return = {
-		"G.return_cmd[3].Req",
-		"G.return_cmd[3].Busy",
-		"G.return_cmd[3].Done",
-		"G.return_cmd[3].Error",
-		"G.return_cmd[3].ErrorId",
-		"G.return_cmd[3].TargetAbs",
-		"G.return_cmd[3].Velocity",
-		"G.return_cmd[3].Acc",
-		"G.return_cmd[3].Dec",
-		"G.return_cmd[3].Jerk"
+		"G.axis3_return_cmd.Req",
+		"G.axis3_return_cmd.Busy",
+		"G.axis3_return_cmd.Done",
+		"G.axis3_return_cmd.Error",
+		"G.axis3_return_cmd.ErrorId",
+		"G.axis3_return_cmd.TargetAbs",
+		"G.axis3_return_cmd.Velocity",
+		"G.axis3_return_cmd.Acc",
+		"G.axis3_return_cmd.Dec",
+		"G.axis3_return_cmd.Jerk"
 	};
 
 	const AxisReturnAdsSymbols axis5_return = {
-		"G.return_cmd[5].Req",
-		"G.return_cmd[5].Busy",
-		"G.return_cmd[5].Done",
-		"G.return_cmd[5].Error",
-		"G.return_cmd[5].ErrorId",
-		"G.return_cmd[5].TargetAbs",
-		"G.return_cmd[5].Velocity",
-		"G.return_cmd[5].Acc",
-		"G.return_cmd[5].Dec",
-		"G.return_cmd[5].Jerk"
+		"G.axis5_return_cmd.Req",
+		"G.axis5_return_cmd.Busy",
+		"G.axis5_return_cmd.Done",
+		"G.axis5_return_cmd.Error",
+		"G.axis5_return_cmd.ErrorId",
+		"G.axis5_return_cmd.TargetAbs",
+		"G.axis5_return_cmd.Velocity",
+		"G.axis5_return_cmd.Acc",
+		"G.axis5_return_cmd.Dec",
+		"G.axis5_return_cmd.Jerk"
 	};
 
 	const AxisReturnAdsSymbols axis6_return = {
-		"G.return_cmd[6].Req",
-		"G.return_cmd[6].Busy",
-		"G.return_cmd[6].Done",
-		"G.return_cmd[6].Error",
-		"G.return_cmd[6].ErrorId",
-		"G.return_cmd[6].TargetAbs",
-		"G.return_cmd[6].Velocity",
-		"G.return_cmd[6].Acc",
-		"G.return_cmd[6].Dec",
-		"G.return_cmd[6].Jerk"
+		"G.axis6_return_cmd.Req",
+		"G.axis6_return_cmd.Busy",
+		"G.axis6_return_cmd.Done",
+		"G.axis6_return_cmd.Error",
+		"G.axis6_return_cmd.ErrorId",
+		"G.axis6_return_cmd.TargetAbs",
+		"G.axis6_return_cmd.Velocity",
+		"G.axis6_return_cmd.Acc",
+		"G.axis6_return_cmd.Dec",
+		"G.axis6_return_cmd.Jerk"
 	};
 }
 

@@ -42,23 +42,31 @@
             </Grid.ColumnDefinitions>
 
             <!-- 左侧：轴位置 -->
-            <GroupBox Grid.Column="0" Header="轴位置 (mm)" Margin="0,0,6,0">
-                <StackPanel Margin="4">
-                    <TextBlock Text="{Binding Axis1Pos, StringFormat='轴1 (导管推送): {0:F2}'}" Margin="0,2"/>
-                    <ProgressBar Value="{Binding Axis1Pos, Mode=OneWay}" Minimum="-100" Maximum="100" Height="14" Margin="0,0,0,4"/>
-                    <TextBlock Text="{Binding Axis2Pos, StringFormat='轴2 (导管旋转): {0:F2}'}" Margin="0,2"/>
-                    <ProgressBar Value="{Binding Axis2Pos, Mode=OneWay}" Minimum="-20" Maximum="20" Height="14" Margin="0,0,0,4"/>
-                    <TextBlock Text="{Binding Axis3Pos, StringFormat='轴3 (递送): {0:F2}'}" Margin="0,2"/>
-                    <ProgressBar Value="{Binding Axis3Pos, Mode=OneWay}" Minimum="-100" Maximum="700" Height="14" Margin="0,0,0,4"/>
-                    <TextBlock Text="{Binding Axis4Pos, StringFormat='轴4 (点动): {0:F2}'}" Margin="0,2"/>
-                    <ProgressBar Value="{Binding Axis4Pos, Mode=OneWay}" Minimum="-50" Maximum="50" Height="14" Margin="0,0,0,4"/>
-                    <TextBlock Text="{Binding Axis5Pos, StringFormat='轴5 (镜像): {0:F2}'}" Margin="0,2"/>
-                    <ProgressBar Value="{Binding Axis5Pos, Mode=OneWay}" Minimum="-100" Maximum="700" Height="14" Margin="0,0,0,4"/>
-                    <TextBlock Text="{Binding Axis6Pos, StringFormat='轴6 (导丝推送): {0:F2}'}" Margin="0,2"/>
-                    <ProgressBar Value="{Binding Axis6Pos, Mode=OneWay}" Minimum="-100" Maximum="700" Height="14" Margin="0,0,0,4"/>
-                    <TextBlock Text="{Binding Axis7Pos, StringFormat='轴7 (导丝旋转): {0:F2}'}" Margin="0,2"/>
-                    <ProgressBar Value="{Binding Axis7Pos, Mode=OneWay}" Minimum="-20" Maximum="20" Height="14" Margin="0,0,0,4"/>
-                </StackPanel>
+            <GroupBox Grid.Column="0" Header="轴位置 / 有效行程" Margin="0,0,6,0">
+                <ScrollViewer VerticalScrollBarVisibility="Auto">
+                    <StackPanel Margin="4">
+                        <TextBlock Text="{Binding Axis1StrokeText}" Margin="0,2"/>
+                        <ProgressBar Value="{Binding Axis1EffectiveTravel, Mode=OneWay}" Minimum="0" Maximum="{Binding Axis1StrokeMax}" Height="14" Margin="0,0,0,4"/>
+
+                        <TextBlock Text="{Binding Axis2RotationText}" Margin="0,6,0,2"/>
+                        <local:CircularAxisIndicator Angle="{Binding Axis2Pos, Mode=OneWay}" Width="58" Height="58" HorizontalAlignment="Left" Margin="0,0,0,4"/>
+
+                        <TextBlock Text="{Binding Axis3StrokeText}" Margin="0,2"/>
+                        <ProgressBar Value="{Binding Axis3EffectiveTravel, Mode=OneWay}" Minimum="0" Maximum="{Binding Axis3StrokeMax}" Height="14" Margin="0,0,0,4"/>
+
+                        <TextBlock Text="{Binding Axis4RotationText}" Margin="0,6,0,2"/>
+                        <local:CircularAxisIndicator Angle="{Binding Axis4Pos, Mode=OneWay}" Width="58" Height="58" HorizontalAlignment="Left" Margin="0,0,0,4"/>
+
+                        <TextBlock Text="{Binding Axis5StrokeText}" Margin="0,2"/>
+                        <ProgressBar Value="{Binding Axis5EffectiveTravel, Mode=OneWay}" Minimum="0" Maximum="{Binding Axis5StrokeMax}" Height="14" Margin="0,0,0,4"/>
+
+                        <TextBlock Text="{Binding Axis6StrokeText}" Margin="0,2"/>
+                        <ProgressBar Value="{Binding Axis6EffectiveTravel, Mode=OneWay}" Minimum="0" Maximum="{Binding Axis6StrokeMax}" Height="14" Margin="0,0,0,4"/>
+
+                        <TextBlock Text="{Binding Axis7RotationText}" Margin="0,6,0,2"/>
+                        <local:CircularAxisIndicator Angle="{Binding Axis7Pos, Mode=OneWay}" Width="58" Height="58" HorizontalAlignment="Left" Margin="0,0,0,4"/>
+                    </StackPanel>
+                </ScrollViewer>
             </GroupBox>
 
             <!-- 右侧：控制 -->
