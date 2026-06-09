@@ -1,4 +1,4 @@
-﻿<?xml version="1.0" encoding="utf-8"?>
+<?xml version="1.0" encoding="utf-8"?>
 <TcPlcObject Version="1.1.0.1" ProductVersion="3.1.4024.15">
   <POU Name="SelfCheck" Id="{a1b2c3d4-e5f6-4789-8012-34567890abcd}" SpecialFunc="None">
     <Declaration><![CDATA[ FUNCTION_BLOCK SelfCheck
@@ -18,6 +18,7 @@ VAR
 
     init_target_from_left : ARRAY[1..7] OF LREAL:= [96,0,280,0,430,580,0];  // 左限位寻参后回到的工作位（距左限位）
     target_axes : ARRAY[1..7] OF BOOL:= [TRUE,FALSE,TRUE,FALSE,TRUE,TRUE,FALSE];	// 目标轴（平移轴）
+    axis6_selfcheck_enable : BOOL := FALSE; // 轴6机构已拆除时置 FALSE：跳过轴6寻参和回退，避免空转等待限位
     stagger_delay : ARRAY[1..7] OF TIME := [T#3s,T#0ms,T#2s,T#0ms,T#1s,T#0ms,T#0ms];
     stagger_started : BOOL := FALSE;
     
@@ -55,7 +56,7 @@ FUNCTION_BLOCK: SelfCheck
   上电自检/寻参流程（正向低速逼近右限位 + 顺序回退），用于建立各轴相对坐标系零点并消除进入外部给定模式前的 SetPos/ActPos 偏差。
 
 自检流程:
-  1) 对 target_axes[]包括的平移轴：禁用外部给定（SetPointGenDisable），反向低速逼近左限位并记录 G.leftlimit[]
+  1) 对 target_axes[]包括的平移轴：禁用外部给定（SetPointGenDisable），反向低速逼近左限位并记录 G.leftlimit[]；轴6可通过 axis6_selfcheck_enable 临时跳过
   2) 对旋转轴（轴2/4/7）：禁用外部给定后，直接 MC_MoveAbsolute 到绝对位置 0
   3) 停止与清错：MC_Stop 平滑停止；若出现故障则 MC_Reset 清错
   4) 目标轴回退：按 seq_order[] 依次 MC_SetPosition(ActPos→SetPos) → MC_MoveAbsolute 回退 → 以回退终点刷新 init_pos[]
@@ -125,7 +126,10 @@ G.cylinder5_press_req := FALSE;
 
 all_reach_limit := TRUE;
 FOR i:=1 TO 7 DO
-    IF target_axes[i] AND ((stu[i] < 6) OR (NOT G.power_output[i].Done)) THEN
+    IF target_axes[i]
+       AND NOT ((i = 6) AND (NOT axis6_selfcheck_enable))
+       AND ((stu[i] < 6) OR (NOT G.power_output[i].Done))
+    THEN
         all_reach_limit := FALSE;
         EXIT;
     END_IF
@@ -143,7 +147,29 @@ FOR i:=1 TO 7 DO
     mv_abs_exec[i] := FALSE;
 
     fb_stop[i](Axis:=G.axis[i]);
-    IF target_axes[i] THEN
+    IF (i = 6) AND (NOT axis6_selfcheck_enable) THEN
+        // 轴6机构拆除后电机不会触碰左限位，临时跳过寻参/回退，当前位置作为轴6参考点。
+        mv_vel_exec[i] := FALSE;
+        mv_abs_exec[i] := FALSE;
+        set_pos_exec[i] := FALSE;
+        wait_timer[i](IN:=FALSE);
+        power_pulse_timer[i](IN:=FALSE);
+        power_wait_timer[i](IN:=FALSE);
+        G.SetPointGenDisable[i](Axis:=G.axis[i], Execute:=FALSE);
+        G.axis_Reset[i](Axis:=G.axis[i], Execute:=FALSE);
+        fb_set_pos[i](Axis:=G.axis[i], Execute:=FALSE);
+        G.leftlimit[i] := G.axis[i].NcToPlc.ActPos;
+        G.init_pos[i] := G.axis[i].NcToPlc.ActPos;
+        debug_limit_pos[i] := G.leftlimit[i];
+        debug_init_target_pos[i] := G.init_pos[i];
+        scan_start_pos[i] := G.axis[i].NcToPlc.ActPos;
+        IF all_reach_limit AND NOT stagger_started THEN
+            // 原流程由轴6先启动回退后放行其他目标轴；跳过轴6时直接启动错峰计时。
+            stagger_started := TRUE;
+            stagger_timer(IN:=FALSE);
+        END_IF
+        stu[i] := 10;
+    ELSIF target_axes[i] THEN
         
         CASE stu[i] OF
         0: // 步骤0：禁用外部给定，避免寻参阶段被外部指令干预
