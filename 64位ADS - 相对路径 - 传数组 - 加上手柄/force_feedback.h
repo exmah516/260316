@@ -15,6 +15,6 @@ void process_force_feedback(
 	bool axis1_fast_return,
 	bool axis6_fast_retract,
 	int loop_count,
+	const ControlConfig& cfg,
 	const ForceCalibrationConfig& cal_cfg,
 	const ForceCalibrationState& cal_state);
-

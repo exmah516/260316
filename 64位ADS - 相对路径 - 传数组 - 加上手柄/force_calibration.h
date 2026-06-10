@@ -7,7 +7,7 @@ struct ForceCalibrationConfig
 	double torque_k = 18.440851;
 
 	double decouple_ff =  0.996063;
-	double decouple_ft =  0.037854;
+	double decouple_ft =  0.0; // 轴向力反馈只由轴向力通道决定，避免扭矩通道串入轴向力。
 	double decouple_tf = -0.103597;
 	double decouple_tt =  0.996063;
 

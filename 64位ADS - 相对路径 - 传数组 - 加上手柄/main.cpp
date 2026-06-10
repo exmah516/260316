@@ -25,9 +25,17 @@ int main(int argc, char* argv[])
 {
 	setup_console_utf8();
 
-	const DWORD serial_axis1_handle = 582;
-	const DWORD serial_axis6_handle = 587;
+	constexpr DWORD physical_handle_582_serial = 582;
+	constexpr DWORD physical_handle_587_serial = 587;
+	// TRUE：交换两只物理手柄的角色，用 587 承担导管/axis1/582语义，用 582 承担导丝/axis6/587语义。
+	constexpr bool swap_handle_roles = true;
+	const DWORD serial_axis1_handle = swap_handle_roles ? physical_handle_587_serial : physical_handle_582_serial;
+	const DWORD serial_axis6_handle = swap_handle_roles ? physical_handle_582_serial : physical_handle_587_serial;
 	const char* hardcoded_ads_netid = "169.254.119.135.1.1";
+
+	std::cout << "手柄角色映射：导管/axis1/582语义 -> 物理 SN " << serial_axis1_handle
+		<< "，导丝/axis6/587语义 -> 物理 SN " << serial_axis6_handle
+		<< (swap_handle_roles ? "（已交换）。" : "（未交换）。") << std::endl;
 
 	// 工具模式：不进入运动环前先查看按键位掩码。
 	if (argc > 1 && (std::string(argv[1]) == "--buttons" || std::string(argv[1]) == "--btn"))
@@ -232,11 +240,11 @@ int main(int argc, char* argv[])
 
 	vis_server.start();
 
-	// 力输出统一入口：按 setforce(F,N) 语义分别下发到 582/587。
+	// 力输出统一入口：轴向力按配置的 SDK force axis 下发，力矩仍走 torque 参数。
 	auto apply_force_output = [&](double force_582_f, double force_582_n, double force_587_f, double force_587_n)
 	{
-		handle_axis1.setforce(force_582_f, force_582_n);
-		handle_axis6.setforce(force_587_f, force_587_n);
+		handle_axis1.setforce_axis(force_582_f, cfg.axial_force_axis, force_582_n);
+		handle_axis6.setforce_axis(force_587_f, cfg.axial_force_axis, force_587_n);
 	};
 
 	// 双手柄力输出清零（用于暂停、急停保持、F=OFF 等场景）。
@@ -381,6 +389,10 @@ int main(int argc, char* argv[])
 	CrawlState axis1_crawl;
 	CrawlState axis6_crawl;
 	axis1_crawl.enabled = true;
+	startup.final_axis1_from_left_mm = cfg.startup_axis1_ready_from_left_mm;
+	startup.final_axis3_from_left_mm = cfg.startup_axis3_ready_from_left_mm;
+	startup.final_axis5_from_left_mm = cfg.startup_axis5_ready_from_left_mm;
+	startup.final_axis6_from_left_mm = cfg.startup_axis5_ready_from_left_mm + cfg.axis56_ready_gap_mm;
 
 	// 绑定上下文中的长生命周期状态，替代大段 lambda capture。
 	ctx.guidewire_mode = &guidewire_mode;
@@ -553,6 +565,10 @@ int main(int argc, char* argv[])
 	force_log.period_ms = cfg.force_log_period_ms;
 	force_log.enabled = false;
 	bool force_log_started = false;
+	bool force_tcp_zero_wait_logged = false;
+	bool force_tcp_feedback_wait_logged = false;
+	DWORD force_feedback_diag_last_ms = 0;
+	DWORD force_feedback_value_log_last_ms = 0;
 	auto ensure_force_log_started = [&]()
 	{
 		if (force_log_started)
@@ -594,14 +610,26 @@ int main(int argc, char* argv[])
 	{
 		double raw_v[6] = { 0 };
 		std::uint64_t ts = 0;
-		if (tcp_force_daq.get_latest_raw(raw_v, ts))
+		const bool has_tcp_sample = tcp_force_daq.get_latest_raw(raw_v, ts);
+		if (has_tcp_sample)
 		{
-			cal_state.ft_zero = raw_v[0];
-			cal_state.f_zero = raw_v[1];
+			cal_state.f_zero = raw_v[0];
+			cal_state.ft_zero = raw_v[1];
 			cal_state.zeroed = true;
-			std::cout << source << "力传感器零点已采集：ft_zero=" << cal_state.ft_zero
-				<< " V, f_zero=" << cal_state.f_zero << " V" << std::endl;
+			force_tcp_zero_wait_logged = false;
+			std::cout << source << "力传感器零点已采集：AI0/f_zero=" << cal_state.f_zero
+				<< " V, AI1/ft_zero=" << cal_state.ft_zero << " V" << std::endl;
 			return true;
+		}
+
+		if (ctx.force_sample_source == ForceSampleSource::TCP_DAQ)
+		{
+			if (!force_tcp_zero_wait_logged)
+			{
+				std::cout << source << "零点采集失败：当前采样源为 TCP_DAQ，但尚无采集卡有效帧；不会回退到 ADS 零点。" << std::endl;
+				force_tcp_zero_wait_logged = true;
+			}
+			return false;
 		}
 
 		if (force_sample.valid)
@@ -1481,11 +1509,35 @@ int main(int argc, char* argv[])
 				const double startup_axis1_ready_abs = from_left_to_abs(0, cfg.startup_axis1_ready_from_left_mm);
 				const double startup_axis5_ready_abs = from_left_to_abs(4, cfg.startup_axis5_ready_from_left_mm);
 				const double startup_axis6_ready_abs = from_left_to_abs(5, cfg.startup_axis5_ready_from_left_mm + cfg.axis56_ready_gap_mm);
-				const double startup_axis3_ready_abs = from_left_to_abs(2, cfg.startup_axis3_ready_from_left_mm);
+				const double startup_final_axis1_abs = from_left_to_abs(0, startup.final_axis1_from_left_mm);
+				const double startup_final_axis3_abs = from_left_to_abs(2, startup.final_axis3_from_left_mm);
+				const double startup_final_axis5_abs = from_left_to_abs(4, startup.final_axis5_from_left_mm);
+				const double startup_final_axis6_abs = from_left_to_abs(5, startup.final_axis6_from_left_mm);
 				const double axis1_abs = plc_act_pos[0] + plc_init_pos[0];
 				const double axis5_abs = plc_act_pos[4] + plc_init_pos[4];
 				const double axis6_abs_now = plc_act_pos[5] + plc_init_pos[5];
 				const double axis3_abs = plc_act_pos[2] + plc_init_pos[2];
+				const double axis2_rel = plc_act_pos[1];
+				const double axis7_rel = plc_act_pos[6];
+
+				auto apply_startup_final_targets = [&]()
+				{
+					pos[0] = from_left_to_rel(0, startup.final_axis1_from_left_mm);
+					pos[1] = startup.final_axis2_deg;
+					pos[2] = from_left_to_rel(2, startup.final_axis3_from_left_mm);
+					pos[4] = from_left_to_rel(4, startup.final_axis5_from_left_mm);
+					pos[5] = from_left_to_rel(5, startup.final_axis6_from_left_mm);
+					pos[6] = startup.final_axis7_deg;
+				};
+				auto startup_final_targets_reached = [&]() -> bool
+				{
+					return (std::abs(axis1_abs - startup_final_axis1_abs) <= cfg.crawl_arrive_tol_mm) &&
+						(std::abs(axis3_abs - startup_final_axis3_abs) <= cfg.crawl_arrive_tol_mm) &&
+						(std::abs(axis5_abs - startup_final_axis5_abs) <= cfg.crawl_arrive_tol_mm) &&
+						(std::abs(axis6_abs_now - startup_final_axis6_abs) <= cfg.crawl_arrive_tol_mm) &&
+						(std::abs(axis2_rel - startup.final_axis2_deg) <= cfg.startup_rot_arrive_tol_deg) &&
+						(std::abs(axis7_rel - startup.final_axis7_deg) <= cfg.startup_rot_arrive_tol_deg);
+				};
 
 				if (startup.phase == StartupPhase::ReleaseClamps)
 				{
@@ -1521,7 +1573,7 @@ int main(int argc, char* argv[])
 				}
 				else if (startup.phase == StartupPhase::ClampCylinder34Wait)
 				{
-					// 阶段 3：在 3/5/6 联动前先闭合导丝侧夹爪对。
+					// 阶段 3：在 axis3 移动前先闭合导丝侧夹爪对。
 					cylinder1_cmd = cyl.cyl1_open;
 					cylinder2_cmd = cyl.cyl2_open;
 					cylinder3_cmd = cfg.startup_cyl3_clamp;
@@ -1534,26 +1586,18 @@ int main(int argc, char* argv[])
 						startup.axis5_move_base_rel = plc_act_pos[4];
 						startup.axis6_move_base_rel = plc_act_pos[5];
 						startup.phase = StartupPhase::MoveAxis356BackToReady;
+						std::cout << "启动准备：阶段4按 UI 最终目标移动 1/2/3/5/6/7 轴。" << std::endl;
 					}
 				}
 				else if (startup.phase == StartupPhase::MoveAxis356BackToReady)
 				{
-					// 阶段 4：axis3 移动到准备点，同时 5/6 轴跟随相同相对增量。
+					// 阶段 4：所有 UI 最终目标在此阶段生效，前置阶段仍保持固定准备位。
 					cylinder1_cmd = cyl.cyl1_open;
 					cylinder2_cmd = cyl.cyl2_open;
 					cylinder3_cmd = cfg.startup_cyl3_clamp;
 					cylinder4_cmd = cfg.startup_cyl4_clamp;
-					const double axis3_target_rel = from_left_to_rel(2, cfg.startup_axis3_ready_from_left_mm);
-					const double axis356_delta_rel = axis3_target_rel - startup.axis3_move_base_rel;
-					pos[2] = axis3_target_rel;
-					pos[4] = startup.axis5_move_base_rel + axis356_delta_rel;
-					pos[5] = startup.axis6_move_base_rel + axis356_delta_rel;
-					const double axis3_remaining_mm = std::abs(axis3_abs - startup_axis3_ready_abs);
-					const double cyl2_clamp_trigger_mm =
-						(cfg.startup_axis3_cyl2_clamp_advance_mm > cfg.crawl_arrive_tol_mm)
-						? cfg.startup_axis3_cyl2_clamp_advance_mm
-						: cfg.crawl_arrive_tol_mm;
-					if (axis3_remaining_mm <= cyl2_clamp_trigger_mm)
+					apply_startup_final_targets();
+					if (startup_final_targets_reached())
 					{
 						startup.phase = StartupPhase::ClampCylinder2AfterAxis3;
 						startup.phase_t0 = now_ms;
@@ -1565,10 +1609,9 @@ int main(int argc, char* argv[])
 					cylinder2_cmd = cyl.cyl2_clamp;
 					cylinder3_cmd = cfg.startup_cyl3_clamp;
 					cylinder4_cmd = cfg.startup_cyl4_clamp;
-					pos[2] = from_left_to_rel(2, cfg.startup_axis3_ready_from_left_mm);
-					pos[4] = startup.axis5_move_base_rel + (pos[2] - startup.axis3_move_base_rel);
-					pos[5] = startup.axis6_move_base_rel + (pos[2] - startup.axis3_move_base_rel);
-					if ((now_ms - startup.phase_t0) >= cfg.startup_clamp_settle_delay_ms)
+					apply_startup_final_targets();
+					if ((now_ms - startup.phase_t0) >= cfg.startup_clamp_settle_delay_ms &&
+						startup_final_targets_reached())
 					{
 						if (!restore_startup_v_limit())
 						{
@@ -2183,77 +2226,130 @@ int main(int argc, char* argv[])
 
 		// 力传感器采样独立于旧 CSV 开关，避免 force_log.enabled=false 阻断力反馈。
 		const DWORD force_log_now_ms = GetTickCount();
+		const bool force_sampling_active = force_log_started || ff.enabled;
 		const bool should_sample_force =
-			(force_log.period_ms == 0) ||
-			(force_sample_last_sample_ms == 0) ||
-			((force_log_now_ms - force_sample_last_sample_ms) >= force_log.period_ms);
+			force_sampling_active &&
+			((force_log.period_ms == 0) ||
+				(force_sample_last_sample_ms == 0) ||
+				((force_log_now_ms - force_sample_last_sample_ms) >= force_log.period_ms));
+		if (!force_sampling_active)
+		{
+			force_sample.valid = false;
+			force_tcp_feedback_wait_logged = false;
+		}
 		if (should_sample_force)
 		{
 			// 采样节拍按 period_ms 统一推进，读失败也不打乱节拍。
 			force_sample_last_sample_ms = force_log_now_ms;
 			ForceSampleFrame sampled_frame;
-			if (read_force_sample(sampled_frame))
+			const bool ads_sample_ok = read_force_sample(sampled_frame);
+			bool ready_to_log = false;
+			double log_ft1_value = 0.0;
+			double log_fn1_value = 0.0;
+
+			if (ctx.force_sample_source == ForceSampleSource::TCP_DAQ)
+			{
+				double tcp_raw_v[6] = { 0 };
+				std::uint64_t tcp_ts = 0;
+				if (tcp_force_daq.get_latest_raw(tcp_raw_v, tcp_ts))
+				{
+					force_sample = ads_sample_ok ? sampled_frame : ForceSampleFrame{};
+					if (!ads_sample_ok)
+					{
+						force_sample.axis1_pos_rel = plc_act_pos[0];
+						force_sample.tick_ms = force_log_now_ms;
+					}
+					force_sample.fn_1_value_v = tcp_raw_v[0];
+					force_sample.ft_1_value_v = tcp_raw_v[1];
+					force_sample.valid = true;
+					log_ft1_value = force_sample.ft_1_value_v;
+					log_fn1_value = force_sample.fn_1_value_v;
+					ready_to_log = true;
+					force_tcp_feedback_wait_logged = false;
+				}
+				else
+				{
+					force_sample.valid = false;
+					if (!force_tcp_feedback_wait_logged)
+					{
+						std::cout << "力反馈等待：当前采样源为 TCP_DAQ，但尚无采集卡有效帧。" << std::endl;
+						force_tcp_feedback_wait_logged = true;
+					}
+					if ((force_log_now_ms - force_log_warn_last_ms) >= 1000)
+					{
+						std::cout << "力传感器告警：TCP_DAQ 当前无有效采样帧，已跳过本周期 CSV 行写入。" << std::endl;
+						force_log_warn_last_ms = force_log_now_ms;
+					}
+				}
+			}
+			else if (ads_sample_ok)
 			{
 				force_sample = sampled_frame;
 				force_sample.ft_1_value_v = static_cast<double>(force_sample.ft_1_value);
 				force_sample.fn_1_value_v = static_cast<double>(force_sample.fn_1_value);
-				double log_ft1_value = static_cast<double>(force_sample.ft_1_value);
-				double log_fn1_value = static_cast<double>(force_sample.fn_1_value);
-				bool ready_to_log = true;
-
-				// TCP DAQ 电压填入 force_sample 供标定力反馈使用。
-				{
-					double tcp_raw_v[6] = { 0 };
-					std::uint64_t tcp_ts = 0;
-					if (tcp_force_daq.get_latest_raw(tcp_raw_v, tcp_ts))
-					{
-						force_sample.ft_1_value_v = tcp_raw_v[0];
-						force_sample.fn_1_value_v = tcp_raw_v[1];
-					}
-				}
-
-				// 仅替换 CSV 中 ft_1/fn_1 的来源：TCP 第0/1通道。
-				if (ctx.force_sample_source == ForceSampleSource::TCP_DAQ)
-				{
-					double tcp_ft1_value = 0.0;
-					double tcp_fn1_value = 0.0;
-					std::uint64_t tcp_tick_ms = 0;
-					if (tcp_force_daq.get_latest_ft1_fn1(tcp_ft1_value, tcp_fn1_value, tcp_tick_ms))
-					{
-						log_ft1_value = tcp_ft1_value;
-						log_fn1_value = tcp_fn1_value;
-					}
-					else
-					{
-						ready_to_log = false;
-						if ((force_log_now_ms - force_log_warn_last_ms) >= 1000)
-						{
-							std::cout << "力传感器告警：TCP_DAQ 当前无有效采样帧，已跳过本周期 CSV 行写入。" << std::endl;
-							force_log_warn_last_ms = force_log_now_ms;
-						}
-					}
-				}
-
-				if (force_log.enabled && ready_to_log)
-				{
-					force_log.last_sample_ms = force_log_now_ms;
-					force_log.append_sample(
-						force_log_now_ms,
-						log_ft1_value,
-						log_fn1_value,
-						force_sample.fn_2_value,
-						force_sample.ft_2_value,
-						force_mode_code,
-						force_reverse_code,
-						force_push_pull_code,
-						force_rot_sign_code,
-						force_sample.axis1_pos_rel);
-				}
+				log_ft1_value = force_sample.ft_1_value_v;
+				log_fn1_value = force_sample.fn_1_value_v;
+				ready_to_log = true;
 			}
 			else if ((force_log_now_ms - force_log_warn_last_ms) >= 1000)
 			{
 				std::cout << "力传感器告警：ft_1/fn_1/fn_2/ft_2 与 axis1_pos_rel 的 ADSReadSum 读取失败。" << std::endl;
 				force_log_warn_last_ms = force_log_now_ms;
+			}
+
+			if (force_log.enabled && ready_to_log)
+			{
+				force_log.last_sample_ms = force_log_now_ms;
+				force_log.append_sample(
+					force_log_now_ms,
+					log_ft1_value,
+					log_fn1_value,
+					force_sample.fn_2_value,
+					force_sample.ft_2_value,
+					force_mode_code,
+					force_reverse_code,
+					force_push_pull_code,
+					force_rot_sign_code,
+					force_sample.axis1_pos_rel);
+			}
+		}
+
+		const DWORD force_feedback_diag_now_ms = GetTickCount();
+		if (ff.enabled && (force_feedback_diag_last_ms == 0 || (force_feedback_diag_now_ms - force_feedback_diag_last_ms) >= 1000))
+		{
+			if (!cal_state.zeroed)
+			{
+				std::cout << "力反馈等待：尚未完成力传感器零点采集。" << std::endl;
+				force_feedback_diag_last_ms = force_feedback_diag_now_ms;
+			}
+			else if (!force_sample.valid)
+			{
+				std::cout << "力反馈等待：当前没有有效力采样。" << std::endl;
+				force_feedback_diag_last_ms = force_feedback_diag_now_ms;
+			}
+			else if (!control_active)
+			{
+				std::cout << "力反馈等待：控制尚未激活。" << std::endl;
+				force_feedback_diag_last_ms = force_feedback_diag_now_ms;
+			}
+			else if (freeze_active)
+			{
+				std::cout << "力反馈等待：582 暂停处于开启状态。" << std::endl;
+				force_feedback_diag_last_ms = force_feedback_diag_now_ms;
+			}
+			else if (estop_hold_active)
+			{
+				std::cout << "力反馈等待：PLC 保持处于开启状态。" << std::endl;
+				force_feedback_diag_last_ms = force_feedback_diag_now_ms;
+			}
+			else if (guidewire_mode != GuidewireMode::None)
+			{
+				std::cout << "力反馈等待：当前为导丝模式，582 导管力反馈输出被置零。" << std::endl;
+				force_feedback_diag_last_ms = force_feedback_diag_now_ms;
+			}
+			else
+			{
+				force_feedback_diag_last_ms = 0;
 			}
 		}
 
@@ -2269,8 +2365,32 @@ int main(int argc, char* argv[])
 			axis1_fast_return,
 			axis6_fast_retract,
 			loop_count,
+			cfg,
 			cal_cfg,
 			cal_state);
+
+		const DWORD force_feedback_value_log_now_ms = GetTickCount();
+		if (ff.enabled &&
+			cal_state.zeroed &&
+			force_sample.valid &&
+			control_active &&
+			!freeze_active &&
+			!estop_hold_active &&
+			guidewire_mode == GuidewireMode::None &&
+			(force_feedback_value_log_last_ms == 0 ||
+				(force_feedback_value_log_now_ms - force_feedback_value_log_last_ms) >= 1000))
+		{
+			const double dft = force_sample.ft_1_value_v - cal_state.ft_zero;
+			const double df = force_sample.fn_1_value_v - cal_state.f_zero;
+			std::cout << "[FF] AI0/f=" << force_sample.fn_1_value_v
+				<< " V, AI1/ft=" << force_sample.ft_1_value_v
+				<< " V, dft=" << dft
+				<< " V, df=" << df
+				<< " V -> 582.setforce_axis(F=" << ff.force_582_f
+				<< " N, axis=" << cfg.axial_force_axis
+				<< ", N=" << ff.force_582_n << " N*m)" << std::endl;
+			force_feedback_value_log_last_ms = force_feedback_value_log_now_ms;
+		}
 
 		// 无论本拍是否进入控制分支，都更新线性差分基准，避免暂停/等待期间累积大跳变。
 		axis1_prev_linear_filtered = axis1_handle_filter.axis0_filtered;
@@ -2413,10 +2533,12 @@ int main(int argc, char* argv[])
 					if (valid && !startup.completed && startup.phase == StartupPhase::WaitForEnter &&
 						!freeze_active && !estop_hold_active)
 					{
-						cfg.startup_axis1_ready_from_left_mm = pending_startup.axis1_from_left_mm;
-						cfg.startup_axis3_ready_from_left_mm = pending_startup.axis3_from_left_mm;
-						cfg.startup_axis5_ready_from_left_mm = pending_startup.axis5_from_left_mm;
-						cfg.axis56_ready_gap_mm = pending_startup.axis6_from_left_mm - pending_startup.axis5_from_left_mm;
+						startup.final_axis1_from_left_mm = pending_startup.axis1_from_left_mm;
+						startup.final_axis3_from_left_mm = pending_startup.axis3_from_left_mm;
+						startup.final_axis5_from_left_mm = pending_startup.axis5_from_left_mm;
+						startup.final_axis6_from_left_mm = pending_startup.axis6_from_left_mm;
+						startup.final_axis2_deg = pending_startup.axis2_deg;
+						startup.final_axis7_deg = pending_startup.axis7_deg;
 						cfg.startup_motion_speed_scale = pending_startup.speed_scale;
 						if (start_startup_sequence())
 						{

@@ -12,6 +12,7 @@ void process_force_feedback(
 	bool axis1_fast_return,
 	bool axis6_fast_retract,
 	int loop_count,
+	const ControlConfig& cfg,
 	const ForceCalibrationConfig& cal_cfg,
 	const ForceCalibrationState& cal_state)
 {
@@ -74,8 +75,8 @@ void process_force_feedback(
 		out_cmd.force_587_n = 0.0;
 	}
 
-	handle_582.setforce(out_cmd.force_582_f, out_cmd.force_582_n);
-	handle_587.setforce(out_cmd.force_587_f, out_cmd.force_587_n);
+	handle_582.setforce_axis(out_cmd.force_582_f, cfg.axial_force_axis, out_cmd.force_582_n);
+	handle_587.setforce_axis(out_cmd.force_587_f, cfg.axial_force_axis, out_cmd.force_587_n);
 
 	ff.force_582_f = out_cmd.force_582_f;
 	ff.force_582_n = out_cmd.force_582_n;
@@ -90,4 +91,3 @@ void process_force_feedback(
 		ff.last_ft_2_raw = sample.ft_2_value;
 	}
 }
-

@@ -89,8 +89,7 @@ struct ControlConfig
 	double axis_push_sign = -1.0; // 手柄“推/拉”到轴“正/负”方向的映射符号
 	double axis_rot_scale_deg = Rad;
 
-	// 力反馈输出配置：当前主路径统一使用 setforce(F,N) 的 axis=0 语义。
-	// axial_force_* 保留为兼容旧配置，本轮不再参与映射。
+	// 力反馈输出配置：轴向力映射到 SDK 三轴力向量中的一个轴。
 	int axial_force_axis = 1;
 	double axial_force_sign = -1.0;
 
@@ -145,8 +144,8 @@ struct ControlConfig
 	double linear_handle_alpha = 0.25;
 	double rotational_handle_alpha = 0.20;
 	bool cooperative_debug_log = false;
-	// CSV 中 ft_1/fn_1 的采样来源：ADS(PLC变量) 或 TCP_DAQ(采集卡直连)。
-	ForceSampleSource force_sample_source = ForceSampleSource::ADS;
+	// 力反馈与 CSV 中 ft_1/fn_1 的采样来源：ADS(PLC变量) 或 TCP_DAQ(采集卡直连)。
+	ForceSampleSource force_sample_source = ForceSampleSource::TCP_DAQ;
 	// TCP 采集卡连接参数（仅 force_sample_source=TCP_DAQ 时生效）。
 	const char* tcp_force_daq_ip = "192.168.1.30";
 	unsigned short tcp_force_daq_port = 502;
@@ -163,6 +162,7 @@ struct ControlConfig
 	double startup_axis1_ready_from_left_mm = 20.0;
 	double startup_axis5_ready_from_left_mm = 290.0;
 	double startup_axis3_ready_from_left_mm = 635.0;
+	double startup_rot_arrive_tol_deg = 0.2;
 	// 在 axis3 完全到达目标前提前触发 cylinder2 夹紧；现场调参使其领先约 0.5 s。claude --resume 468e1550-aa83-4d08-a9a0-cf47f347128b
 	double startup_axis3_cyl2_clamp_advance_mm = 10.0;
 };
@@ -345,7 +345,7 @@ struct ForceLogState
 struct StartupState
 {
 	// 启动序列开始时一次性采集保持位姿。
-	// move_base_rel 是启动第二段运动的跟随基准。
+	// move_base_rel 是启动阶段4动作前的锁存基准，最终目标由 UI 参数决定。
 	StartupPhase phase = StartupPhase::WaitForEnter;
 	bool completed = false;
 	bool prompted = false;
@@ -361,6 +361,13 @@ struct StartupState
 	double axis3_move_base_rel = 0.0;
 	double axis5_move_base_rel = 0.0;
 	double axis6_move_base_rel = 0.0;
+
+	double final_axis1_from_left_mm = 20.0;
+	double final_axis3_from_left_mm = 635.0;
+	double final_axis5_from_left_mm = 290.0;
+	double final_axis6_from_left_mm = 310.0;
+	double final_axis2_deg = 0.0;
+	double final_axis7_deg = 0.0;
 
 	double v_limit_backup[7] = {};
 	bool v_limit_scaled = false;
@@ -385,7 +392,7 @@ struct AppContext
 	// 配置与预设。
 	const ControlConfig* cfg = nullptr;
 	const CylinderPreset* cyl = nullptr;
-	ForceSampleSource force_sample_source = ForceSampleSource::ADS;
+	ForceSampleSource force_sample_source = ForceSampleSource::TCP_DAQ;
 	TcpForceDaqClient* tcp_force_daq = nullptr;
 
 	// PLC 镜像缓存。

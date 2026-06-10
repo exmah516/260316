@@ -39,9 +39,12 @@ namespace startup_sequence
 			copy_positions(ctx.plc_v_limit, ctx.startup->v_limit_backup, 7);
 			double scaled_v_limit[7] = { 0 };
 			copy_positions(ctx.plc_v_limit, scaled_v_limit, 7);
+			scaled_v_limit[0] *= ctx.cfg->startup_motion_speed_scale;
+			scaled_v_limit[1] *= ctx.cfg->startup_motion_speed_scale;
 			scaled_v_limit[2] *= ctx.cfg->startup_motion_speed_scale;
 			scaled_v_limit[4] *= ctx.cfg->startup_motion_speed_scale;
 			scaled_v_limit[5] *= ctx.cfg->startup_motion_speed_scale;
+			scaled_v_limit[6] *= ctx.cfg->startup_motion_speed_scale;
 			if (!plc_io::write_v_limit(ctx, scaled_v_limit))
 			{
 				return false;
@@ -99,4 +102,3 @@ namespace startup_sequence
 		}
 	}
 }
-

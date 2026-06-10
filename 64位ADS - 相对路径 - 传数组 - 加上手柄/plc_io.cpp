@@ -115,7 +115,7 @@ namespace plc_io
 
 	bool read_force_sample(AppContext& ctx, ForceSampleFrame& sample)
 	{
-		// 力采样仅保留 ADS 原有链路；TCP 仅用于日志替换 ft_1/fn_1，不进入控制链路。
+		// ADS 侧力采样用于 PLC 原始变量读取；TCP_DAQ 模式会在主循环中覆盖 ft_1/fn_1。
 		double act_pos_snapshot[7] = { 0.0 };
 		const char* symbols[] = {
 			AdsSymbol::ft_1_value,
