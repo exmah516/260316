@@ -1,20 +1,20 @@
 {
   "format": 1,
   "restore": {
-    "C:\\Users\\admin1\\Desktop\\260316\\64位ADS - 相对路径 - 传数组 - 加上手柄\\AdsControlUI\\AdsControlUI.csproj": {}
+    "D:\\Work_files\\Vessel intervention Robot\\260316\\64位ADS - 相对路径 - 传数组 - 加上手柄\\AdsControlUI\\AdsControlUI.csproj": {}
   },
   "projects": {
-    "C:\\Users\\admin1\\Desktop\\260316\\64位ADS - 相对路径 - 传数组 - 加上手柄\\AdsControlUI\\AdsControlUI.csproj": {
+    "D:\\Work_files\\Vessel intervention Robot\\260316\\64位ADS - 相对路径 - 传数组 - 加上手柄\\AdsControlUI\\AdsControlUI.csproj": {
       "version": "1.0.0",
       "restore": {
-        "projectUniqueName": "C:\\Users\\admin1\\Desktop\\260316\\64位ADS - 相对路径 - 传数组 - 加上手柄\\AdsControlUI\\AdsControlUI.csproj",
+        "projectUniqueName": "D:\\Work_files\\Vessel intervention Robot\\260316\\64位ADS - 相对路径 - 传数组 - 加上手柄\\AdsControlUI\\AdsControlUI.csproj",
         "projectName": "AdsControlUI",
-        "projectPath": "C:\\Users\\admin1\\Desktop\\260316\\64位ADS - 相对路径 - 传数组 - 加上手柄\\AdsControlUI\\AdsControlUI.csproj",
-        "packagesPath": "C:\\Users\\admin1\\.nuget\\packages\\",
-        "outputPath": "C:\\Users\\admin1\\Desktop\\260316\\64位ADS - 相对路径 - 传数组 - 加上手柄\\AdsControlUI\\obj\\",
+        "projectPath": "D:\\Work_files\\Vessel intervention Robot\\260316\\64位ADS - 相对路径 - 传数组 - 加上手柄\\AdsControlUI\\AdsControlUI.csproj",
+        "packagesPath": "C:\\Users\\Sui\\.nuget\\packages\\",
+        "outputPath": "D:\\Work_files\\Vessel intervention Robot\\260316\\64位ADS - 相对路径 - 传数组 - 加上手柄\\AdsControlUI\\obj\\",
         "projectStyle": "PackageReference",
         "configFilePaths": [
-          "C:\\Users\\admin1\\AppData\\Roaming\\NuGet\\NuGet.Config",
+          "C:\\Users\\Sui\\AppData\\Roaming\\NuGet\\NuGet.Config",
           "C:\\Program Files (x86)\\NuGet\\Config\\Microsoft.VisualStudio.Offline.config"
         ],
         "originalTargetFrameworks": [
@@ -45,7 +45,7 @@
       "frameworks": {
         "net472": {
           "targetAlias": "net472",
-          "runtimeIdentifierGraphPath": "C:\\Program Files\\dotnet\\sdk\\9.0.308\\RuntimeIdentifierGraph.json"
+          "runtimeIdentifierGraphPath": "C:\\Program Files\\dotnet\\sdk\\9.0.315\\RuntimeIdentifierGraph.json"
         }
       },
       "runtimes": {

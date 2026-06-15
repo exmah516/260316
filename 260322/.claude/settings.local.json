@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(cmd.exe //C \"where msbuild\")",
+      "Bash(\"C:/Program Files/Microsoft Visual Studio/2022/Professional/MSBuild/Current/Bin/MSBuild.exe\" \"ADS.sln\" //p:Configuration=Release //p:Platform=x64 //m //nologo //v:minimal)",
+      "Bash(\"C:/Program Files/Microsoft Visual Studio/2022/Professional/MSBuild/Current/Bin/MSBuild.exe\" \"ADS.sln\" //p:Configuration=Debug //p:Platform=x64 //nologo //v:minimal)",
+      "Bash(cmd.exe //C \"call \\\\\"C:\\\\Program Files\\\\Microsoft Visual Studio\\\\2022\\\\Professional\\\\VC\\\\Auxiliary\\\\Build\\\\vcvars64.bat\\\\\" >NUL && cd /d \\\\\"C:\\\\Users\\\\admin1\\\\Desktop\\\\260316\\\\64位ADS - 相对路径 - 传数组 - 加上手柄\\\\\" && msbuild ADS.sln /p:Configuration=Debug /p:Platform=x64 /m /nologo /v:minimal\")"
+    ]
+  }
+}

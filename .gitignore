@@ -39,6 +39,7 @@ object_script.*
 *.log
 *.svdx
 
+
 # Archives (usually backups or large binaries)
 *.zip
 *.rar
