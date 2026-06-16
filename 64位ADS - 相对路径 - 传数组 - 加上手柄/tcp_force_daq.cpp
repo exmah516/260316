@@ -126,8 +126,8 @@ bool TcpForceDaqClient::get_latest_ft1_fn1(double& out_ft1, double& out_fn1, std
 	{
 		return false;
 	}
-	out_ft1 = raw_v[0];
-	out_fn1 = raw_v[1];
+	out_fn1 = raw_v[0];
+	out_ft1 = raw_v[1];
 	return true;
 }
 

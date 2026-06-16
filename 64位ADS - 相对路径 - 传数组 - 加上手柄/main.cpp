@@ -600,7 +600,7 @@ int main(int argc, char* argv[])
 			{
 				std::cout << "CSV采样源：TCP_DAQ（" << cfg.tcp_force_daq_ip << ":" << cfg.tcp_force_daq_port
 					<< "，本机绑定 " << cfg.tcp_force_daq_local_ip
-					<< "），AIN0/AIN1 原始电压按传感器频率落盘。" << std::endl;
+					<< "），fn_1/ft_1 原始电压按传感器频率落盘。" << std::endl;
 			}
 			else
 			{
@@ -613,6 +613,7 @@ int main(int argc, char* argv[])
 		}
 		if (force_logger.start("."))
 		{
+			force_logger.publish_force_zero(cal_state.f_zero, cal_state.ft_zero);
 			tcp_force_daq.set_on_sample([&](std::uint64_t tick_ms, const double v[6])
 			{
 				force_logger.on_sensor_sample(tick_ms, v);
@@ -636,6 +637,7 @@ int main(int argc, char* argv[])
 			cal_state.f_zero = raw_v[0];
 			cal_state.ft_zero = raw_v[1];
 			cal_state.zeroed = true;
+			force_logger.publish_force_zero(cal_state.f_zero, cal_state.ft_zero);
 			force_tcp_zero_wait_logged = false;
 			std::cout << source << "力传感器零点已采集：AI0/f_zero=" << cal_state.f_zero
 				<< " V, AI1/ft_zero=" << cal_state.ft_zero << " V" << std::endl;
@@ -657,6 +659,7 @@ int main(int argc, char* argv[])
 			cal_state.ft_zero = force_sample.ft_1_value_v;
 			cal_state.f_zero = force_sample.fn_1_value_v;
 			cal_state.zeroed = true;
+			force_logger.publish_force_zero(cal_state.f_zero, cal_state.ft_zero);
 			std::cout << source << "力传感器零点已采集（ADS 当前采样）：ft_zero=" << cal_state.ft_zero
 				<< ", f_zero=" << cal_state.f_zero << std::endl;
 			return true;
@@ -2511,6 +2514,7 @@ int main(int argc, char* argv[])
 					{
 						if (force_logger.start("."))
 						{
+							force_logger.publish_force_zero(cal_state.f_zero, cal_state.ft_zero);
 							tcp_force_daq.set_on_sample([&](std::uint64_t tick_ms, const double v[6]) {
 								force_logger.on_sensor_sample(tick_ms, v);
 							});

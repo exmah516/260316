@@ -103,12 +103,8 @@ void ForceLogger::on_sensor_sample(std::uint64_t tick_ms, const double v[6])
 	}
 	Row& row = ring_[head];
 	row.tick_ms = tick_ms;
-	for (int i = 0; i < 4; ++i)
-	{
-		row.axis_abs[i] = axis_snapshot_[i].load(std::memory_order_relaxed);
-	}
-	row.axis1_abs_mm = row.axis_abs[0];
-	row.axis2_abs_mm = row.axis_abs[1];
+	row.axis1_abs_mm = axis_snapshot_[0].load(std::memory_order_relaxed);
+	row.axis2_abs_mm = axis_snapshot_[1].load(std::memory_order_relaxed);
 	row.fn_1_raw_v = v[0];
 	row.ft_1_raw_v = v[1];
 	row.fn_1_zero_v = force_zero_snapshot_[0].load(std::memory_order_relaxed);
