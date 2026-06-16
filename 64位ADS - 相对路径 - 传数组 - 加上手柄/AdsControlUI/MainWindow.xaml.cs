@@ -6,16 +6,20 @@ namespace AdsControlUI
     {
         private readonly AdsControlViewModel _vm;
         private readonly bool[] _cylOverride = new bool[4];
+        private ForceRealtimeWindow _forceWindow;
 
         public MainWindow()
         {
             InitializeComponent();
             _vm = new AdsControlViewModel();
             DataContext = _vm;
+            _vm.StateUpdated += Vm_StateUpdated;
         }
 
         protected override void OnClosed(System.EventArgs e)
         {
+            _vm.StateUpdated -= Vm_StateUpdated;
+            _forceWindow?.Close();
             _vm.Dispose();
             base.OnClosed(e);
         }
@@ -43,6 +47,39 @@ namespace AdsControlUI
         private void FfToggle_Click(object sender, RoutedEventArgs e) => _vm.ToggleForceFeedback();
         private void ForceLog_Click(object sender, RoutedEventArgs e) => _vm.ToggleForceLog();
         private void DirectControl_Click(object sender, RoutedEventArgs e) => _vm.SelectDirectControl();
+
+        private void ShowForce_Click(object sender, RoutedEventArgs e)
+        {
+            ForcePlotError.Text = "";
+            if (!_vm.FfEnabled)
+            {
+                ForcePlotError.Text = "请先开启力反馈。";
+                return;
+            }
+            if (!_vm.CalZeroed)
+            {
+                ForcePlotError.Text = "请先完成力传感器零点采集。";
+                return;
+            }
+
+            if (_forceWindow == null)
+            {
+                _forceWindow = new ForceRealtimeWindow { Owner = this };
+                _forceWindow.Closed += (s, args) => _forceWindow = null;
+                _forceWindow.Show();
+            }
+            else
+            {
+                _forceWindow.Activate();
+            }
+
+            _forceWindow.AddState(_vm.LatestState);
+        }
+
+        private void Vm_StateUpdated(VisState state)
+        {
+            _forceWindow?.AddState(state);
+        }
 
         private void ExecuteStartup_Click(object sender, RoutedEventArgs e)
         {

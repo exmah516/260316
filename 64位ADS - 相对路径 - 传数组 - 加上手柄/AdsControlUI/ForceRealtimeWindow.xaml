@@ -1,0 +1,35 @@
+<Window x:Class="AdsControlUI.ForceRealtimeWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="实时力反馈" Height="420" Width="760"
+        MinHeight="320" MinWidth="520"
+        WindowStartupLocation="CenterOwner">
+    <Grid Margin="10">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="0,0,0,6">
+            <TextBlock Text="F (N)" Foreground="Red" FontWeight="Bold" Margin="0,0,16,0"/>
+            <TextBlock Text="T (N·m)" Foreground="Blue" FontWeight="Bold" Margin="0,0,16,0"/>
+            <TextBlock x:Name="StatusText" Foreground="DarkSlateGray"/>
+        </StackPanel>
+
+        <Border Grid.Row="1" BorderBrush="Gray" BorderThickness="1" Background="White">
+            <Canvas x:Name="PlotCanvas" SizeChanged="PlotCanvas_SizeChanged">
+                <Polyline x:Name="ForceLine" Stroke="Red" StrokeThickness="2"/>
+                <Polyline x:Name="TorqueLine" Stroke="Blue" StrokeThickness="2"/>
+                <TextBlock x:Name="YAxisMaxText" Foreground="DimGray" FontSize="11"/>
+                <TextBlock x:Name="YAxisMinText" Foreground="DimGray" FontSize="11"/>
+                <TextBlock x:Name="XAxisText" Text="t / s" Foreground="DimGray" FontSize="11"/>
+            </Canvas>
+        </Border>
+
+        <StackPanel Grid.Row="2" Orientation="Horizontal" Margin="0,6,0,0">
+            <TextBlock x:Name="ForceValueText" Foreground="Red" Margin="0,0,18,0"/>
+            <TextBlock x:Name="TorqueValueText" Foreground="Blue"/>
+        </StackPanel>
+    </Grid>
+</Window>

@@ -16,6 +16,8 @@ namespace AdsControlUI
         private readonly DispatcherTimer _refreshTimer;
         private VisState _state;
 
+        public event Action<VisState> StateUpdated;
+
         public AdsControlViewModel()
         {
             _client.Start();
@@ -69,6 +71,7 @@ namespace AdsControlUI
             OnPropertyChanged(nameof(StartupWaiting));
             OnPropertyChanged(nameof(StartupCompleted));
             OnPropertyChanged(nameof(PhaseText));
+            StateUpdated?.Invoke(state);
         }
 
         public bool IsConnected => _client.IsConnected;
@@ -141,6 +144,7 @@ namespace AdsControlUI
         public bool CalZeroed => _state.cal_zeroed;
         public double Force582F => _state.force_582_f;
         public double Force582N => _state.force_582_n;
+        public VisState LatestState => _state;
 
         private double GetAxisPos(int index)
         {

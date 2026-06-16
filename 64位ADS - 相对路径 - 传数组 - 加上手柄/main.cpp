@@ -745,7 +745,11 @@ int main(int argc, char* argv[])
 		const unsigned char axis1_buttons = axis1_input_handle->buttons2;
 		const unsigned char axis6_buttons = axis6_input_handle->buttons2;
 		const bool pause_pressed = (axis1_buttons & axis1_pause_button_mask) != 0;
-		const bool axis1_reverse_pressed = (axis1_buttons & axis1_reverse_button_mask) != 0;
+		const bool axis1_reverse_button_pressed = (axis1_buttons & axis1_reverse_button_mask) != 0;
+		const bool axis1_reverse_pressed =
+			(vis_reverse_override_active && vis_reverse_override_target == 0)
+			? vis_reverse_override_value
+			: axis1_reverse_button_pressed;
 		const bool guidewire_independent_pressed = (axis6_buttons & axis6_independent_button_mask) != 0;
 		const bool guidewire_cooperative_pressed = (axis6_buttons & axis6_cooperative_button_mask) != 0;
 		const bool guidewire_reverse_pressed = guidewire_cooperative_pressed && !guidewire_independent_pressed;
@@ -765,7 +769,12 @@ int main(int argc, char* argv[])
 		// - b6=1,b0=1 -> Independent（0x47，协同模式入口已取消）
 		// - b6=0,b0=0 -> None（0x06）
 		GuidewireMode requested_guidewire_mode = GuidewireMode::None;
-		if (single_handle_mode)
+		if (vis_reverse_override_active)
+		{
+			requested_guidewire_mode =
+				(vis_reverse_override_target == 0) ? GuidewireMode::None : GuidewireMode::Independent;
+		}
+		else if (single_handle_mode)
 		{
 			requested_guidewire_mode = single_handle_requested_mode;
 		}
@@ -774,7 +783,10 @@ int main(int argc, char* argv[])
 			requested_guidewire_mode = GuidewireMode::Independent;
 		}
 		// 反向有效键仅在“独立且 b0 按下（0x07）”时生效。
-		const bool axis6_effective_reverse_pressed = single_handle_mode ? axis1_reverse_pressed : guidewire_reverse_pressed;
+		const bool axis6_effective_reverse_pressed =
+			(vis_reverse_override_active && vis_reverse_override_target == 1)
+			? vis_reverse_override_value
+			: (single_handle_mode ? axis1_reverse_pressed : guidewire_reverse_pressed);
 		const bool startup_sequence_active = startup.is_active();
 		// 正式控制阶段：启动流程已完成，b6 从“暂停键”切换为“电缸5开关键”。
 		const bool formal_control_stage = startup.completed && (startup.phase == StartupPhase::Done);
