@@ -3,8 +3,8 @@
 void process_force_feedback(
 	ForceFeedbackState& ff,
 	const ForceSampleFrame& sample,
-	Handle& handle_582,
-	Handle& handle_587,
+	Handle& catheter_feedback_handle,
+	Handle& guidewire_feedback_handle,
 	GuidewireMode guidewire_mode,
 	bool control_active,
 	bool freeze_active,
@@ -75,8 +75,9 @@ void process_force_feedback(
 		out_cmd.force_587_n = 0.0;
 	}
 
-	handle_582.setforce_axis(out_cmd.force_582_f, cfg.axial_force_axis, out_cmd.force_582_n);
-	handle_587.setforce_axis(out_cmd.force_587_f, cfg.axial_force_axis, out_cmd.force_587_n);
+	// force_582_* 表示导管/582语义，实际物理手柄由 main.cpp 根据单双手柄状态选择。
+	catheter_feedback_handle.setforce_axis(out_cmd.force_582_f, cfg.axial_force_axis, out_cmd.force_582_n);
+	guidewire_feedback_handle.setforce_axis(out_cmd.force_587_f, cfg.axial_force_axis, out_cmd.force_587_n);
 
 	ff.force_582_f = out_cmd.force_582_f;
 	ff.force_582_n = out_cmd.force_582_n;

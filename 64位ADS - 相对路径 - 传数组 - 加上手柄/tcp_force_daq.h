@@ -19,7 +19,7 @@ public:
 	TcpForceDaqClient() = default;
 	~TcpForceDaqClient();
 
-	bool start(const std::string& ip, unsigned short port);
+	bool start(const std::string& ip, unsigned short port, const std::string& local_ip = std::string());
 	void stop();
 
 	// 读取最近一帧原始电压（V1~V6）；若当前无有效帧则返回 false。
@@ -32,7 +32,7 @@ public:
 	void set_on_sample(SampleCallback cb);
 
 private:
-	void worker_loop(std::string ip, unsigned short port);
+	void worker_loop(std::string ip, unsigned short port, std::string local_ip);
 
 	mutable std::mutex frame_mutex_;
 	bool has_frame_ = false;

@@ -122,6 +122,12 @@ void Handle::setforce(double F, double N)
 
 void Handle::setforce_axis(double F, int axis, double N)
 {
+	// 单手柄模式下另一只手柄可能未打开，未打开设备不下发 SDK 力命令。
+	if (iID1 < 0)
+	{
+		return;
+	}
+
 	// SDK 需要三轴力向量 + 力矩；这里只开启指定轴，其余轴为 0。
 	double fForce[3] = { 0, 0, 0 };
 	if (axis < 0) axis = 0;

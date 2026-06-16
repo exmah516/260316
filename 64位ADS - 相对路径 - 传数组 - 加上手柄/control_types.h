@@ -149,6 +149,8 @@ struct ControlConfig
 	// TCP 采集卡连接参数（仅 force_sample_source=TCP_DAQ 时生效）。
 	const char* tcp_force_daq_ip = "192.168.1.30";
 	unsigned short tcp_force_daq_port = 502;
+	// 可选：指定 ITCP 从哪块本机网卡出去；留空时由 Windows 路由表决定。
+	const char* tcp_force_daq_local_ip = "";
 	// 力感记录周期：0=每循环记录；>0=按毫秒周期记录。
 	DWORD force_log_period_ms = 0;
 

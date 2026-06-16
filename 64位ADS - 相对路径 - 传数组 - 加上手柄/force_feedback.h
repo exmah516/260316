@@ -6,8 +6,8 @@
 void process_force_feedback(
 	ForceFeedbackState& ff,
 	const ForceSampleFrame& sample,
-	Handle& handle_582,
-	Handle& handle_587,
+	Handle& catheter_feedback_handle,
+	Handle& guidewire_feedback_handle,
 	GuidewireMode guidewire_mode,
 	bool control_active,
 	bool freeze_active,

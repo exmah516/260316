@@ -1,7 +1,7 @@
 // 文件职责说明：
 // 1) 高频力数据 CSV 记录器：传感器线程入队，独立 writer 线程落盘。
 // 2) 主线程仅做"发布最新轴位置快照"这一原子写，不参与 IO。
-// 3) 列：tick_ms, axis1/2/6/7 绝对位置(mm), AIN0/AIN1 原始电压(V)。
+// 3) 列：tick_ms, axis1/axis2 绝对位置(mm), fn_1/ft_1 原始电压(V), fn_1/ft_1 零点电压(V)。
 #pragma once
 
 #include <atomic>
@@ -25,6 +25,9 @@ public:
 	// 主线程每周期调用：发布最新轴位置（绝对坐标 mm），供后续传感器样本读取。
 	void publish_axis_snapshot(double a1_abs, double a2_abs, double a6_abs, double a7_abs);
 
+	// 主线程在调零或启动记录时调用：发布当前零点快照。
+	void publish_force_zero(double fn_zero_v, double ft_zero_v);
+
 	// 传感器线程回调：每帧入队一次。
 	void on_sensor_sample(std::uint64_t tick_ms, const double v[6]);
 
@@ -34,9 +37,12 @@ private:
 	struct Row
 	{
 		std::uint64_t tick_ms;
-		double axis_abs[4];
-		double v0;
-		double v1;
+		double axis1_abs_mm;
+		double axis2_abs_mm;
+		double fn_1_raw_v;
+		double ft_1_raw_v;
+		double fn_1_zero_v;
+		double ft_1_zero_v;
 	};
 
 	void writer_loop();
@@ -49,6 +55,7 @@ private:
 	std::atomic<std::size_t> tail_{ 0 };
 
 	std::atomic<double> axis_snapshot_[4]{};
+	std::atomic<double> force_zero_snapshot_[2]{};
 
 	std::atomic<bool> running_{ false };
 	std::atomic<bool> stop_requested_{ false };

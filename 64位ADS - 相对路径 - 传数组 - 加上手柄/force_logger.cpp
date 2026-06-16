@@ -20,6 +20,10 @@ ForceLogger::ForceLogger()
 	{
 		axis_snapshot_[i].store(0.0, std::memory_order_relaxed);
 	}
+	for (int i = 0; i < 2; ++i)
+	{
+		force_zero_snapshot_[i].store(0.0, std::memory_order_relaxed);
+	}
 }
 
 ForceLogger::~ForceLogger()
@@ -77,6 +81,12 @@ void ForceLogger::publish_axis_snapshot(double a1_abs, double a2_abs, double a6_
 	axis_snapshot_[3].store(a7_abs, std::memory_order_relaxed);
 }
 
+void ForceLogger::publish_force_zero(double fn_zero_v, double ft_zero_v)
+{
+	force_zero_snapshot_[0].store(fn_zero_v, std::memory_order_relaxed);
+	force_zero_snapshot_[1].store(ft_zero_v, std::memory_order_relaxed);
+}
+
 void ForceLogger::on_sensor_sample(std::uint64_t tick_ms, const double v[6])
 {
 	if (!running_.load(std::memory_order_acquire))
@@ -97,8 +107,12 @@ void ForceLogger::on_sensor_sample(std::uint64_t tick_ms, const double v[6])
 	{
 		row.axis_abs[i] = axis_snapshot_[i].load(std::memory_order_relaxed);
 	}
-	row.v0 = v[0];
-	row.v1 = v[1];
+	row.axis1_abs_mm = row.axis_abs[0];
+	row.axis2_abs_mm = row.axis_abs[1];
+	row.fn_1_raw_v = v[0];
+	row.ft_1_raw_v = v[1];
+	row.fn_1_zero_v = force_zero_snapshot_[0].load(std::memory_order_relaxed);
+	row.ft_1_zero_v = force_zero_snapshot_[1].load(std::memory_order_relaxed);
 	head_.store(next, std::memory_order_release);
 }
 
@@ -141,7 +155,7 @@ bool ForceLogger::open_file(const std::string& output_dir)
 		return false;
 	}
 #endif
-	const char* header = "tick_ms,axis1_pos_abs_mm,axis2_pos_abs_mm,axis6_pos_abs_mm,axis7_pos_abs_mm,ain0_raw_v,ain1_raw_v\n";
+	const char* header = "tick_ms,axis1_pos_abs_mm,axis2_pos_abs_mm,fn_1_raw_v,ft_1_raw_v,fn_1_zero_v,ft_1_zero_v\n";
 	std::fwrite(header, 1, std::strlen(header), fp_);
 	std::fflush(fp_);
 	return true;
@@ -176,10 +190,11 @@ void ForceLogger::writer_loop()
 		}
 		const Row& row = ring_[tail];
 		const int n = std::snprintf(buf, sizeof(buf),
-			"%llu,%.4f,%.4f,%.4f,%.4f,%.6f,%.6f\n",
+			"%llu,%.4f,%.4f,%.6f,%.6f,%.6f,%.6f\n",
 			static_cast<unsigned long long>(row.tick_ms),
-			row.axis_abs[0], row.axis_abs[1], row.axis_abs[2], row.axis_abs[3],
-			row.v0, row.v1);
+			row.axis1_abs_mm, row.axis2_abs_mm,
+			row.fn_1_raw_v, row.ft_1_raw_v,
+			row.fn_1_zero_v, row.ft_1_zero_v);
 		if (n > 0 && fp_)
 		{
 			std::fwrite(buf, 1, static_cast<std::size_t>(n), fp_);

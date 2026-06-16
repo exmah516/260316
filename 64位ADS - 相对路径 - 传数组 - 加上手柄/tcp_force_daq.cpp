@@ -73,7 +73,7 @@ TcpForceDaqClient::~TcpForceDaqClient()
 	stop();
 }
 
-bool TcpForceDaqClient::start(const std::string& ip, unsigned short port)
+bool TcpForceDaqClient::start(const std::string& ip, unsigned short port, const std::string& local_ip)
 {
 	if (running_.load())
 	{
@@ -83,7 +83,7 @@ bool TcpForceDaqClient::start(const std::string& ip, unsigned short port)
 	stop_requested_.store(false);
 	try
 	{
-		worker_ = std::thread(&TcpForceDaqClient::worker_loop, this, ip, port);
+		worker_ = std::thread(&TcpForceDaqClient::worker_loop, this, ip, port, local_ip);
 	}
 	catch (...)
 	{
@@ -137,7 +137,7 @@ void TcpForceDaqClient::set_on_sample(SampleCallback cb)
 	on_sample_ = std::move(cb);
 }
 
-void TcpForceDaqClient::worker_loop(std::string ip, unsigned short port)
+void TcpForceDaqClient::worker_loop(std::string ip, unsigned short port, std::string local_ip)
 {
 	WSADATA wsa_data;
 	if (WSAStartup(MAKEWORD(2, 2), &wsa_data) != 0)
@@ -158,6 +158,21 @@ void TcpForceDaqClient::worker_loop(std::string ip, unsigned short port)
 		// 防止网络抖动时 Send/Recv 永久阻塞。
 		setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, reinterpret_cast<const char*>(&kIoTimeoutMs), sizeof(kIoTimeoutMs));
 		setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO, reinterpret_cast<const char*>(&kIoTimeoutMs), sizeof(kIoTimeoutMs));
+
+		if (!local_ip.empty())
+		{
+			sockaddr_in local_addr;
+			std::memset(&local_addr, 0, sizeof(local_addr));
+			local_addr.sin_family = AF_INET;
+			local_addr.sin_port = htons(0);
+			if (inet_pton(AF_INET, local_ip.c_str(), &local_addr.sin_addr) != 1 ||
+				bind(sock, reinterpret_cast<const sockaddr*>(&local_addr), sizeof(local_addr)) == SOCKET_ERROR)
+			{
+				closesocket(sock);
+				Sleep(kReconnectDelayMs);
+				continue;
+			}
+		}
 
 		sockaddr_in server_addr;
 		std::memset(&server_addr, 0, sizeof(server_addr));

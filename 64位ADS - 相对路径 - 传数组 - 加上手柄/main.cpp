@@ -193,6 +193,25 @@ int main(int argc, char* argv[])
 		std::cout << "单手柄模式已自动启用（序列号: " << single_serial << "）。" << std::endl;
 	}
 
+	// 力反馈按“导管/导丝语义”下发；单手柄时导管力输出跟随唯一可用物理手柄。
+	Handle* catheter_force_output_handle = &handle_axis1;
+	Handle* guidewire_force_output_handle = &handle_axis6;
+	if (single_handle_mode)
+	{
+		if (axis1_handle_ready)
+		{
+			catheter_force_output_handle = &handle_axis1;
+			guidewire_force_output_handle = &handle_axis6;
+		}
+		else
+		{
+			catheter_force_output_handle = &handle_axis6;
+			guidewire_force_output_handle = &handle_axis1;
+		}
+		std::cout << "单手柄力反馈：导管/582语义输出 -> 物理 SN "
+			<< catheter_force_output_handle->serial() << "。" << std::endl;
+	}
+
 	Sleep(1000);
 	if (axis1_input_handle == axis6_input_handle)
 	{
@@ -577,9 +596,10 @@ int main(int argc, char* argv[])
 		}
 		if (ctx.force_sample_source == ForceSampleSource::TCP_DAQ)
 		{
-			if (tcp_force_daq.start(cfg.tcp_force_daq_ip, cfg.tcp_force_daq_port))
+			if (tcp_force_daq.start(cfg.tcp_force_daq_ip, cfg.tcp_force_daq_port, cfg.tcp_force_daq_local_ip))
 			{
 				std::cout << "CSV采样源：TCP_DAQ（" << cfg.tcp_force_daq_ip << ":" << cfg.tcp_force_daq_port
+					<< "，本机绑定 " << cfg.tcp_force_daq_local_ip
 					<< "），AIN0/AIN1 原始电压按传感器频率落盘。" << std::endl;
 			}
 			else
@@ -2356,8 +2376,8 @@ int main(int argc, char* argv[])
 		process_force_feedback(
 			ff,
 			force_sample,
-			handle_axis1,
-			handle_axis6,
+			*catheter_force_output_handle,
+			*guidewire_force_output_handle,
 			guidewire_mode,
 			control_active,
 			freeze_active,
@@ -2386,7 +2406,8 @@ int main(int argc, char* argv[])
 				<< " V, AI1/ft=" << force_sample.ft_1_value_v
 				<< " V, dft=" << dft
 				<< " V, df=" << df
-				<< " V -> 582.setforce_axis(F=" << ff.force_582_f
+				<< " V -> 导管力反馈(SN " << catheter_force_output_handle->serial()
+				<< ").setforce_axis(F=" << ff.force_582_f
 				<< " N, axis=" << cfg.axial_force_axis
 				<< ", N=" << ff.force_582_n << " N*m)" << std::endl;
 			force_feedback_value_log_last_ms = force_feedback_value_log_now_ms;
