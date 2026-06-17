@@ -41,6 +41,15 @@ struct VisState
 	double force_582_theory_f;
 	double force_582_theory_n;
 	bool gravity_comp_enabled;
+	// 力过渡决定性预实验（论文 §6.1）状态字段。末尾追加保持二进制兼容。
+	int ft_exp_phase;
+	int ft_exp_velocity_level;
+	int ft_exp_trial_id;
+	int ft_exp_repeat_in_lvl;
+	double ft_exp_v_ratio_curr;
+	double ft_exp_axis1_target;
+	bool ft_exp_active;
+	bool ft_exp_aborted;
 };
 #pragma pack(pop)
 
@@ -60,6 +69,11 @@ enum class VisCommandType : int
 	ExecuteStartup = 11,
 	SelectDirectControl = 12,
 	SetGravityCompensation = 13,
+	// 力过渡决定性预实验（论文 §6.1）控制命令。
+	StartForceTransitionExperiment = 14,
+	StopForceTransitionExperiment = 15,
+	SetFtExpParamA = 16, // param1=field_id, param2=int_val
+	SetFtExpParamB = 17, // param1=field_id, param2=fixed-point val (×1000)
 };
 
 #pragma pack(push, 1)

@@ -39,6 +39,15 @@ namespace AdsControlUI
         public double force_582_theory_f;
         public double force_582_theory_n;
         [MarshalAs(UnmanagedType.I1)] public bool gravity_comp_enabled;
+        // 力过渡决定性预实验（论文 §6.1）状态字段。
+        public int ft_exp_phase;
+        public int ft_exp_velocity_level;
+        public int ft_exp_trial_id;
+        public int ft_exp_repeat_in_lvl;
+        public double ft_exp_v_ratio_curr;
+        public double ft_exp_axis1_target;
+        [MarshalAs(UnmanagedType.I1)] public bool ft_exp_active;
+        [MarshalAs(UnmanagedType.I1)] public bool ft_exp_aborted;
     }
 
     public enum VisCommandType : int
@@ -57,6 +66,11 @@ namespace AdsControlUI
         ExecuteStartup = 11,
         SelectDirectControl = 12,
         SetGravityCompensation = 13,
+        // 力过渡决定性预实验（论文 §6.1）控制命令。
+        StartForceTransitionExperiment = 14,
+        StopForceTransitionExperiment = 15,
+        SetFtExpParamA = 16,
+        SetFtExpParamB = 17,
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 1)]

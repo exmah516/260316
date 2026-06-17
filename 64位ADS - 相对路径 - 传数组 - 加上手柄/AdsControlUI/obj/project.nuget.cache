@@ -1,8 +1,13 @@
 {
   "version": 2,
-  "dgSpecHash": "HoivI+yzD9Q=",
+  "dgSpecHash": "XfMB1/m0l8w=",
   "success": true,
   "projectFilePath": "D:\\Work_files\\Vessel intervention Robot\\260316\\64位ADS - 相对路径 - 传数组 - 加上手柄\\AdsControlUI\\AdsControlUI.csproj",
-  "expectedPackageFiles": [],
+  "expectedPackageFiles": [
+    "C:\\Users\\Sui\\.nuget\\packages\\scottplot\\4.1.74\\scottplot.4.1.74.nupkg.sha512",
+    "C:\\Users\\Sui\\.nuget\\packages\\scottplot.wpf\\4.1.74\\scottplot.wpf.4.1.74.nupkg.sha512",
+    "C:\\Users\\Sui\\.nuget\\packages\\system.drawing.common\\4.7.2\\system.drawing.common.4.7.2.nupkg.sha512",
+    "C:\\Users\\Sui\\.nuget\\packages\\system.numerics.vectors\\4.5.0\\system.numerics.vectors.4.5.0.nupkg.sha512"
+  ],
   "logs": []
 }

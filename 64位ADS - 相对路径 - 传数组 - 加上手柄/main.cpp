@@ -1,6 +1,9 @@
 #include "control_types.h"
+#include "force_calibration.h"
 #include "force_feedback.h"
 #include "force_logger.h"
+#include "force_transition_experiment.h"
+#include "force_transition_logger.h"
 #include "guidewire_mode.h"
 #include "motion_sync.h"
 #include "plc_io.h"
@@ -160,6 +163,8 @@ int main(int argc, char* argv[])
 	CADSComm ads;
 	TcpForceDaqClient tcp_force_daq;
 	ForceLogger force_logger;
+	ForceTransitionLogger ft_logger;
+	ForceTransitionExperiment ft_exp;
 	VisServer vis_server;
 	HandleFilterState axis1_handle_filter;
 	HandleFilterState axis6_handle_filter;
@@ -2394,6 +2399,44 @@ int main(int argc, char* argv[])
 			}
 		}
 
+		// 力过渡决定性预实验：每拍 tick；激活时接管 axis1 refer 与可选的 v_limit / axis1_fast_return。
+		// 调用必须在 process_force_feedback 之前，让 axis1_fast_return 边沿能进入既有冻结链路。
+		const bool ft_exp_was_active = ft_exp.active();
+		if (ft_exp.active())
+		{
+			const std::uint32_t now_tick_ms = GetTickCount();
+			const bool exp_taking_over = ft_exp.tick(
+				ctx,
+				now_tick_ms,
+				control_active,
+				freeze_active,
+				estop_hold_active,
+				cal_state.zeroed,
+				guidewire_mode);
+			if (exp_taking_over)
+			{
+				pos[0] = ft_exp.current_axis1_refer();
+				if (ft_exp.axis1_fast_return_request())
+				{
+					axis1_fast_return = true;
+				}
+				if (ft_exp.wants_v_limit_override())
+				{
+					// ft_exp 内部维护 start 时的 v_limit 快照，主循环不需要每拍读 PLC。
+					double v_limit_local[7];
+					ft_exp.fill_v_limit_override(v_limit_local);
+					plc_io::write_v_limit(ctx, v_limit_local);
+				}
+			}
+		}
+		// 实验由 active → 非 active（Done/Abort）的边沿：关闭专用 CSV 会话，flush 落盘。
+		if (ft_exp_was_active && !ft_exp.active() && ft_logger.is_running())
+		{
+			ft_logger.stop_session();
+			std::cout << (ft_exp.aborted() ? "力过渡实验已异常终止，CSV 已落盘。"
+				: "力过渡实验已完成，CSV 已落盘。") << std::endl;
+		}
+
 		process_force_feedback(
 			ff,
 			force_sample,
@@ -2409,6 +2452,41 @@ int main(int argc, char* argv[])
 			cfg,
 			cal_cfg,
 			cal_state);
+
+		// 力过渡决定性预实验（论文 §6.1）：在 process_force_feedback 之后采样，
+		// 把"实验当前接管阶段、实际 axis1 位置、标定后力、原始电压、相位上下文"打包入队。
+		// 仅在实验 active 且 logger 运行时入队；其他情况由 ForceLogger 自行处理。
+		if (ft_exp.active() && ft_logger.is_running())
+		{
+			ForceTransitionLogger::Row r{};
+			r.trial_id = ft_exp.current_trial_id();
+			r.velocity_level = ft_exp.current_velocity_level();
+			r.repeat_in_level = ft_exp.current_repeat_in_level();
+			r.phase_code = static_cast<int>(ft_exp.current_phase());
+			r.tick_ms = GetTickCount();
+			// GetTickCount 49 天回卷，但单次实验最长几十分钟，回卷期间差值仍正确（DWORD 自然回绕）。
+			r.dt_ms_from_phase_start = static_cast<std::uint64_t>(
+				static_cast<std::uint32_t>(r.tick_ms) - ft_exp.current_phase_t0_ms());
+			r.axis1_act_pos_mm = plc_act_pos[0];
+			r.axis1_refer_mm = pos[0];
+			r.axis1_v_limit_used = plc_v_limit[0];
+			r.fn_1_raw_v = force_sample.fn_1_value_v;
+			r.ft_1_raw_v = force_sample.ft_1_value_v;
+			r.fn_1_zero_v = cal_state.f_zero;
+			r.ft_1_zero_v = cal_state.ft_zero;
+			r.f_feedback_n = ff.force_582_theory_f;
+			r.t_feedback_nm = ff.force_582_theory_n;
+			r.ff_enabled = ff.enabled;
+			r.cal_zeroed = cal_state.zeroed;
+			r.freeze_active = freeze_active;
+			r.fast_active = axis1_fast_return;
+			r.guidewire_mode = static_cast<int>(guidewire_mode);
+			r.axis1_reverse = axis1_reverse_pressed;
+			r.cyl1_cmd = cylinder1_cmd;
+			r.cyl2_cmd = cylinder2_cmd;
+			ft_logger.enqueue(r);
+		}
+
 
 		const DWORD force_feedback_value_log_now_ms = GetTickCount();
 		if (ff.enabled &&
@@ -2485,6 +2563,14 @@ int main(int argc, char* argv[])
 			vs.force_582_theory_f = ff.force_582_theory_f;
 			vs.force_582_theory_n = ff.force_582_theory_n;
 			vs.gravity_comp_enabled = cal_cfg.gravity_comp_enabled;
+			vs.ft_exp_phase = static_cast<int>(ft_exp.current_phase());
+			vs.ft_exp_velocity_level = ft_exp.current_velocity_level();
+			vs.ft_exp_trial_id = ft_exp.current_trial_id();
+			vs.ft_exp_repeat_in_lvl = ft_exp.current_repeat_in_level();
+			vs.ft_exp_v_ratio_curr = ft_exp.current_v_ratio();
+			vs.ft_exp_axis1_target = ft_exp.current_axis1_target();
+			vs.ft_exp_active = ft_exp.active();
+			vs.ft_exp_aborted = ft_exp.aborted();
 			vis_server.push_state(vs);
 		}
 
@@ -2628,6 +2714,56 @@ int main(int argc, char* argv[])
 						cal_cfg.gravity_comp_enabled = enabled;
 						std::cout << "UI：重力补偿：" << (enabled ? "开启" : "关闭")
 							<< "，theta0=" << cal_state.theta0_deg << " deg" << std::endl;
+					}
+					break;
+				}
+				case VisCommandType::SetFtExpParamA:
+					ft_exp.set_param_a(vcmd.param1, vcmd.param2);
+					break;
+				case VisCommandType::SetFtExpParamB:
+					ft_exp.set_param_b(vcmd.param1, vcmd.param2);
+					break;
+				case VisCommandType::StartForceTransitionExperiment:
+				{
+					if (!ft_exp.active())
+					{
+						const bool prerequisites_ok =
+							control_active &&
+							cal_state.zeroed &&
+							!freeze_active &&
+							!estop_hold_active &&
+							guidewire_mode == GuidewireMode::None &&
+							startup.completed;
+						if (!prerequisites_ok)
+						{
+							std::cout << "UI：力过渡实验启动被拒绝：前置条件未满足（需 控制激活 + 已标零 + 非暂停 + 非急停 + 导管模式 + 启动完成）。" << std::endl;
+						}
+						else if (!ft_logger.is_running() && !ft_logger.start_session("."))
+						{
+							std::cout << "UI：力过渡实验启动被拒绝：CSV 文件创建失败。" << std::endl;
+						}
+						else if (!ft_exp.start(ctx, ft_exp.pending_cfg(), &ft_logger))
+						{
+							std::cout << "UI：力过渡实验启动被拒绝：" << ft_exp.last_error() << std::endl;
+							ft_logger.stop_session();
+						}
+						else
+						{
+							std::cout << "UI：力过渡实验已启动。" << std::endl;
+						}
+					}
+					break;
+				}
+				case VisCommandType::StopForceTransitionExperiment:
+				{
+					if (ft_exp.active())
+					{
+						ft_exp.abort(ctx, "UI stop");
+						std::cout << "UI：力过渡实验已停止。" << std::endl;
+					}
+					if (ft_logger.is_running())
+					{
+						ft_logger.stop_session();
 					}
 					break;
 				}

@@ -78,6 +78,15 @@ namespace AdsControlUI
             OnPropertyChanged(nameof(StartupWaiting));
             OnPropertyChanged(nameof(StartupCompleted));
             OnPropertyChanged(nameof(PhaseText));
+            OnPropertyChanged(nameof(FtExpPhase));
+            OnPropertyChanged(nameof(FtExpVelocityLevel));
+            OnPropertyChanged(nameof(FtExpTrialId));
+            OnPropertyChanged(nameof(FtExpRepeatInLevel));
+            OnPropertyChanged(nameof(FtExpVRatioCurr));
+            OnPropertyChanged(nameof(FtExpAxis1Target));
+            OnPropertyChanged(nameof(FtExpActive));
+            OnPropertyChanged(nameof(FtExpAborted));
+            OnPropertyChanged(nameof(FtExpPhaseText));
             StateUpdated?.Invoke(state);
         }
 
@@ -160,6 +169,37 @@ namespace AdsControlUI
         public bool GravityCompEnabled => _state.gravity_comp_enabled;
         public VisState LatestState => _state;
 
+        // 力过渡决定性预实验（论文 §6.1）状态镜像。
+        public int FtExpPhase => _state.ft_exp_phase;
+        public int FtExpVelocityLevel => _state.ft_exp_velocity_level;
+        public int FtExpTrialId => _state.ft_exp_trial_id;
+        public int FtExpRepeatInLevel => _state.ft_exp_repeat_in_lvl;
+        public double FtExpVRatioCurr => _state.ft_exp_v_ratio_curr;
+        public double FtExpAxis1Target => _state.ft_exp_axis1_target;
+        public bool FtExpActive => _state.ft_exp_active;
+        public bool FtExpAborted => _state.ft_exp_aborted;
+        public string FtExpPhaseText
+        {
+            get
+            {
+                switch (_state.ft_exp_phase)
+                {
+                    case 0: return "空闲";
+                    case 1: return "起始静置";
+                    case 2: return "接近起点";
+                    case 3: return "推送中";
+                    case 4: return "触发回退";
+                    case 5: return "PLC 计划回退";
+                    case 6: return "回退完成";
+                    case 7: return "档间静置";
+                    case 8: return "推进试次";
+                    case 9: return "已完成";
+                    case 10: return "已中止";
+                    default: return "?";
+                }
+            }
+        }
+
         private double GetAxisPos(int index)
         {
             if (_state.axis_pos_from_left != null && _state.axis_pos_from_left.Length > index)
@@ -234,6 +274,39 @@ namespace AdsControlUI
             _client.SendCommand(VisCommandType.SetStartupSpeed, (int)(speed * 100000));
             _client.SendCommand(VisCommandType.ExecuteStartup);
         }
+
+        // 力过渡决定性预实验：参数下发与启停。
+        // 参数 field_id 编码与 C++ ForceTransitionExperiment::set_param_a/b 一致。
+        public void SetFtExpParamInt(int fieldId, int intVal) =>
+            _client.SendCommand(VisCommandType.SetFtExpParamA, fieldId, intVal);
+
+        public void SetFtExpParamFixedX1000(int fieldId, double val) =>
+            _client.SendCommand(VisCommandType.SetFtExpParamB, fieldId, (int)Math.Round(val * 1000.0));
+
+        public void SendFtExpConfig(
+            int numLevels, double[] vRatios, int repeatsPerLevel,
+            double startPosMm, double pushTargetMm, double returnTriggerMm,
+            double approachSpeedRatio, int dwellBetweenMs)
+        {
+            SetFtExpParamInt(0, numLevels);
+            SetFtExpParamInt(1, repeatsPerLevel);
+            SetFtExpParamInt(2, dwellBetweenMs);
+            for (int i = 0; i < 6; ++i)
+            {
+                double v = (vRatios != null && i < vRatios.Length) ? vRatios[i] : 0.0;
+                SetFtExpParamFixedX1000(10 + i, v);
+            }
+            SetFtExpParamFixedX1000(20, startPosMm);
+            SetFtExpParamFixedX1000(21, pushTargetMm);
+            SetFtExpParamFixedX1000(22, returnTriggerMm);
+            SetFtExpParamFixedX1000(23, approachSpeedRatio);
+        }
+
+        public void StartForceTransitionExperiment() =>
+            _client.SendCommand(VisCommandType.StartForceTransitionExperiment);
+
+        public void StopForceTransitionExperiment() =>
+            _client.SendCommand(VisCommandType.StopForceTransitionExperiment);
 
         public event PropertyChangedEventHandler PropertyChanged;
         private void OnPropertyChanged([CallerMemberName] string name = null) =>

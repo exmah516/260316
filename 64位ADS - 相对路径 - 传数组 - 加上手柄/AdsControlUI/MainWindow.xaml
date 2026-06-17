@@ -102,6 +102,7 @@
                             <Button Content="零点采集" Click="Zero_Click" Margin="0,0,8,0" Padding="8,2"/>
                             <Button Content="力反馈开关" Click="FfToggle_Click" Margin="0,0,8,0" Padding="8,2"/>
                             <Button Content="显示实时力" Click="ShowForce_Click" Margin="0,0,8,0" Padding="8,2"/>
+                            <Button Content="力过渡实验" Click="ShowFtExp_Click" Margin="0,0,8,0" Padding="8,2"/>
                             <ToggleButton x:Name="GravityCompCheckBox" Content="重力补偿"
                                           IsChecked="{Binding GravityCompEnabled, Mode=OneWay}"
                                           Click="GravityComp_Click" Margin="0,0,8,0" Padding="8,2"/>

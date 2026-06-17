@@ -8,4 +8,9 @@
     <AssemblyName>AdsControlUI</AssemblyName>
     <LangVersion>9.0</LangVersion>
   </PropertyGroup>
+  <ItemGroup>
+    <!-- ScottPlot.WPF 4.1.x 是仍支持 net472 的最后主线分支；
+         5.x 仅支持 net6.0+，与本工程目标框架不兼容。 -->
+    <PackageReference Include="ScottPlot.WPF" Version="4.1.74" />
+  </ItemGroup>
 </Project>

@@ -7,6 +7,7 @@ namespace AdsControlUI
         private readonly AdsControlViewModel _vm;
         private readonly bool[] _cylOverride = new bool[4];
         private ForceRealtimeWindow _forceWindow;
+        private ForceTransitionWindow _ftExpWindow;
 
         public MainWindow()
         {
@@ -20,6 +21,7 @@ namespace AdsControlUI
         {
             _vm.StateUpdated -= Vm_StateUpdated;
             _forceWindow?.Close();
+            _ftExpWindow?.Close();
             _vm.Dispose();
             base.OnClosed(e);
         }
@@ -80,6 +82,21 @@ namespace AdsControlUI
         private void Vm_StateUpdated(VisState state)
         {
             _forceWindow?.AddState(state);
+            _ftExpWindow?.OnState(state);
+        }
+
+        private void ShowFtExp_Click(object sender, RoutedEventArgs e)
+        {
+            if (_ftExpWindow == null)
+            {
+                _ftExpWindow = new ForceTransitionWindow(_vm) { Owner = this };
+                _ftExpWindow.Closed += (s, args) => _ftExpWindow = null;
+                _ftExpWindow.Show();
+            }
+            else
+            {
+                _ftExpWindow.Activate();
+            }
         }
 
         private void ExecuteStartup_Click(object sender, RoutedEventArgs e)
