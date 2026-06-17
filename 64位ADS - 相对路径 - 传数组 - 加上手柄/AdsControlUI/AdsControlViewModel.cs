@@ -68,6 +68,9 @@ namespace AdsControlUI
             OnPropertyChanged(nameof(CalZeroed));
             OnPropertyChanged(nameof(Force582F));
             OnPropertyChanged(nameof(Force582N));
+            OnPropertyChanged(nameof(Force582TheoryF));
+            OnPropertyChanged(nameof(Force582TheoryN));
+            OnPropertyChanged(nameof(GravityCompEnabled));
             OnPropertyChanged(nameof(IsConnected));
             OnPropertyChanged(nameof(Axis1Reverse));
             OnPropertyChanged(nameof(Axis6Reverse));
@@ -152,6 +155,9 @@ namespace AdsControlUI
         public bool CalZeroed => _state.cal_zeroed;
         public double Force582F => _state.force_582_f;
         public double Force582N => _state.force_582_n;
+        public double Force582TheoryF => _state.force_582_theory_f;
+        public double Force582TheoryN => _state.force_582_theory_n;
+        public bool GravityCompEnabled => _state.gravity_comp_enabled;
         public VisState LatestState => _state;
 
         private double GetAxisPos(int index)
@@ -207,6 +213,9 @@ namespace AdsControlUI
 
         public void ToggleForceFeedback() =>
             _client.SendCommand(VisCommandType.ToggleForceFeedback);
+
+        public void SetGravityCompensation(bool enabled) =>
+            _client.SendCommand(VisCommandType.SetGravityCompensation, enabled ? 1 : 0);
 
         public void ToggleForceLog() =>
             _client.SendCommand(VisCommandType.ToggleForceLog);

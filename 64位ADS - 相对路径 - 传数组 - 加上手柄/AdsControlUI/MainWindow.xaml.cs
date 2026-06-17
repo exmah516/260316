@@ -45,6 +45,7 @@ namespace AdsControlUI
 
         private void Zero_Click(object sender, RoutedEventArgs e) => _vm.ZeroForceSensor();
         private void FfToggle_Click(object sender, RoutedEventArgs e) => _vm.ToggleForceFeedback();
+        private void GravityComp_Click(object sender, RoutedEventArgs e) => _vm.SetGravityCompensation(GravityCompCheckBox.IsChecked == true);
         private void ForceLog_Click(object sender, RoutedEventArgs e) => _vm.ToggleForceLog();
         private void DirectControl_Click(object sender, RoutedEventArgs e) => _vm.SelectDirectControl();
 

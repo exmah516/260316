@@ -13,8 +13,10 @@ namespace AdsControlUI
         private struct ForcePoint
         {
             public double TimeS;
-            public double ForceN;
-            public double TorqueNm;
+            public double ForceActualN;
+            public double TorqueActualNm;
+            public double ForceTheoryN;
+            public double TorqueTheoryNm;
         }
 
         private const double WindowSeconds = 30.0;
@@ -45,8 +47,10 @@ namespace AdsControlUI
             _points.Add(new ForcePoint
             {
                 TimeS = t,
-                ForceN = state.force_582_f,
-                TorqueNm = state.force_582_n
+                ForceActualN = state.force_582_f,
+                TorqueActualNm = state.force_582_n,
+                ForceTheoryN = state.force_582_theory_f,
+                TorqueTheoryNm = state.force_582_theory_n
             });
 
             double minTime = Math.Max(0.0, t - WindowSeconds);
@@ -56,8 +60,10 @@ namespace AdsControlUI
             }
 
             StatusText.Text = $"显示最近 {WindowSeconds:F0} s";
-            ForceValueText.Text = $"F = {state.force_582_f:F3} N";
-            TorqueValueText.Text = $"T = {state.force_582_n:F5} N·m";
+            ForceValueText.Text = $"F actual = {state.force_582_f:F3} N";
+            TorqueValueText.Text = $"T actual = {state.force_582_n:F5} N·m";
+            ForceTheoryValueText.Text = $"F theory = {state.force_582_theory_f:F3} N";
+            TorqueTheoryValueText.Text = $"T theory = {state.force_582_theory_n:F5} N·m";
             Redraw();
         }
 
@@ -95,6 +101,8 @@ namespace AdsControlUI
             {
                 ForceLine.Points = new PointCollection();
                 TorqueLine.Points = new PointCollection();
+                ForceTheoryLine.Points = new PointCollection();
+                TorqueTheoryLine.Points = new PointCollection();
                 PositionLabels(left, top, bottom, plotW, plotH, -1.0, 1.0);
                 return;
             }
@@ -102,8 +110,8 @@ namespace AdsControlUI
             double latestTime = _points[_points.Count - 1].TimeS;
             double minTime = Math.Max(0.0, latestTime - WindowSeconds);
             double maxTime = Math.Max(WindowSeconds, latestTime);
-            double minY = Math.Min(_points.Min(p => p.ForceN), _points.Min(p => p.TorqueNm));
-            double maxY = Math.Max(_points.Max(p => p.ForceN), _points.Max(p => p.TorqueNm));
+            double minY = _points.Min(p => Math.Min(Math.Min(p.ForceActualN, p.TorqueActualNm), Math.Min(p.ForceTheoryN, p.TorqueTheoryNm)));
+            double maxY = _points.Max(p => Math.Max(Math.Max(p.ForceActualN, p.TorqueActualNm), Math.Max(p.ForceTheoryN, p.TorqueTheoryNm)));
             if (maxY - minY < MinYRange)
             {
                 double center = (maxY + minY) * 0.5;
@@ -117,8 +125,10 @@ namespace AdsControlUI
                 maxY += pad;
             }
 
-            ForceLine.Points = BuildPoints(left, top, plotW, plotH, minTime, maxTime, minY, maxY, p => p.ForceN);
-            TorqueLine.Points = BuildPoints(left, top, plotW, plotH, minTime, maxTime, minY, maxY, p => p.TorqueNm);
+            ForceLine.Points = BuildPoints(left, top, plotW, plotH, minTime, maxTime, minY, maxY, p => p.ForceActualN);
+            TorqueLine.Points = BuildPoints(left, top, plotW, plotH, minTime, maxTime, minY, maxY, p => p.TorqueActualNm);
+            ForceTheoryLine.Points = BuildPoints(left, top, plotW, plotH, minTime, maxTime, minY, maxY, p => p.ForceTheoryN);
+            TorqueTheoryLine.Points = BuildPoints(left, top, plotW, plotH, minTime, maxTime, minY, maxY, p => p.TorqueTheoryNm);
             PositionLabels(left, top, bottom, plotW, plotH, minY, maxY);
         }
 

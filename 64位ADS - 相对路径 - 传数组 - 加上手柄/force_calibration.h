@@ -47,8 +47,7 @@ struct CalibratedForce
 inline CalibratedForce calibrate_force(
 	double f_sensor,
 	double ft_sensor,
-	double rot_counts,
-	double rot_zero_counts,
+	double axis2_deg,
 	const ForceCalibrationConfig& cfg,
 	const ForceCalibrationState& state)
 {
@@ -60,9 +59,10 @@ inline CalibratedForce calibrate_force(
 
 	if (cfg.gravity_comp_enabled)
 	{
-		double theta_deg = std::fmod((rot_counts - rot_zero_counts) / cfg.rot_counts_per_deg, 360.0);
+		double theta_deg = std::fmod(axis2_deg, 360.0);
 		if (theta_deg < 0.0) theta_deg += 360.0;
-		double theta0 = state.theta0_deg;
+		double theta0 = std::fmod(state.theta0_deg, 360.0);
+		if (theta0 < 0.0) theta0 += 360.0;
 
 		constexpr double pi = 3.14159265358979323846;
 		constexpr double w = 2.0 * pi / 360.0;
@@ -83,8 +83,11 @@ inline CalibratedForce calibrate_force(
 	double F_cal = cfg.axial_k * df;
 	double T_cal = cfg.torque_k * dft;
 
-	double F_dec = cfg.decouple_ff * F_cal + cfg.decouple_ft * T_cal;
-	double T_dec = cfg.decouple_tf * F_cal + cfg.decouple_tt * T_cal;
+	// 解耦暂时旁路，保留原矩阵作为说明，后续需要时再恢复。
+	// double F_dec = cfg.decouple_ff * F_cal + cfg.decouple_ft * T_cal;
+	// double T_dec = cfg.decouple_tf * F_cal + cfg.decouple_tt * T_cal;
+	double F_dec = F_cal;
+	double T_dec = T_cal;
 
 	out.f_feedback_n = F_dec;
 	out.t_feedback_nm = cfg.k_feedback * T_dec

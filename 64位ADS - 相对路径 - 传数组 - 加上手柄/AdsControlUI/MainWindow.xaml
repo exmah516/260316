@@ -102,12 +102,17 @@
                             <Button Content="零点采集" Click="Zero_Click" Margin="0,0,8,0" Padding="8,2"/>
                             <Button Content="力反馈开关" Click="FfToggle_Click" Margin="0,0,8,0" Padding="8,2"/>
                             <Button Content="显示实时力" Click="ShowForce_Click" Margin="0,0,8,0" Padding="8,2"/>
+                            <ToggleButton x:Name="GravityCompCheckBox" Content="重力补偿"
+                                          IsChecked="{Binding GravityCompEnabled, Mode=OneWay}"
+                                          Click="GravityComp_Click" Margin="0,0,8,0" Padding="8,2"/>
                             <ToggleButton Content="数据记录" IsChecked="{Binding ForceLogRunning, Mode=OneWay}"
                                           Click="ForceLog_Click" Padding="8,2"/>
                         </WrapPanel>
                         <TextBlock x:Name="ForcePlotError" Foreground="Red" Margin="0,4,0,0" TextWrapping="Wrap"/>
-                        <TextBlock Margin="0,4,0,0" Text="{Binding Force582F, StringFormat='F = {0:F3} N'}"/>
-                        <TextBlock Text="{Binding Force582N, StringFormat='T = {0:F5} N·m'}"/>
+                        <TextBlock Margin="0,4,0,0" Text="{Binding Force582F, StringFormat='F actual = {0:F3} N'}"/>
+                        <TextBlock Text="{Binding Force582N, StringFormat='T actual = {0:F5} N·m'}"/>
+                        <TextBlock Text="{Binding Force582TheoryF, StringFormat='F theory = {0:F3} N'}"/>
+                        <TextBlock Text="{Binding Force582TheoryN, StringFormat='T theory = {0:F5} N·m'}"/>
                         <TextBlock Text="{Binding CalZeroed, StringFormat='已标零: {0}'}" Margin="0,2,0,0"/>
                     </StackPanel>
                 </GroupBox>

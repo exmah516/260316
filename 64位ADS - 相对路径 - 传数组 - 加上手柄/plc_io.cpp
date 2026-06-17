@@ -145,6 +145,8 @@ namespace plc_io
 
 		// 轴1位置采用 G.Act_pos 的第 1 轴（数组下标 0，单位与 PLC Act_pos 保持一致）。
 		sample.axis1_pos_rel = act_pos_snapshot[0];
+		// 轴2位置由倍福直接给出角度，力反馈重力补偿不再使用电机 counts 换算。
+		sample.axis2_pos_rel = act_pos_snapshot[1];
 		sample.valid = true;
 		sample.tick_ms = GetTickCount();
 		return true;

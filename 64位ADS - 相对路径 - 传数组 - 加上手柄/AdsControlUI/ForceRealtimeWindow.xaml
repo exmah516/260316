@@ -12,8 +12,10 @@
         </Grid.RowDefinitions>
 
         <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="0,0,0,6">
-            <TextBlock Text="F (N)" Foreground="Red" FontWeight="Bold" Margin="0,0,16,0"/>
-            <TextBlock Text="T (N·m)" Foreground="Blue" FontWeight="Bold" Margin="0,0,16,0"/>
+            <TextBlock Text="F actual (N)" Foreground="Red" FontWeight="Bold" Margin="0,0,16,0"/>
+            <TextBlock Text="T actual (N·m)" Foreground="Blue" FontWeight="Bold" Margin="0,0,16,0"/>
+            <TextBlock Text="F theory (N)" Foreground="Red" FontStyle="Italic" Margin="0,0,16,0"/>
+            <TextBlock Text="T theory (N·m)" Foreground="Blue" FontStyle="Italic" Margin="0,0,16,0"/>
             <TextBlock x:Name="StatusText" Foreground="DarkSlateGray"/>
         </StackPanel>
 
@@ -21,6 +23,8 @@
             <Canvas x:Name="PlotCanvas" SizeChanged="PlotCanvas_SizeChanged">
                 <Polyline x:Name="ForceLine" Stroke="Red" StrokeThickness="2"/>
                 <Polyline x:Name="TorqueLine" Stroke="Blue" StrokeThickness="2"/>
+                <Polyline x:Name="ForceTheoryLine" Stroke="Red" StrokeThickness="2" StrokeDashArray="5 3"/>
+                <Polyline x:Name="TorqueTheoryLine" Stroke="Blue" StrokeThickness="2" StrokeDashArray="5 3"/>
                 <TextBlock x:Name="YAxisMaxText" Foreground="DimGray" FontSize="11"/>
                 <TextBlock x:Name="YAxisMinText" Foreground="DimGray" FontSize="11"/>
                 <TextBlock x:Name="XAxisText" Text="t / s" Foreground="DimGray" FontSize="11"/>
@@ -29,7 +33,9 @@
 
         <StackPanel Grid.Row="2" Orientation="Horizontal" Margin="0,6,0,0">
             <TextBlock x:Name="ForceValueText" Foreground="Red" Margin="0,0,18,0"/>
-            <TextBlock x:Name="TorqueValueText" Foreground="Blue"/>
+            <TextBlock x:Name="TorqueValueText" Foreground="Blue" Margin="0,0,18,0"/>
+            <TextBlock x:Name="ForceTheoryValueText" Foreground="Red" FontStyle="Italic" Margin="0,0,18,0"/>
+            <TextBlock x:Name="TorqueTheoryValueText" Foreground="Blue" FontStyle="Italic"/>
         </StackPanel>
     </Grid>
 </Window>

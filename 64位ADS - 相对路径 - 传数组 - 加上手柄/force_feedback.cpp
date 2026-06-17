@@ -24,6 +24,7 @@ void process_force_feedback(
 		control_active &&
 		!freeze_active &&
 		!estop_hold_active &&
+		cal_state.zeroed &&
 		sample.valid;
 
 	if (output_enabled)
@@ -33,16 +34,18 @@ void process_force_feedback(
 			CalibratedForce cal = calibrate_force(
 				sample.fn_1_value_v,
 				sample.ft_1_value_v,
-				0.0, 0.0,
+				sample.axis2_pos_rel,
 				cal_cfg, cal_state);
-			const double mapped_582_f = cal.f_feedback_n;
-			const double mapped_582_n = cal.t_feedback_nm;
+			const double theory_582_f = cal.f_feedback_n;
+			const double theory_582_n = cal.t_feedback_nm;
+			ff.force_582_theory_f = theory_582_f;
+			ff.force_582_theory_n = theory_582_n;
 			if (fast_move_active)
 			{
 				if (!ff.freeze_582_active)
 				{
-					ff.freeze_582_f = mapped_582_f;
-					ff.freeze_582_n = mapped_582_n;
+					ff.freeze_582_f = theory_582_f;
+					ff.freeze_582_n = theory_582_n;
 					ff.freeze_582_active = true;
 				}
 				out_cmd.force_582_f = ff.freeze_582_f;
@@ -51,8 +54,8 @@ void process_force_feedback(
 			else
 			{
 				ff.freeze_582_active = false;
-				out_cmd.force_582_f = mapped_582_f;
-				out_cmd.force_582_n = mapped_582_n;
+				out_cmd.force_582_f = theory_582_f;
+				out_cmd.force_582_n = theory_582_n;
 			}
 			out_cmd.force_587_f = 0.0;
 			out_cmd.force_587_n = 0.0;
@@ -62,6 +65,8 @@ void process_force_feedback(
 			ff.freeze_582_active = false;
 			out_cmd.force_582_f = 0.0;
 			out_cmd.force_582_n = 0.0;
+			ff.force_582_theory_f = 0.0;
+			ff.force_582_theory_n = 0.0;
 			out_cmd.force_587_f = 0.0;
 			out_cmd.force_587_n = 0.0;
 		}
@@ -71,6 +76,8 @@ void process_force_feedback(
 		ff.freeze_582_active = false;
 		out_cmd.force_582_f = 0.0;
 		out_cmd.force_582_n = 0.0;
+		ff.force_582_theory_f = 0.0;
+		ff.force_582_theory_n = 0.0;
 		out_cmd.force_587_f = 0.0;
 		out_cmd.force_587_n = 0.0;
 	}
@@ -83,6 +90,12 @@ void process_force_feedback(
 	ff.force_582_n = out_cmd.force_582_n;
 	ff.force_587_f = out_cmd.force_587_f;
 	ff.force_587_n = out_cmd.force_587_n;
+
+	if (!output_enabled || guidewire_mode != GuidewireMode::None)
+	{
+		ff.force_582_theory_f = 0.0;
+		ff.force_582_theory_n = 0.0;
+	}
 
 	if (sample.valid)
 	{

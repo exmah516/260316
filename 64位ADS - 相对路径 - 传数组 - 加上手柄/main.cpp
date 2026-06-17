@@ -636,11 +636,13 @@ int main(int argc, char* argv[])
 		{
 			cal_state.f_zero = raw_v[0];
 			cal_state.ft_zero = raw_v[1];
+			cal_state.theta0_deg = plc_act_pos[1];
 			cal_state.zeroed = true;
 			force_logger.publish_force_zero(cal_state.f_zero, cal_state.ft_zero);
 			force_tcp_zero_wait_logged = false;
 			std::cout << source << "力传感器零点已采集：AI0/f_zero=" << cal_state.f_zero
-				<< " V, AI1/ft_zero=" << cal_state.ft_zero << " V" << std::endl;
+				<< " V, AI1/ft_zero=" << cal_state.ft_zero
+				<< " V, axis2/theta0=" << cal_state.theta0_deg << " deg" << std::endl;
 			return true;
 		}
 
@@ -658,10 +660,12 @@ int main(int argc, char* argv[])
 		{
 			cal_state.ft_zero = force_sample.ft_1_value_v;
 			cal_state.f_zero = force_sample.fn_1_value_v;
+			cal_state.theta0_deg = plc_act_pos[1];
 			cal_state.zeroed = true;
 			force_logger.publish_force_zero(cal_state.f_zero, cal_state.ft_zero);
 			std::cout << source << "力传感器零点已采集（ADS 当前采样）：ft_zero=" << cal_state.ft_zero
-				<< ", f_zero=" << cal_state.f_zero << std::endl;
+				<< ", f_zero=" << cal_state.f_zero
+				<< ", axis2/theta0=" << cal_state.theta0_deg << " deg" << std::endl;
 			return true;
 		}
 
@@ -2294,6 +2298,7 @@ int main(int argc, char* argv[])
 						force_sample.axis1_pos_rel = plc_act_pos[0];
 						force_sample.tick_ms = force_log_now_ms;
 					}
+					force_sample.axis2_pos_rel = plc_act_pos[1];
 					force_sample.fn_1_value_v = tcp_raw_v[0];
 					force_sample.ft_1_value_v = tcp_raw_v[1];
 					force_sample.valid = true;
@@ -2320,6 +2325,7 @@ int main(int argc, char* argv[])
 			else if (ads_sample_ok)
 			{
 				force_sample = sampled_frame;
+				force_sample.axis2_pos_rel = plc_act_pos[1];
 				force_sample.ft_1_value_v = static_cast<double>(force_sample.ft_1_value);
 				force_sample.fn_1_value_v = static_cast<double>(force_sample.fn_1_value);
 				log_ft1_value = force_sample.ft_1_value_v;
@@ -2424,7 +2430,12 @@ int main(int argc, char* argv[])
 				<< " V -> 导管力反馈(SN " << catheter_force_output_handle->serial()
 				<< ").setforce_axis(F=" << ff.force_582_f
 				<< " N, axis=" << cfg.axial_force_axis
-				<< ", N=" << ff.force_582_n << " N*m)" << std::endl;
+				<< ", N=" << ff.force_582_n
+				<< " N*m), theory(F=" << ff.force_582_theory_f
+				<< " N, N=" << ff.force_582_theory_n
+				<< " N*m), gravity=" << (cal_cfg.gravity_comp_enabled ? "ON" : "OFF")
+				<< ", theta=" << force_sample.axis2_pos_rel
+				<< " deg, theta0=" << cal_state.theta0_deg << " deg" << std::endl;
 			force_feedback_value_log_last_ms = force_feedback_value_log_now_ms;
 		}
 
@@ -2471,6 +2482,9 @@ int main(int argc, char* argv[])
 			vs.force_587_n = ff.force_587_n;
 			vs.loop_count = loop_count;
 			vs.tick_ms = GetTickCount();
+			vs.force_582_theory_f = ff.force_582_theory_f;
+			vs.force_582_theory_n = ff.force_582_theory_n;
+			vs.gravity_comp_enabled = cal_cfg.gravity_comp_enabled;
 			vis_server.push_state(vs);
 		}
 
@@ -2603,6 +2617,17 @@ int main(int argc, char* argv[])
 							ensure_force_log_started();
 							std::cout << "已进入直接控制（UI 触发）。" << std::endl;
 						}
+					}
+					break;
+				}
+				case VisCommandType::SetGravityCompensation:
+				{
+					const bool enabled = (vcmd.param1 != 0);
+					if (cal_cfg.gravity_comp_enabled != enabled)
+					{
+						cal_cfg.gravity_comp_enabled = enabled;
+						std::cout << "UI：重力补偿：" << (enabled ? "开启" : "关闭")
+							<< "，theta0=" << cal_state.theta0_deg << " deg" << std::endl;
 					}
 					break;
 				}

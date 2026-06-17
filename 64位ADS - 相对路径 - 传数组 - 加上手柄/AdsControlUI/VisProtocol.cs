@@ -36,6 +36,9 @@ namespace AdsControlUI
         public double force_587_n;
         public int loop_count;
         public uint tick_ms;
+        public double force_582_theory_f;
+        public double force_582_theory_n;
+        [MarshalAs(UnmanagedType.I1)] public bool gravity_comp_enabled;
     }
 
     public enum VisCommandType : int
@@ -53,6 +56,7 @@ namespace AdsControlUI
         SetStartupSpeed = 10,
         ExecuteStartup = 11,
         SelectDirectControl = 12,
+        SetGravityCompensation = 13,
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 1)]

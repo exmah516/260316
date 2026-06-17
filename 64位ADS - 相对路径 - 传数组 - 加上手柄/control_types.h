@@ -255,6 +255,8 @@ struct ForceFeedbackState
 	// 当前输出命令缓存（用于调试与冻结保持）。
 	double force_582_f = 0.0;
 	double force_582_n = 0.0;
+	double force_582_theory_f = 0.0;
+	double force_582_theory_n = 0.0;
 	double force_587_f = 0.0;
 	double force_587_n = 0.0;
 	// 导管快进/快退期间冻结 582 输出，保持进入冻结时最后一拍命令。
@@ -273,6 +275,8 @@ struct ForceFeedbackState
 	{
 		force_582_f = 0.0;
 		force_582_n = 0.0;
+		force_582_theory_f = 0.0;
+		force_582_theory_n = 0.0;
 		force_587_f = 0.0;
 		force_587_n = 0.0;
 		freeze_582_active = false;
@@ -286,6 +290,8 @@ struct ForceFeedbackState
 	{
 		force_582_f = 0.0;
 		force_582_n = 0.0;
+		force_582_theory_f = 0.0;
+		force_582_theory_n = 0.0;
 		force_587_f = 0.0;
 		force_587_n = 0.0;
 		freeze_582_active = false;
@@ -302,6 +308,7 @@ struct ForceSampleFrame
 	short ft_2_value = 0;
 	double fn_1_value_v = 0.0;
 	double ft_1_value_v = 0.0;
+	double axis2_pos_rel = 0.0;
 	double axis1_pos_rel = 0.0;
 	bool valid = false;
 	DWORD tick_ms = 0;

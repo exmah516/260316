@@ -38,6 +38,9 @@ struct VisState
 	double force_587_n;
 	int loop_count;
 	DWORD tick_ms;
+	double force_582_theory_f;
+	double force_582_theory_n;
+	bool gravity_comp_enabled;
 };
 #pragma pack(pop)
 
@@ -56,6 +59,7 @@ enum class VisCommandType : int
 	SetStartupSpeed = 10,
 	ExecuteStartup = 11,
 	SelectDirectControl = 12,
+	SetGravityCompensation = 13,
 };
 
 #pragma pack(push, 1)
