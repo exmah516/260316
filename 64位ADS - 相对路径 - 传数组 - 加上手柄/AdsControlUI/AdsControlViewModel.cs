@@ -57,6 +57,10 @@ namespace AdsControlUI
             OnPropertyChanged(nameof(Cyl3Open));
             OnPropertyChanged(nameof(Cyl4Open));
             OnPropertyChanged(nameof(ModeText));
+            OnPropertyChanged(nameof(ModeCathFwdSelected));
+            OnPropertyChanged(nameof(ModeCathRevSelected));
+            OnPropertyChanged(nameof(ModeGuideFwdSelected));
+            OnPropertyChanged(nameof(ModeGuideRevSelected));
             OnPropertyChanged(nameof(ControlActive));
             OnPropertyChanged(nameof(FreezeActive));
             OnPropertyChanged(nameof(EstopHold));
@@ -123,6 +127,10 @@ namespace AdsControlUI
 
         public bool Axis1Reverse => _state.axis1_reverse;
         public bool Axis6Reverse => _state.axis6_reverse;
+        public bool ModeCathFwdSelected => _state.guidewire_mode == 0 && !_state.axis1_reverse;
+        public bool ModeCathRevSelected => _state.guidewire_mode == 0 && _state.axis1_reverse;
+        public bool ModeGuideFwdSelected => _state.guidewire_mode != 0 && !_state.axis6_reverse;
+        public bool ModeGuideRevSelected => _state.guidewire_mode != 0 && _state.axis6_reverse;
         public bool ForceLogRunning => _state.force_log_running;
         public bool StartupWaiting => _state.startup_waiting;
         public bool StartupCompleted => _state.startup_completed;

@@ -88,10 +88,10 @@
                 <!-- 模式切换 (4模式) -->
                 <GroupBox Header="模式切换" Margin="0,8,0,0">
                     <UniformGrid Columns="2" Margin="4">
-                        <RadioButton Content="导管递送" GroupName="Mode" Click="ModeCathFwd_Click" IsChecked="True" Margin="2"/>
-                        <RadioButton Content="导管撤出" GroupName="Mode" Click="ModeCathRev_Click" Margin="2"/>
-                        <RadioButton Content="导丝递送" GroupName="Mode" Click="ModeGuideFwd_Click" Margin="2"/>
-                        <RadioButton Content="导丝撤出" GroupName="Mode" Click="ModeGuideRev_Click" Margin="2"/>
+                        <RadioButton Content="导管递送" GroupName="Mode" Click="ModeCathFwd_Click" IsChecked="{Binding ModeCathFwdSelected, Mode=OneWay}" Margin="2"/>
+                        <RadioButton Content="导管撤出" GroupName="Mode" Click="ModeCathRev_Click" IsChecked="{Binding ModeCathRevSelected, Mode=OneWay}" Margin="2"/>
+                        <RadioButton Content="导丝递送" GroupName="Mode" Click="ModeGuideFwd_Click" IsChecked="{Binding ModeGuideFwdSelected, Mode=OneWay}" Margin="2"/>
+                        <RadioButton Content="导丝撤出" GroupName="Mode" Click="ModeGuideRev_Click" IsChecked="{Binding ModeGuideRevSelected, Mode=OneWay}" Margin="2"/>
                     </UniformGrid>
                 </GroupBox>
 
