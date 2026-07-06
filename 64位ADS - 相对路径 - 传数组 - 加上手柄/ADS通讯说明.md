@@ -5,12 +5,13 @@
 
 更新时间：2026-06-26
 适用工程：`64位ADS - 相对路径 - 传数组 - 加上手柄\ADS.sln`
+对应代码版本：2026-06-26 主分支（基于 `plc_io.cpp` / `ADSComm1.h` / `main.cpp` 当前状态校对）
 
 ***
 
 ## 1. 角色与拓扑
 
-上位机作为 ADS Client，倍福 PLC（TwinCAT 3，端口 851）作为 ADS Server。所有控制下发、状态回读、力采样备份都走 ADS。力反馈链路里的 ft_1/fn_1 主路径走 TCP（见 `力反馈说明.md`），ADS 提供备份采样源 + axis1/axis2 实际位置 + axis3/5/6 镜像跟随目标。
+上位机作为 ADS Client，倍福 PLC（TwinCAT 3，端口 851）作为 ADS Server。所有控制下发、状态回读、力采样备份都走 ADS。力反馈链路里的 ft_1/fn_1 主路径走 TCP（见 [力反馈说明.md §2.1](力反馈说明.md#21-tcp-采集层tcp_force_daqcpp)），ADS 提供备份采样源 + axis1/axis2 实际位置 + axis3/5/6 镜像跟随目标。
 
 ```
 [上位机 ADS.exe]
@@ -34,7 +35,7 @@
 | `ADS/Include/TcAdsAPI.h` + `TcAdsDef.h` | 倍福官方 ADS API 头文件，由 SDK 提供。 |
 | `plc_io.h/.cpp` | 业务层 I/O：定义 `AdsSymbol::*` 符号名常量、`AxisReturnAdsSymbols` 结构、`namespace plc_io` 工具函数。所有业务模块都通过 `plc_io::` 调用 ADS，不直接接触 `CADSComm`。 |
 | `control_types.h` | 定义 `AppContext`，其中 `CADSComm* ads` 作为所有读写的统一入口；另定义 `AxisReturnAdsSymbols` / `AxisReturnStatus`。 |
-| `main.cpp` L209-L307 | ADS 连接建立、PLC 应用名诊断、lambda 包装读写函数（`read_plc_state`/`read_force_sample`/`write_refer`/...）。 |
+| `main.cpp` 主循环前段（ADS 连接建立段） | `OpenComm_inside` 优先 + `OpenComm` 回退 + `app_name` 诊断 + 一系列 lambda 包装读写函数（`read_plc_state`/`read_force_sample`/`write_refer`/`request_axis_return`/...）。约在 `int main()` 内、`while(true)` 主循环之前（2026-06-26 行号约 L209-L330）。 |
 
 ## 3. 符号表（`plc_io.cpp::AdsSymbol`）
 
@@ -61,7 +62,7 @@
 | `fn_2_value` | `G.fn_2_value` | short | 读 | 第二组轴向力（仅 ADS 链路使用） |
 | `ft_2_value` | `G.ft_2_value` | short | 读 | 第二组扭矩（同上） |
 
-> 力反馈链路真正消费的是 `force_sample.fn_1_value_v` / `ft_1_value_v`，TCP_DAQ 模式下这两路被 TCP 覆盖。ADS 读取仍用于拿到 axis1/axis2 实际位置（`read_force_sample` 内顺手返回 `act_pos` 快照），见 `力反馈说明.md §2.2`。
+> 力反馈链路真正消费的是 `force_sample.fn_1_value_v` / `ft_1_value_v`，TCP_DAQ 模式下这两路被 TCP 覆盖。ADS 读取仍用于拿到 axis1/axis2 实际位置（`read_force_sample` 内顺手返回 `act_pos` 快照），见 [力反馈说明.md §2.2](力反馈说明.md#22-主循环采样maincpp-主循环步骤-15力采样节拍段)。
 
 ### 3.3 气缸/电磁阀
 
@@ -115,7 +116,7 @@
 | `gen_state` | `G.gen_state` | unsigned short | 读（诊断） | PLC 通用状态字 |
 | `app_name` | `TwinCAT_SystemInfoVarList._AppInfo.AppName` | char[64] | 读（一次性） | 当前 PLC 应用名（连接诊断） |
 
-## 4. 连接建立（`main.cpp` L209-L239）
+## 4. 连接建立（在 `main.cpp` 主循环开始之前）
 
 ```cpp
 if (ads.OpenComm_inside()) {
@@ -181,15 +182,17 @@ clear_axis_return_request(symbols)
 
 ## 6. 频率/节拍约定
 
-| 操作 | 频率 | 触发位置 |
-|---|---|---|
-| `read_plc_state` + `write_refer` | 每主循环拍 | `main.cpp` L1232 运动激活分支 |
-| `act_pos_from_left` / `refer_from_left` 读取 | 每 5 拍 | `main.cpp` L705 |
-| `estop_hold_req` 读取 | 每 10 拍 | `main.cpp` L870 |
-| `self_check_done` / `handle_reinit_req` 读取 | 每 50 拍 | `main.cpp` L1133 |
-| `axis4_manual_*` 读取 | 每 20 拍 | `main.cpp` L2133 |
-| `axis1_fast_return` / `axis6_fast_retract` / `startup_smoothing_bypass` 写 | 每拍 | `main.cpp` L2224 |
-| 气缸写入 | 每拍（控制激活或启动序列激活时） | `main.cpp` L2155 |
+> 触发位置以"主循环第 N 步"为准（步骤编号见 [项目架构总览.md §4](项目架构总览.md#4-主循环骨架maincpp)）。括号内行号是 2026-06-26 校对时的真实位置，仅作辅助定位；任何代码插入都会让行号漂移，**不要把行号当作稳定锚点**。
+
+| 操作 | 频率 | 触发位置（主循环步号 + 函数名） | 2026-06-26 行号 |
+|---|---|---|---|
+| `read_plc_state` + `write_refer` | 每主循环拍 | 步骤 11 内（运动激活分支起点 `read_plc_state()` -> 末尾 `write_refer()`） | 约 L1276、L2171 |
+| `act_pos_from_left` / `refer_from_left` 读取（ADSReadSum 两符号） | 每 5 拍 | 步骤 2（快退标志清零之后） | 约 L736-L750 |
+| `estop_hold_req` 读取 | 每 10 拍 | 步骤 4 | 约 L916 |
+| `self_check_done` / `handle_reinit_req` 读取 | 每 50 拍 | 步骤 8（自检/重同步轮询） | 约 L1179、L1213 |
+| `axis4_manual_*` 读取 | 每 20 拍 | 步骤 13（轴 4 手动控制轮询） | 约 L2180 |
+| `axis1_fast_return` / `axis6_fast_retract` / `startup_smoothing_bypass` 写 | 每拍 | 步骤 14（气缸/快退标志写入 PLC） | 约 L2268-L2270 |
+| 气缸 1/2/3/4 写 + `cylinder5_press_req` 写 | 每拍（控制激活或启动序列激活时） | 步骤 14 | 约 L2205-L2211 |
 
 降频读是为了减轻 ADS 通信负担；这些变量在 PLC 侧不会突变，降频读到的值代表"当前事实"，不会引发控制问题。
 
@@ -227,15 +230,22 @@ clear_axis_return_request(symbols)
 1. 在本文档"§10 变更日志"追加条目，注明：日期 / 变更人 / 涉及文件与函数 / 行为变化要点 / 是否影响与 PLC 的契约（需要 PLC 侧配合改吗）。
 2. 若新增 PLC 符号，更新 §3 符号表 + `plc_io.cpp::AdsSymbol` 常量定义。
 3. 若新增 axisN_return FB 实例，更新 §3.4 + 在 `plc_io.cpp` 末尾添加对应 `AxisReturnAdsSymbols` 常量。
-4. 若改了 `sync_*` 内部的步骤顺序，更新 §5.3 + 同步告知"运动流程说明.md"。
+4. 若改了 `sync_*` 内部的步骤顺序，更新 §5.3 + 同步告知 [运动流程说明.md §3](运动流程说明.md#3-窗口与跟随基准)（窗口/同步流程的契约）。
 5. 若改了连接拓扑（如新增冗余 NetId、TLS），更新 §1 拓扑图 + §4 连接建立。
 
 ## 10. 变更日志
 
 ### 2026-06-26 — 文档初版（无代码变更）
 - 作者：AI（Claude，应用户要求梳理）。
-- 内容：基于现网代码（`ADSComm1.h`、`plc_io.cpp/.h`、`control_types.h` 中的 `AppContext`、`main.cpp` L209-L307 ADS 段、L1133-L1194 自检/重同步段、L2133-L2150 axis4 诊断段）编写第一版说明。
+- 内容：基于现网代码（`ADSComm1.h`、`plc_io.cpp/.h`、`control_types.h` 中的 `AppContext`、`main.cpp` 主循环前段的 ADS 连接与 lambda 包装、主循环步骤 4/8/13 的自检/重同步/axis4 诊断段）编写第一版说明。
 - 已记录 §8 四处已知点（无断线重连、ADS 力采样备份未启用、app_name 仅启动时验证、from_left 读取降频）。
+- 未触碰任何源文件。
+
+### 2026-06-26 — 文档体系评议后修订（无代码变更）
+- 作者：AI（Claude，应用户要求按多 Agent 评议结论修订）。
+- 修复硬伤 2：§6 频率表的行号引用全部改为"主循环步号 + 函数名（2026-06-26 行号约 LXXXX）"形式；§2 主要源文件表、§4 章节标题、§10 变更日志初版条目里的硬行号引用同步替换为"主循环前段""主循环步号 N"锚点描述。步号定义见 [项目架构总览.md §4](项目架构总览.md#4-主循环骨架maincpp-主循环-whiletrue)。
+- 改进 A：补充跨文档锚点链接（§1 力反馈主路径引用、§3.2 力反馈 §2.2 跳转、§9.4 运动流程 §3 同步告知）。
+- 改进 D：头部新增"对应代码版本"字段。
 - 未触碰任何源文件。
 
 ### （此处持续追加）

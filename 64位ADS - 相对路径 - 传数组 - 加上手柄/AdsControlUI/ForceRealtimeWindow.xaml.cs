@@ -157,9 +157,14 @@ namespace AdsControlUI
 
         private void DrawAxis(double left, double top, double bottom, double plotW, double plotH)
         {
-            AddLine(left, top, left, top + plotH, Brushes.Gray, 1);
-            AddLine(left, top + plotH, left + plotW, top + plotH, Brushes.Gray, 1);
-            AddLine(left, top + plotH * 0.5, left + plotW, top + plotH * 0.5, Brushes.LightGray, 1);
+            // 主题色：轴线用深灰蓝、中线用浅边色，与浅色临床主题协调
+            var axisBrush = new SolidColorBrush(Color.FromRgb(0xCB, 0xD5, 0xE1)); // BorderStrong
+            var midBrush = new SolidColorBrush(Color.FromRgb(0xE2, 0xE8, 0xF0));   // Border
+            axisBrush.Freeze();
+            midBrush.Freeze();
+            AddLine(left, top, left, top + plotH, axisBrush, 1);
+            AddLine(left, top + plotH, left + plotW, top + plotH, axisBrush, 1);
+            AddLine(left, top + plotH * 0.5, left + plotW, top + plotH * 0.5, midBrush, 1);
         }
 
         private void AddLine(double x1, double y1, double x2, double y2, Brush brush, double thickness)

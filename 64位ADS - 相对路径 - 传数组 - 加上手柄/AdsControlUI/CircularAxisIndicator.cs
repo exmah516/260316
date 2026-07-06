@@ -36,21 +36,23 @@ namespace AdsControlUI
             Point center = new Point(ActualWidth / 2.0, ActualHeight / 2.0);
             double normalized = NormalizeDegrees(Angle);
 
-            var trackPen = new Pen(new SolidColorBrush(Color.FromRgb(218, 224, 231)), stroke);
-            var activePen = new Pen(new SolidColorBrush(Color.FromRgb(46, 160, 67)), stroke)
+            // 主题色（LightClinical.xaml）：轨道用浅边色，活动弧用状态绿，
+            // 刻度用次要/主要文本灰，指针与中心用医疗蓝深色，尖端标记用强调蓝。
+            var trackPen = new Pen(new SolidColorBrush(Color.FromRgb(0xE2, 0xE8, 0xF0)), stroke);
+            var activePen = new Pen(new SolidColorBrush(Color.FromRgb(0x22, 0xC5, 0x5E)), stroke)
             {
                 StartLineCap = PenLineCap.Round,
                 EndLineCap = PenLineCap.Round
             };
-            var tickPen = new Pen(new SolidColorBrush(Color.FromRgb(96, 109, 125)), 1.0);
-            var majorTickPen = new Pen(new SolidColorBrush(Color.FromRgb(64, 78, 96)), 1.6);
-            var needlePen = new Pen(new SolidColorBrush(Color.FromRgb(31, 76, 125)), 2.4)
+            var tickPen = new Pen(new SolidColorBrush(Color.FromRgb(0x94, 0xA3, 0xB8)), 1.0);
+            var majorTickPen = new Pen(new SolidColorBrush(Color.FromRgb(0x47, 0x55, 0x69)), 1.6);
+            var needlePen = new Pen(new SolidColorBrush(Color.FromRgb(0x03, 0x69, 0xA1)), 2.4)
             {
                 StartLineCap = PenLineCap.Round,
                 EndLineCap = PenLineCap.Round
             };
-            var centerBrush = new SolidColorBrush(Color.FromRgb(31, 76, 125));
-            var markerBrush = new SolidColorBrush(Color.FromRgb(46, 160, 67));
+            var centerBrush = new SolidColorBrush(Color.FromRgb(0x03, 0x69, 0xA1));
+            var markerBrush = new SolidColorBrush(Color.FromRgb(0x0E, 0xA5, 0xE9));
 
             drawingContext.DrawEllipse(null, trackPen, center, radius, radius);
             if (normalized > 0.01)
