@@ -31,6 +31,32 @@
 | `G.SetPointGenDisable_output[1..7]` | `ARRAY[1..7] OF ST_McOutputs` | Disable FB 输出 |
 | `G.move_jog[1..7]` | `ARRAY[1..7] OF MC_Jog` | 历史遗留，当前主链路未使用 |
 
+### 2.1.1 定位臂 5 轴独立点动变量
+
+这些变量是 2026-07-06 新增的独立 ADS 入口，只服务新增定位臂 5 轴。它们不改变原 `G.axis[1..7]`、`G.refer[1..7]`、`G.Act_pos[1..7]` 等介入机器人 7 轴契约。
+
+| 变量 | 类型 | 方向 | 说明 |
+|---|---|---|---|
+| `G.arm_axis[1..5]` | `ARRAY[1..5] OF AXIS_REF` | PLC 内部 / TwinCAT 链接 | 定位臂 NC Axis 1..5 的 PLC 轴引用 |
+| `G.arm_manual_enable` | `BOOL` | 上位机写 | 定位臂手动点动总使能；FALSE 时任意 jog 请求都不会运动 |
+| `G.arm_enable_req[1..5]` | `ARRAY[1..5] OF BOOL` | 上位机写 | 对应轴 MC_Power 使能请求 |
+| `G.arm_reset_req[1..5]` | `ARRAY[1..5] OF BOOL` | 上位机写，PLC 消费后清零 | 对应轴 MC_Reset 请求；Done/Error 后 PLC 自动写回 FALSE |
+| `G.arm_jog_pos_req[1..5]` | `ARRAY[1..5] OF BOOL` | 上位机写 | 正向点动按钮请求，建议 UI 按下 TRUE、松开 FALSE |
+| `G.arm_jog_neg_req[1..5]` | `ARRAY[1..5] OF BOOL` | 上位机写 | 反向点动按钮请求，建议 UI 按下 TRUE、松开 FALSE |
+| `G.arm_jog_velocity[1..5]` | `ARRAY[1..5] OF LREAL` | 上位机可写 | 点动速度，默认 `5.0`，单位跟随 NC Axis |
+| `G.arm_jog_acc[1..5]` / `G.arm_jog_dec[1..5]` | `ARRAY[1..5] OF LREAL` | 上位机可写 | 点动加速度/减速度，默认 `50.0 / 50.0` |
+| `G.arm_jog_jerk[1..5]` | `ARRAY[1..5] OF LREAL` | 上位机可写 | 点动 jerk，默认 `500.0` |
+| `G.arm_power_output[1..5]` | `ARRAY[1..5] OF ST_McOutputs` | PLC 写，上位机可读 | 定位臂 MC_Power 输出快照 |
+| `G.arm_reset_output[1..5]` | `ARRAY[1..5] OF ST_McOutputs` | PLC 写，上位机可读 | 定位臂 MC_Reset 输出快照 |
+| `G.arm_act_pos[1..5]` | `ARRAY[1..5] OF LREAL` | PLC 写，上位机读 | 定位臂实际位置，来自 `G.arm_axis[i].NcToPlc.ActPos` |
+| `G.arm_act_vel[1..5]` | `ARRAY[1..5] OF LREAL` | PLC 写，上位机读 | 定位臂实际速度，来自 `G.arm_axis[i].NcToPlc.ActVelo` |
+| `G.arm_motion_busy[1..5]` | `ARRAY[1..5] OF BOOL` | PLC 写，上位机读 | 对应轴正在点动或停止处理中 |
+| `G.arm_motion_done[1..5]` | `ARRAY[1..5] OF BOOL` | PLC 写，上位机读 | 对应轴已停止且无错误 |
+| `G.arm_motion_error[1..5]` | `ARRAY[1..5] OF BOOL` | PLC 写，上位机读 | 对应轴点动/上电/复位或轴状态错误 |
+| `G.arm_motion_error_id[1..5]` | `ARRAY[1..5] OF UDINT` | PLC 写，上位机读 | 定位臂错误码，优先来自运动/上电/复位 FB |
+| `G.arm_cmd_dir[1..5]` | `ARRAY[1..5] OF SINT` | PLC 写，上位机读 | 当前命令方向：`-1` 反向、`0` 停止、`1` 正向 |
+| `G.arm_cmd_conflict[1..5]` | `ARRAY[1..5] OF BOOL` | PLC 写，上位机读 | 正反向同时请求时置 TRUE；若正在运动则先停止 |
+
 ### 2.2 顶层控制变量
 
 | 变量 | 类型 | 初值 | 说明 |
@@ -184,6 +210,11 @@ END_STRUCT
 | `G.axis4_fwd_req` / `G.axis4_rev_req` | `BOOL` | 同名 | 每 20 拍轮询写 |
 | `G.axisN_return_cmd.Req` + `TargetAbs/Vel/Acc/Dec/Jerk` | `BOOL` + `LREAL×5` | `G.return_cmd[N]` | 触发时写，完成后清 Req |
 | `G.handle_reinit_req` | `BOOL` | 同名 | 读后清零（写 FALSE） |
+| `G.arm_manual_enable` | `BOOL` | 同名 | 定位臂手动点动总使能，按需写 |
+| `G.arm_enable_req` | `BOOL[5]` | `G.arm_enable_req[1..5]` | 定位臂上电请求，按需写 |
+| `G.arm_reset_req` | `BOOL[5]` | `G.arm_reset_req[1..5]` | 定位臂复位请求，触发后由 PLC 消费清零 |
+| `G.arm_jog_pos_req` / `G.arm_jog_neg_req` | `BOOL[5]` | 同名 | 定位臂正/反向点动按钮请求，按下 TRUE、松开 FALSE |
+| `G.arm_jog_velocity/acc/dec/jerk` | `double[5]` | 同名 | 定位臂点动参数，默认值可按需覆盖 |
 
 **PLC → 上位机（读取）**
 
@@ -201,6 +232,12 @@ END_STRUCT
 | `G.axis4_manual_busy/error/error_id` | `BOOL×2 + UDINT` | 同名 | 每 20 拍 |
 | `G.ft_1/fn_1/fn_2/ft_2_value` | `INT` | 同名 | 按力采样节拍（随 `read_force_sample`） |
 | `G.gen_state` | `WORD` | 同名 | 诊断用，不定时 |
+| `G.arm_power_output` / `G.arm_reset_output` | `ST_McOutputs[5]` | 同名 | 定位臂诊断，按需读 |
+| `G.arm_act_pos` / `G.arm_act_vel` | `double[5]` | 同名 | 定位臂实际位置/速度，按需读 |
+| `G.arm_motion_busy/done/error/error_id` | `BOOL[5] / BOOL[5] / BOOL[5] / UDINT[5]` | 同名 | 定位臂点动状态，按需读 |
+| `G.arm_cmd_dir` / `G.arm_cmd_conflict` | `SINT[5] / BOOL[5]` | 同名 | 定位臂命令方向与正反向冲突状态，按需读 |
+
+新增定位臂符号采用按需通信策略：旧上位机继续只读写原 7 轴符号时，PLC 只是多暴露符号表，不会主动产生额外 ADS 流量；未来 UI 只有在显示或操作定位臂时再读写 `G.arm_*`。
 
 ### 4.2 PLC 侧保证
 
@@ -209,6 +246,7 @@ END_STRUCT
 3. **`G.estop_hold_req` 在以下时刻强制为 TRUE**：`init`（上电期间）、`_err`、`_clear_err`（200ms 前）、`handle` 的 `NOT init_done` 阶段、`handle` 的 `hold_active` 阶段。上位机应当把此标志作为"禁止手柄推动"的门控。
 4. **`G.return_cmd[i].Req` 上位机写 TRUE 后，必须等到 Done/Error 其中之一置位，再写 FALSE**。不允许在 Busy 期间重写 TRUE（见 §3）。
 5. **`G.cylinder5_value` 上位机不应直接写**；通过 `G.cylinder5_press_req` 写布尔量，由 PLC 每周期映射。直接写 `cylinder5_value` 会在下一周期被 PLC 覆盖。
+6. **定位臂变量不参与原 `G.gen_state` 状态机**；`G.arm_manual_enable=FALSE` 或对应轴未上电时，`G.arm_jog_*` 请求不会产生运动。正反向同时为 TRUE 时 `G.arm_cmd_conflict[i]=TRUE`，PLC 停止该轴并拒绝启动新运动。
 
 ### 4.3 ADS 连接参数
 
@@ -245,6 +283,12 @@ PLC 侧无 ADS 配置文件，由 TwinCAT XAR 路由表管理。
 6. 在本文档"§7 变更日志"追加条目，注明：日期 / 变更人 / 变量名 / 改动类型 / 是否需要上位机同步修改。
 
 ## 7. 变更日志
+
+### 2026-07-06 — 新增定位臂 5 轴 ADS 符号
+- 作者：AI（Codex，应用户计划实施）。
+- 变量：新增 `G.arm_axis[1..5]`、`G.arm_manual_enable`、`G.arm_enable_req/reset_req/jog_pos_req/jog_neg_req`、`G.arm_jog_velocity/acc/dec/jerk`、`G.arm_power_output/reset_output`、`G.arm_act_pos/vel`、`G.arm_motion_*`、`G.arm_cmd_dir/conflict`。
+- 改动类型：新增变量，不扩展原 `G.refer[1..7]`、`G.Act_pos[1..7]`、`G.init_pos[1..7]`、`G.return_cmd[1..7]` 等 7 轴接口。
+- 上位机同步：旧上位机无需修改；未来 UI 可按需添加定位臂按钮和状态读取。新增符号不读写时不会增加 ADS 通信负载。
 
 ### 2026-07-06 — 文档初版（无代码变更）
 - 作者：AI（Claude，应用户要求梳理）。

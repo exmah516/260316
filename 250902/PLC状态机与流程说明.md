@@ -6,7 +6,7 @@
 
 更新时间：2026-07-06
 适用工程：`250902\Untitled2`
-对应代码版本：2026-07-06 主分支（基于 `MAIN.TcPOU` / `init.TcPOU` / `SelfCheck.TcPOU` / `handle.TcPOU` / `err.TcPOU` / `reset.TcPOU` / `clear_err.TcPOU` 当前状态校对）
+对应代码版本：2026-07-06 主分支（基于 `MAIN.TcPOU` / `ArmManual.TcPOU` / `init.TcPOU` / `SelfCheck.TcPOU` / `handle.TcPOU` / `err.TcPOU` / `reset.TcPOU` / `clear_err.TcPOU` 当前状态校对）
 
 ***
 
@@ -23,6 +23,7 @@ VAR
     err_        : err;
     reset_      : reset;
     self_check_ : SelfCheck;
+    arm_manual_ : ArmManual;
     i           : INT;
 END_VAR
 ```
@@ -38,12 +39,15 @@ MAIN 是 PLC 唯一的顶层 `PROGRAM`，每个任务周期（1 ms）执行以�
       G.handle_reinit_done := FALSE;
       G.estop_hold_req := TRUE;
       G.selfcheck_reset_req := TRUE;
+      G.arm_manual_enable := FALSE;
+      清 arm_enable/reset/jog 请求
       清 SetPointGenEnable/Disable/axis_Reset 的 Execute
    END_IF
-3) POWERED();          -- Action：对 7 轴调用 MC_Power (FBD)
-4) SETPOSITIONGEN();   -- Action：对 7 轴调用 MC_ExtSetPointGenEnable/Disable (FBD)
-5) RESETED();          -- Action：对 7 轴调用 MC_Reset (FBD)
-6) CASE G.gen_state OF
+3) arm_manual_();      -- 定位臂 5 轴独立点动，不参与 gen_state
+4) POWERED();          -- Action：对原机器人 7 轴调用 MC_Power (FBD)
+5) SETPOSITIONGEN();   -- Action：对原机器人 7 轴调用 MC_ExtSetPointGenEnable/Disable (FBD)
+6) RESETED();          -- Action：对原机器人 7 轴调用 MC_Reset (FBD)
+7) CASE G.gen_state OF
       _init:       init_();
       _self_check: self_check_();
       _handle:     handle1_();
@@ -63,7 +67,22 @@ MAIN 是 PLC 唯一的顶层 `PROGRAM`，每个任务周期（1 ms）执行以�
 
 **关键理解**：这三个 Action 每周期都会被调用（不受状态影响），但**是否触发**由各 POU 通过设置 `.Execute` 决定。这样 POU 只需要写标志位、不需要自己实例化 FB。
 
-### 1.3 状态跳转矩阵
+### 1.3 定位臂独立调度（`ArmManual.TcPOU`）
+
+`ArmManual` 是新增定位臂 5 轴的独立功能块，放在 `MAIN` 首周期初始化之后、原 7 轴 `POWERED/SETPOSITIONGEN/RESETED` Action 之前调用。它只操作 `G.arm_axis[1..5]` 和 `G.arm_*` 变量，不读写 `G.refer[1..7]`、`G.Act_pos[1..7]`、`G.return_cmd[1..7]`，也不改变 `G.gen_state`。
+
+每周期执行逻辑：
+
+1. 调用 `G.arm_axis[i]()` 并刷新 `G.arm_act_pos[i] / G.arm_act_vel[i]`。
+2. 按 `G.arm_enable_req[i]` 调用 `MC_Power`，输出到 `G.arm_power_output[i]`。
+3. 对 `G.arm_reset_req[i]` 采用消费式命令：请求置位后触发 `MC_Reset`，完成或报错后 PLC 自动清 `G.arm_reset_req[i]`。
+4. 只有 `G.arm_manual_enable=TRUE`、对应轴已上电、无 reset busy、无命令冲突时才允许 `MC_MoveVelocity`。
+5. `G.arm_jog_pos_req[i]` 与 `G.arm_jog_neg_req[i]` 同时为 TRUE 时，置 `G.arm_cmd_conflict[i]=TRUE`，若正在运动则先 `MC_Stop`。
+6. 点动方向变化时先停止，再在后续周期启动反向运动；松开按钮时撤销 MoveVelocity 并执行 Stop。
+
+定位臂首版不做自动回零、自检、软限位和正运动学；机械限位/驱动限位由 NC/驱动配置兜底。定位臂错误通过 `G.arm_motion_error[] / G.arm_motion_error_id[]` 单独报告，不切换原介入机器人主状态机。
+
+### 1.4 状态跳转矩阵
 
 | 当前态 | 触发条件 | 目标态 | 触发方 |
 |---|---|---|---|
@@ -675,10 +694,10 @@ END_FOR
 
 ## 11. 修改状态机与流程代码时的维护要求
 
-任何修改 `init.TcPOU` / `SelfCheck.TcPOU` / `handle.TcPOU` / `err.TcPOU` / `clear_err.TcPOU` / `reset.TcPOU` / `MAIN.TcPOU` / `state.TcDUT` 的工作，**必须**：
+任何修改 `init.TcPOU` / `SelfCheck.TcPOU` / `handle.TcPOU` / `ArmManual.TcPOU` / `err.TcPOU` / `clear_err.TcPOU` / `reset.TcPOU` / `MAIN.TcPOU` / `state.TcDUT` 的工作，**必须**：
 
 1. 在本文档"§12 变更日志"追加条目，注明：日期 / 变更人 / 涉及文件与 POU / 行为变化要点 / 是否影响与上位机的契约。
-2. 若改了状态跳转条件或加了新状态，更新 §1.3 状态跳转矩阵。
+2. 若改了状态跳转条件或加了新状态，更新 §1.4 状态跳转矩阵。
 3. 若改了 SelfCheck 参数（速度、目标、错峰、判据），更新 §3 + `PLC项目说明.md §7` 参数速查。
 4. 若改了 handle 平滑参数（`v_limit / traj_wn / traj_vmax / traj_amax / avg_window_*`），更新 §4.4 / §9.2。
 5. 若改了计划回退 FB 状态机（`return_state`），更新 §4.6 + `../64位ADS - 相对路径 - 传数组 - 加上手柄/ADS通讯说明.md §5.2`。
@@ -686,6 +705,13 @@ END_FOR
 7. 若改了错误恢复策略（`err` / `clear_err`），更新 §5 / §6 + 说明是否影响上位机的重同步路径（`sync_all` / `sync_axis1` / `sync_axis6`）。
 
 ## 12. 变更日志
+
+### 2026-07-06 — 新增定位臂独立点动流程
+- 作者：AI（Codex，应用户计划实施）。
+- 涉及文件：`MAIN.TcPOU`、`ArmManual.TcPOU`、`G.TcGVL`。
+- 行为变化：`MAIN` 首周期清空定位臂 enable/reset/jog 请求，并在原 7 轴 Actions 与主状态机之前调用 `arm_manual_()`；`ArmManual` 每周期负责定位臂 5 轴上电、复位、点动、停止、方向冲突处理和状态上报。
+- 与原状态机关系：定位臂不进入 `_init/_self_check/_handle/_err` 链路，定位臂错误不切换 `G.gen_state`。
+- 上位机契约：原 7 轴 ADS 符号不变；新增 `G.arm_*` 符号供未来 UI 按需读写。
 
 ### 2026-07-06 — 文档初版（无代码变更）
 - 作者：AI（Claude，应用户要求梳理）。

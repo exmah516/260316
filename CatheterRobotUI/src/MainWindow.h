@@ -50,6 +50,7 @@ private:
     QWidget* buildAxisPanel();
     QWidget* buildModePanel();
     QWidget* buildParamPanel();
+    QWidget* buildArmPanel();
     QWidget* buildForcePanel();
     QWidget* buildButtonPanel();
     void updateStatusIndicator(QLabel* label, bool connected, const QString& text);
@@ -82,6 +83,20 @@ private:
     QComboBox*      combo_speed_     = nullptr;
     QSlider*        slider_sens_     = nullptr;
     QLabel*         lbl_sens_val_    = nullptr;
+
+    // ── 定位臂面板 ──
+    QPushButton*     btn_arm_manual_enable_ = nullptr;
+    QPushButton*     btn_arm_enable_[5] = {};
+    QPushButton*     btn_arm_reset_[5] = {};
+    QPushButton*     btn_arm_jog_neg_[5] = {};
+    QPushButton*     btn_arm_jog_pos_[5] = {};
+    QDoubleSpinBox*  spin_arm_vel_[5] = {};
+    QDoubleSpinBox*  spin_arm_acc_[5] = {};
+    QDoubleSpinBox*  spin_arm_dec_[5] = {};
+    QDoubleSpinBox*  spin_arm_jerk_[5] = {};
+    QLabel*          lbl_arm_pos_[5] = {};
+    QLabel*          lbl_arm_vel_[5] = {};
+    QLabel*          lbl_arm_status_[5] = {};
 
     // ── 力面板 ──
     ForcePlotWidget* force_plot_     = nullptr;

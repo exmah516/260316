@@ -6,7 +6,7 @@
 
 更新时间：2026-07-06
 适用工程：`250902\250902.sln`（PLC 项目：`250902\Untitled2`）
-对应代码版本：2026-07-06 主分支（基于 `MAIN.TcPOU` / `SelfCheck.TcPOU` / `handle.TcPOU` / `init.TcPOU` / `reset.TcPOU` / `err.TcPOU` / `clear_err.TcPOU` / `G.TcGVL` / `state.TcDUT` / `ST_AxisPlannedReturnCmd.TcDUT` 当前状态校对）
+对应代码版本：2026-07-06 主分支（基于 `MAIN.TcPOU` / `ArmManual.TcPOU` / `SelfCheck.TcPOU` / `handle.TcPOU` / `init.TcPOU` / `reset.TcPOU` / `err.TcPOU` / `clear_err.TcPOU` / `G.TcGVL` / `state.TcDUT` / `ST_AxisPlannedReturnCmd.TcDUT` 当前状态校对）
 
 ***
 
@@ -14,12 +14,13 @@
 
 血管介入手术机器人 PLC 侧程序。承担：
 
-- 7 个 EtherCAT 伺服轴的**使能、寻参自检、错误处理、外部设定点输出**；
+- 原介入机器人 7 个 EtherCAT 伺服轴的**使能、寻参自检、错误处理、外部设定点输出**；
+- 新增定位臂 5 个 NC 轴的**独立上电、复位、点动和状态上报**；
 - 5 个电缸（含 Y 阀电缸）与 2 组力传感器 IO 的**总线 I/O 映射**；
 - 与上位机（`64位ADS - 相对路径 - 传数组 - 加上手柄\ADS.exe`）之间通过 **ADS 通讯**交换 refer/actual 位置、电缸控制量、握手位、力采样电压；
 - 顶层运行状态由**主状态机** `G.gen_state`（`state.TcDUT`）调度：上电 → 自检 → 正常跟随 → 故障/复位。
 
-入口 POU：`Untitled2\POUs\MAIN.TcPOU`。任务周期由 `PlcTask.TcTTO` 决定（1 ms 循环）。
+入口 POU：`Untitled2\POUs\MAIN.TcPOU`。任务周期由 `PlcTask.TcTTO` 决定（1 ms 循环）。定位臂独立点动由 `Untitled2\POUs\ArmManual.TcPOU` 执行，不进入原介入机器人 `_init/_self_check/_handle` 主状态机。
 
 PLC 侧**不直接决定运动模式**（导管/导丝/协同、启动准备阶段、爬行状态机等全部在上位机）；PLC 只负责：
 1. 拿到 `G.refer[]` 后按速度限幅 + 滑动平均 + 二阶滤波形成实际设定点；
@@ -70,7 +71,16 @@ PLC 侧**不直接决定运动模式**（导管/导丝/协同、启动准备阶�
 
 ## 3. 硬件对象与轴映射
 
-7 个 NC 轴全部由 `G.axis[1..7]` 承载。此外还有 1 个不属于 PLC 轴控的**物理夹持底座**，其上装有电缸1。
+当前 TwinCAT 系统项目共有 12 个 NC Axis。原介入机器人业务轴仍只由 `G.axis[1..7]` 承载；新增定位臂由 `G.arm_axis[1..5]` 承载，独立于原主状态机。此外还有 1 个不属于 PLC 轴控的**物理夹持底座**，其上装有电缸1。
+
+### 3.0 TwinCAT 12 轴物理分组
+
+| NC Axis | PLC 轴引用 | 物理分组 | 说明 |
+|---|---|---|---|
+| Axis 1..5 | `G.arm_axis[1..5]` | 新增定位臂 | 首版仅提供上电、复位、正/反向点动和状态上报；不做自动回零、自检、软限位和正运动学 |
+| Axis 6..12 | `G.axis[1..7]` | 原血管介入机器人 | 保持原业务轴 1..7 语义和 ADS 契约；`G.refer[1..7]`、`G.Act_pos[1..7]` 等不扩展到 12 轴 |
+
+`250902.tsproj` 中仅恢复 PLC `AXIS_REF` 与 NC Axis 的双向链接：`*.NcToPlc ↔ Axis*.ToPlc`、`*.PlcToNc ↔ Axis*.FromPlc`。EtherCAT Drive 到 NC Axis 的 I/O 映射不因本次改造而改变。
 
 ### 3.1 轴分工
 
@@ -125,6 +135,7 @@ PLC 侧**不直接决定运动模式**（导管/导丝/协同、启动准备阶�
 │   │   │   └── ST_AxisPlannedReturnCmd.TcDUT  # 计划回退命令结构
 │   │   └── POUs/
 │   │       ├── MAIN.TcPOU             # 主程序（状态调度 + Actions）
+│   │       ├── ArmManual.TcPOU        # 定位臂 5 轴独立上电/复位/点动
 │   │       ├── init.TcPOU             # 上电初始化
 │   │       ├── SelfCheck.TcPOU        # 自检寻参
 │   │       ├── handle.TcPOU           # ★ 正常跟随控制
@@ -156,8 +167,10 @@ PLC 侧**不直接决定运动模式**（导管/导丝/协同、启动准备阶�
 | 爬行状态机、窗口重建、快退触发 | 上位机 | `G.axisN_return_cmd.*` + `G.axis1_fast_return` / `G.axis6_fast_retract` |
 | 启动准备序列 | 上位机 | `G.startup_smoothing_bypass` + `G.cylinderN_value` + `G.v_limit` |
 | 力反馈标定、映射、下发手柄 | 上位机 | — |
-| 目标位置计算（相对坐标） | 上位机 | `G.refer[7]` |
+| 目标位置计算（相对坐标） | 上位机 | `G.refer[1..7]` |
+| 定位臂点动按钮与参数 | 上位机 | `G.arm_manual_enable` + `G.arm_enable_req[]` + `G.arm_jog_pos_req[]` / `G.arm_jog_neg_req[]` + `G.arm_jog_velocity/acc/dec/jerk[]` |
 | 轴使能（MC_Power） | PLC | 内部 |
+| 定位臂上电/复位/点动执行 | PLC | `ArmManual.TcPOU` + `G.arm_*` 状态 |
 | 寻参自检（左限位） | PLC | 记录 `G.leftlimit[]`、置 `G.self_check_done` |
 | refer → 设定点的**滑动平均 + 速度限幅 + 二阶滤波** | PLC | `handle` POU 内部 |
 | 计划回退运动执行（MC_MoveAbsolute） | PLC | `handle` POU 内 `fb_return_move_abs` |
@@ -204,6 +217,21 @@ G.axisN_return_cmd.Req := TRUE   ─►    return_state = 10 → 20 → 30
 ```
 
 计划回退阶段 `G.axis1_fast_return` / `G.axis6_fast_retract` 为 TRUE 时，PLC 的 `handle` POU 走 `return_handoff_bypass` 分支：`avg_window := 1`、`ramp_counter := 0`、跳过二阶滤波，让 refer 直接透传给设定点发生器（末端仍受 `MC_MoveAbsolute` 主导，refer 只是防止基准漂移）。
+
+### 5.3 定位臂点动链路
+
+```
+上位机按钮/调试界面                    PLC 任务 (1ms)
+──────────────────────                ────────────────
+G.arm_manual_enable := TRUE
+G.arm_enable_req[i] := TRUE   ── ADS ─► ArmManual:
+G.arm_jog_pos_req[i] 按住              ├─ MC_Power / MC_Reset
+或 G.arm_jog_neg_req[i] 按住            ├─ MC_MoveVelocity
+                                       ├─ 冲突时 MC_Stop
+                                       └─ 更新 arm_act_pos / arm_motion_*
+```
+
+定位臂错误只写入 `G.arm_motion_error[] / G.arm_motion_error_id[]`，不切换 `G.gen_state`。新增 `G.arm_*` ADS 符号本身不会拖慢旧 7 轴通信；只有上位机主动按需读写这些符号时才会产生对应 ADS 流量。
 
 ## 6. 顶层状态机导航图
 
@@ -256,6 +284,9 @@ G.axisN_return_cmd.Req := TRUE   ─►    return_state = 10 → 20 → 30
 | 二阶滤波频率 | `traj_wn = 60.0 rad/s` | `handle.TcPOU` | 二阶带宽 |
 | 二阶滤波使能 | `[T, F, T, F, T, T, F]` | `handle.TcPOU::traj_enable` | 仅 4 个平移轴启用 |
 | axis4 手动速度 | `30 deg/s` | `handle.TcPOU::axis4_manual_velocity` | 球囊推进速度 |
+| 定位臂点动默认速度 | `5.0` | `G.arm_jog_velocity[1..5]` | 单位跟随各 NC Axis 配置，可由 ADS/UI 覆盖 |
+| 定位臂点动默认加/减速度 | `50.0 / 50.0` | `G.arm_jog_acc/dec[1..5]` | 单位跟随各 NC Axis 配置 |
+| 定位臂点动默认 jerk | `500.0` | `G.arm_jog_jerk[1..5]` | 单位跟随各 NC Axis 配置 |
 
 ## 8. 文档索引
 
@@ -286,6 +317,13 @@ G.axisN_return_cmd.Req := TRUE   ─►    return_state = 10 → 20 → 30
 5. **新增 POU 或改状态枚举**：`state.TcDUT` + `PLC状态机与流程说明.md §2` 状态跳转矩阵同步。
 
 ## 10. 变更日志
+
+### 2026-07-06 — 12 轴可用性改造
+- 作者：AI（Codex，应用户计划实施）。
+- 内容：新增定位臂 5 轴独立点动链路，原介入机器人业务轴 1..7 的 ADS 契约保持不变。
+- 轴映射：`G.arm_axis[1..5]` 链接 NC Axis 1..5；`G.axis[1..7]` 链接 NC Axis 6..12。
+- 新增 `ArmManual.TcPOU`，负责定位臂上电、复位、正/反向点动、冲突停止与状态上报，不进入 `_init/_self_check/_handle` 主状态机。
+- 新增 ADS 符号集中在 `G.arm_*`；旧上位机若不读写这些符号，旧 7 轴高频通信路径不受影响。
 
 ### 2026-07-06 — 文档初版（无代码变更）
 - 作者：AI（Claude，应用户要求梳理）。

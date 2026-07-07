@@ -122,12 +122,46 @@ private:
         kCyl1Open, kCyl2Clamp, kCyl3FollowRelease, kCyl4FollowRelease
     };
 
+    bool arm_manual_enable_ = true;
+    std::array<bool, 5> arm_enable_req_ = {};
+    std::array<bool, 5> arm_reset_pending_ = {};
+    std::array<bool, 5> arm_jog_pos_req_ = {};
+    std::array<bool, 5> arm_jog_neg_req_ = {};
+    std::array<double, 5> arm_jog_velocity_ = { 5.0, 5.0, 5.0, 5.0, 5.0 };
+    std::array<double, 5> arm_jog_acc_ = { 50.0, 50.0, 50.0, 50.0, 50.0 };
+    std::array<double, 5> arm_jog_dec_ = { 50.0, 50.0, 50.0, 50.0, 50.0 };
+    std::array<double, 5> arm_jog_jerk_ = { 500.0, 500.0, 500.0, 500.0, 500.0 };
+    bool arm_manual_dirty_ = true;
+    bool arm_enable_dirty_ = true;
+    bool arm_jog_pos_dirty_ = true;
+    bool arm_jog_neg_dirty_ = true;
+    bool arm_params_dirty_ = true;
+
+    std::array<bool, 5> arm_power_done_ = {};
+    std::array<bool, 5> arm_power_error_ = {};
+    std::array<unsigned long, 5> arm_power_error_id_ = {};
+    std::array<bool, 5> arm_reset_done_ = {};
+    std::array<bool, 5> arm_reset_busy_ = {};
+    std::array<bool, 5> arm_reset_error_ = {};
+    std::array<unsigned long, 5> arm_reset_error_id_ = {};
+    std::array<double, 5> arm_act_pos_ = {};
+    std::array<double, 5> arm_act_vel_ = {};
+    std::array<bool, 5> arm_motion_busy_ = {};
+    std::array<bool, 5> arm_motion_done_ = {};
+    std::array<bool, 5> arm_motion_error_ = {};
+    std::array<unsigned long, 5> arm_motion_error_id_ = {};
+    std::array<signed char, 5> arm_cmd_dir_ = {};
+    std::array<bool, 5> arm_cmd_conflict_ = {};
+
     DWORD last_rate_tick_ = 0;
     int rate_counter_ = 0;
     double current_hz_ = 0.0;
 
     bool readPlcState();
+    bool readArmState();
     bool writeRefer();
+    bool writeArmCommands();
+    void stopArmMotionRequests();
     void loadPosFromActual();
     void applyUICommands(const UIToControl& cmd);
     void applyCmdForce(double cmd_force);

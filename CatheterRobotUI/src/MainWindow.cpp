@@ -123,6 +123,9 @@ void MainWindow::buildUI()
     mid->addLayout(right_col, 2);
     root->addLayout(mid, 2);
 
+    // 定位臂 5 轴手动控制
+    root->addWidget(buildArmPanel());
+
     // 底部: 力面板 + 按钮
     auto* bot = new QHBoxLayout();
     bot->addWidget(buildForcePanel(), 3);
@@ -257,6 +260,158 @@ QWidget* MainWindow::buildParamPanel()
     return group;
 }
 
+// ── 区域五: 定位臂 5 轴手动点动 ──
+QWidget* MainWindow::buildArmPanel()
+{
+    auto* group = new QGroupBox("定位臂手动控制");
+    auto* lay = new QGridLayout(group);
+    lay->setHorizontalSpacing(6);
+    lay->setVerticalSpacing(4);
+
+    btn_arm_manual_enable_ = new QPushButton("手动使能: 开");
+    btn_arm_manual_enable_->setCheckable(true);
+    btn_arm_manual_enable_->setChecked(true);
+    btn_arm_manual_enable_->setFixedWidth(120);
+    connect(btn_arm_manual_enable_, &QPushButton::toggled, this, [this](bool checked) {
+        btn_arm_manual_enable_->setText(checked ? "手动使能: 开" : "手动使能: 关");
+        shared_.modifyUICommand([checked](UIToControl& c) {
+            c.arm_manual_enable = checked;
+            if (!checked)
+            {
+                c.arm_jog_pos_req = {};
+                c.arm_jog_neg_req = {};
+            }
+        });
+    });
+    lay->addWidget(btn_arm_manual_enable_, 0, 0, 1, 2);
+
+    const QString headers[] = {
+        "轴", "上电", "复位", "Jog-", "Jog+",
+        "Vel", "Acc", "Dec", "Jerk", "位置", "速度", "状态"
+    };
+    for (int col = 0; col < 12; ++col)
+    {
+        auto* header = new QLabel(headers[col], group);
+        header->setAlignment(Qt::AlignCenter);
+        header->setStyleSheet("color:#a6adc8; font-size:11px;");
+        lay->addWidget(header, 1, col);
+    }
+
+    auto makeButton = [group](const QString& text, int width = 54) -> QPushButton* {
+        auto* btn = new QPushButton(text, group);
+        btn->setFixedWidth(width);
+        btn->setFixedHeight(26);
+        return btn;
+    };
+
+    auto makeSpin = [group](double value, double step) -> QDoubleSpinBox* {
+        auto* spin = new QDoubleSpinBox(group);
+        spin->setRange(0.01, 10000.0);
+        spin->setDecimals(2);
+        spin->setValue(value);
+        spin->setSingleStep(step);
+        spin->setFixedWidth(74);
+        return spin;
+    };
+
+    for (int i = 0; i < 5; ++i)
+    {
+        const int row = i + 2;
+        auto* axis_label = new QLabel(QString("臂%1").arg(i + 1), group);
+        axis_label->setAlignment(Qt::AlignCenter);
+        lay->addWidget(axis_label, row, 0);
+
+        btn_arm_enable_[i] = makeButton("上电", 60);
+        btn_arm_enable_[i]->setCheckable(true);
+        connect(btn_arm_enable_[i], &QPushButton::toggled, this, [this, i](bool checked) {
+            shared_.modifyUICommand([i, checked](UIToControl& c) {
+                c.arm_enable_req[i] = checked;
+                if (!checked)
+                {
+                    c.arm_jog_pos_req[i] = false;
+                    c.arm_jog_neg_req[i] = false;
+                }
+            });
+        });
+        lay->addWidget(btn_arm_enable_[i], row, 1);
+
+        btn_arm_reset_[i] = makeButton("复位", 54);
+        connect(btn_arm_reset_[i], &QPushButton::clicked, this, [this, i]() {
+            shared_.modifyUICommand([i](UIToControl& c) {
+                c.arm_reset_req[i] = true;
+            });
+        });
+        lay->addWidget(btn_arm_reset_[i], row, 2);
+
+        btn_arm_jog_neg_[i] = makeButton("Jog-", 58);
+        connect(btn_arm_jog_neg_[i], &QPushButton::pressed, this, [this, i]() {
+            shared_.modifyUICommand([i](UIToControl& c) {
+                c.arm_jog_neg_req[i] = true;
+            });
+        });
+        connect(btn_arm_jog_neg_[i], &QPushButton::released, this, [this, i]() {
+            shared_.modifyUICommand([i](UIToControl& c) {
+                c.arm_jog_neg_req[i] = false;
+            });
+        });
+        lay->addWidget(btn_arm_jog_neg_[i], row, 3);
+
+        btn_arm_jog_pos_[i] = makeButton("Jog+", 58);
+        connect(btn_arm_jog_pos_[i], &QPushButton::pressed, this, [this, i]() {
+            shared_.modifyUICommand([i](UIToControl& c) {
+                c.arm_jog_pos_req[i] = true;
+            });
+        });
+        connect(btn_arm_jog_pos_[i], &QPushButton::released, this, [this, i]() {
+            shared_.modifyUICommand([i](UIToControl& c) {
+                c.arm_jog_pos_req[i] = false;
+            });
+        });
+        lay->addWidget(btn_arm_jog_pos_[i], row, 4);
+
+        spin_arm_vel_[i] = makeSpin(5.0, 0.5);
+        spin_arm_acc_[i] = makeSpin(50.0, 5.0);
+        spin_arm_dec_[i] = makeSpin(50.0, 5.0);
+        spin_arm_jerk_[i] = makeSpin(500.0, 50.0);
+        connect(spin_arm_vel_[i], QOverload<double>::of(&QDoubleSpinBox::valueChanged),
+                this, [this, i](double value) {
+            shared_.modifyUICommand([i, value](UIToControl& c) { c.arm_jog_velocity[i] = value; });
+        });
+        connect(spin_arm_acc_[i], QOverload<double>::of(&QDoubleSpinBox::valueChanged),
+                this, [this, i](double value) {
+            shared_.modifyUICommand([i, value](UIToControl& c) { c.arm_jog_acc[i] = value; });
+        });
+        connect(spin_arm_dec_[i], QOverload<double>::of(&QDoubleSpinBox::valueChanged),
+                this, [this, i](double value) {
+            shared_.modifyUICommand([i, value](UIToControl& c) { c.arm_jog_dec[i] = value; });
+        });
+        connect(spin_arm_jerk_[i], QOverload<double>::of(&QDoubleSpinBox::valueChanged),
+                this, [this, i](double value) {
+            shared_.modifyUICommand([i, value](UIToControl& c) { c.arm_jog_jerk[i] = value; });
+        });
+        lay->addWidget(spin_arm_vel_[i], row, 5);
+        lay->addWidget(spin_arm_acc_[i], row, 6);
+        lay->addWidget(spin_arm_dec_[i], row, 7);
+        lay->addWidget(spin_arm_jerk_[i], row, 8);
+
+        lbl_arm_pos_[i] = new QLabel("0.00", group);
+        lbl_arm_vel_[i] = new QLabel("0.00", group);
+        lbl_arm_status_[i] = new QLabel("未上电", group);
+        lbl_arm_pos_[i]->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+        lbl_arm_vel_[i]->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+        lbl_arm_status_[i]->setAlignment(Qt::AlignCenter);
+        lbl_arm_pos_[i]->setMinimumWidth(72);
+        lbl_arm_vel_[i]->setMinimumWidth(72);
+        lbl_arm_status_[i]->setMinimumWidth(120);
+        lbl_arm_status_[i]->setStyleSheet("background:#313244; border-radius:4px; padding:3px;");
+        lay->addWidget(lbl_arm_pos_[i], row, 9);
+        lay->addWidget(lbl_arm_vel_[i], row, 10);
+        lay->addWidget(lbl_arm_status_[i], row, 11);
+    }
+
+    return group;
+}
+
 // ── 区域五: 力反馈面板 ──
 QWidget* MainWindow::buildForcePanel()
 {
@@ -357,6 +512,90 @@ void MainWindow::onRefreshTimer()
         double right = state.rightlimit[i];
         axis_widgets_[i]->setRange(left, right);
         axis_widgets_[i]->setPosition(state.act_pos[i], state.refer[i]);
+    }
+
+    // ── 定位臂状态 ──
+    if (btn_arm_manual_enable_ != nullptr &&
+        btn_arm_manual_enable_->isChecked() != state.arm_manual_enable)
+    {
+        btn_arm_manual_enable_->blockSignals(true);
+        btn_arm_manual_enable_->setChecked(state.arm_manual_enable);
+        btn_arm_manual_enable_->blockSignals(false);
+    }
+    if (btn_arm_manual_enable_ != nullptr)
+    {
+        btn_arm_manual_enable_->setText(state.arm_manual_enable ? "手动使能: 开" : "手动使能: 关");
+    }
+
+    auto errorText = [](const QString& prefix, unsigned long error_id) -> QString {
+        if (error_id == 0)
+        {
+            return prefix;
+        }
+        return QString("%1 0x%2")
+            .arg(prefix)
+            .arg(static_cast<qulonglong>(error_id), 0, 16)
+            .toUpper();
+    };
+    auto setArmStatus = [](QLabel* label, const QString& text, const QString& color) {
+        label->setText(text);
+        label->setStyleSheet(
+            QString("background:#313244; border-radius:4px; padding:3px; color:%1; font-weight:bold;").arg(color));
+    };
+
+    for (int i = 0; i < 5; ++i)
+    {
+        lbl_arm_pos_[i]->setText(QString::number(state.arm_act_pos[i], 'f', 2));
+        lbl_arm_vel_[i]->setText(QString::number(state.arm_act_vel[i], 'f', 2));
+
+        const bool powered = state.arm_power_done[i] && !state.arm_power_error[i];
+        if (state.arm_cmd_conflict[i])
+        {
+            setArmStatus(lbl_arm_status_[i], "命令冲突", "#f9e2af");
+        }
+        else if (state.arm_power_error[i])
+        {
+            setArmStatus(lbl_arm_status_[i], errorText("上电错误", state.arm_power_error_id[i]), "#f38ba8");
+        }
+        else if (state.arm_reset_error[i])
+        {
+            setArmStatus(lbl_arm_status_[i], errorText("复位错误", state.arm_reset_error_id[i]), "#f38ba8");
+        }
+        else if (state.arm_motion_error[i])
+        {
+            setArmStatus(lbl_arm_status_[i], errorText("运动错误", state.arm_motion_error_id[i]), "#f38ba8");
+        }
+        else if (state.arm_reset_busy[i])
+        {
+            setArmStatus(lbl_arm_status_[i], "复位中", "#89b4fa");
+        }
+        else if (state.arm_motion_busy[i])
+        {
+            QString dir = "点动中";
+            if (state.arm_cmd_dir[i] > 0)
+            {
+                dir = "正向点动";
+            }
+            else if (state.arm_cmd_dir[i] < 0)
+            {
+                dir = "反向点动";
+            }
+            setArmStatus(lbl_arm_status_[i], dir, "#89b4fa");
+        }
+        else if (powered)
+        {
+            setArmStatus(lbl_arm_status_[i], "已上电", "#a6e3a1");
+        }
+        else if (state.arm_enable_req[i])
+        {
+            setArmStatus(lbl_arm_status_[i], "上电中", "#f9e2af");
+        }
+        else
+        {
+            setArmStatus(lbl_arm_status_[i], "未上电", "#a6adc8");
+        }
+
+        btn_arm_enable_[i]->setText(powered ? "已上电" : (btn_arm_enable_[i]->isChecked() ? "上电中" : "上电"));
     }
 
     // ── 控制模式 ──

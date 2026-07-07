@@ -3,7 +3,7 @@
 > 本文档梳理上位机与倍福 PLC 之间的 ADS 通讯实现：连接、符号表、读写封装、断线/重同步路径，以及与主循环的契约。
 > 修改 `plc_io.cpp/.h`、`ADSComm.cpp`、符号表、或新增 PLC 变量时，请同步在最末"变更日志"追加条目。
 
-更新时间：2026-06-26
+更新时间：2026-07-06
 适用工程：`64位ADS - 相对路径 - 传数组 - 加上手柄\ADS.sln`
 对应代码版本：2026-06-26 主分支（基于 `plc_io.cpp` / `ADSComm1.h` / `main.cpp` 当前状态校对）
 
@@ -116,6 +116,24 @@
 | `gen_state` | `G.gen_state` | unsigned short | 读（诊断） | PLC 通用状态字 |
 | `app_name` | `TwinCAT_SystemInfoVarList._AppInfo.AppName` | char[64] | 读（一次性） | 当前 PLC 应用名（连接诊断） |
 
+### 3.7 定位臂 5 轴手动点动（Qt 上位机）
+
+定位臂是新增的独立 5 轴通道，只通过 `G.arm_*` 符号控制，不扩展原 `G.refer[1..7]`、`G.Act_pos[1..7]`、`G.init_pos[1..7]` 或 `G.return_cmd[1..7]`。当前上位机只做单轴手动点动，不做正运动学、逆运动学或整体位姿联动。
+
+| PLC 符号 | 类型/长度 | 读写 | 上位机行为 |
+|---|---|---|---|
+| `G.arm_manual_enable` | bool | 写 | Qt 界面默认写 TRUE；关闭时同时清 jog 请求 |
+| `G.arm_enable_req` | bool[5] | 写 | 每轴“上电”按钮保持 TRUE/FALSE |
+| `G.arm_reset_req[i]` | bool | 写 | 每轴“复位”按钮写 TRUE；PLC 消费后自动清零，上位机不主动写 FALSE |
+| `G.arm_jog_pos_req` / `G.arm_jog_neg_req` | bool[5] | 写 | Jog+ / Jog- 按下写 TRUE、松开写 FALSE |
+| `G.arm_jog_velocity` / `G.arm_jog_acc` / `G.arm_jog_dec` / `G.arm_jog_jerk` | double[5] | 写 | UI 可编辑，默认 `5.0 / 50.0 / 50.0 / 500.0` |
+| `G.arm_power_output[i].Done/Error/ErrorID` | bool/bool/unsigned long | 读 | 显示每轴上电状态和错误码 |
+| `G.arm_reset_output[i].Done/Busy/Error/ErrorID` | bool/bool/bool/unsigned long | 读 | 显示复位状态和错误码 |
+| `G.arm_act_pos` / `G.arm_act_vel` | double[5] | 读 | 显示定位臂实际位置/速度 |
+| `G.arm_motion_busy/done/error` | bool[5] | 读 | 显示点动运行状态 |
+| `G.arm_motion_error_id` | unsigned long[5] | 读 | 显示运动错误码 |
+| `G.arm_cmd_dir` / `G.arm_cmd_conflict` | signed char[5] / bool[5] | 读 | 显示命令方向与正反向冲突 |
+
 ## 4. 连接建立（在 `main.cpp` 主循环开始之前）
 
 ```cpp
@@ -193,6 +211,8 @@ clear_axis_return_request(symbols)
 | `axis4_manual_*` 读取 | 每 20 拍 | 步骤 13（轴 4 手动控制轮询） | 约 L2180 |
 | `axis1_fast_return` / `axis6_fast_retract` / `startup_smoothing_bypass` 写 | 每拍 | 步骤 14（气缸/快退标志写入 PLC） | 约 L2268-L2270 |
 | 气缸 1/2/3/4 写 + `cylinder5_press_req` 写 | 每拍（控制激活或启动序列激活时） | 步骤 14 | 约 L2205-L2211 |
+| 定位臂 `G.arm_*` 命令写 | 按需 | Qt `ControlEngine::writeArmCommands`，命令变化、Jog 按下/松开、复位触发时写 | 2026-07-06 |
+| 定位臂 `G.arm_*` 状态读 | Qt 每 5 个控制拍（约 50ms） | Qt `ControlEngine::readArmState`，与旧 7 轴控制读写解耦 | 2026-07-06 |
 
 降频读是为了减轻 ADS 通信负担；这些变量在 PLC 侧不会突变，降频读到的值代表"当前事实"，不会引发控制问题。
 
@@ -247,5 +267,11 @@ clear_axis_return_request(symbols)
 - 改进 A：补充跨文档锚点链接（§1 力反馈主路径引用、§3.2 力反馈 §2.2 跳转、§9.4 运动流程 §3 同步告知）。
 - 改进 D：头部新增"对应代码版本"字段。
 - 未触碰任何源文件。
+
+### 2026-07-06 — Qt 上位机新增定位臂手动 ADS 通道
+- 作者：AI（Codex，应用户要求实施）。
+- 涉及文件：`../CatheterRobotUI/src/SharedState.h`、`ControlEngine.h/.cpp`、`MainWindow.h/.cpp`。
+- 行为变化：新增 `G.arm_*` ADS 符号绑定，Qt UI 提供定位臂 5 轴单轴上电、复位、Jog+、Jog-、点动参数编辑和状态显示。
+- 通讯策略：命令按变化写入，状态约 50ms 降频读取；原 7 轴 `G.refer/Act_pos/init_pos/return_cmd` 高频链路不扩展、不改语义。
 
 ### （此处持续追加）

@@ -9,6 +9,7 @@ VAR
 	err_		:		err;
 	reset_		:		reset;
 	self_check_ :       SelfCheck;
+	arm_manual_ :       ArmManual;
 	i:INT;
 END_VAR]]></Declaration>
     <Implementation>
@@ -28,8 +29,17 @@ IF TwinCAT_SystemInfoVarList._TaskInfo[1].FirstCycle THEN
 		G.SetPointGenDisable[i].Execute := FALSE;
 		G.axis_Reset[i].Execute := FALSE;
 	END_FOR
+	G.arm_manual_enable := FALSE;
+	FOR i:=1 TO 5 DO
+		G.arm_enable_req[i] := FALSE;
+		G.arm_reset_req[i] := FALSE;
+		G.arm_jog_pos_req[i] := FALSE;
+		G.arm_jog_neg_req[i] := FALSE;
+	END_FOR
 END_IF
 	
+arm_manual_();
+
 POWERED();
 SETPOSITIONGEN();
 RESETED();

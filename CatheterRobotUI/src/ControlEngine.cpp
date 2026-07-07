@@ -22,6 +22,72 @@ bool isWithinRange(double value, double low, double high, double tol = 0.0)
     return (value >= (low - tol)) && (value <= (high + tol));
 }
 
+constexpr int kArmAxisCount = 5;
+
+const char* const kArmResetReqSymbols[kArmAxisCount] = {
+    "G.arm_reset_req[1]",
+    "G.arm_reset_req[2]",
+    "G.arm_reset_req[3]",
+    "G.arm_reset_req[4]",
+    "G.arm_reset_req[5]"
+};
+
+const char* const kArmPowerDoneSymbols[kArmAxisCount] = {
+    "G.arm_power_output[1].Done",
+    "G.arm_power_output[2].Done",
+    "G.arm_power_output[3].Done",
+    "G.arm_power_output[4].Done",
+    "G.arm_power_output[5].Done"
+};
+
+const char* const kArmPowerErrorSymbols[kArmAxisCount] = {
+    "G.arm_power_output[1].Error",
+    "G.arm_power_output[2].Error",
+    "G.arm_power_output[3].Error",
+    "G.arm_power_output[4].Error",
+    "G.arm_power_output[5].Error"
+};
+
+const char* const kArmPowerErrorIdSymbols[kArmAxisCount] = {
+    "G.arm_power_output[1].ErrorID",
+    "G.arm_power_output[2].ErrorID",
+    "G.arm_power_output[3].ErrorID",
+    "G.arm_power_output[4].ErrorID",
+    "G.arm_power_output[5].ErrorID"
+};
+
+const char* const kArmResetDoneSymbols[kArmAxisCount] = {
+    "G.arm_reset_output[1].Done",
+    "G.arm_reset_output[2].Done",
+    "G.arm_reset_output[3].Done",
+    "G.arm_reset_output[4].Done",
+    "G.arm_reset_output[5].Done"
+};
+
+const char* const kArmResetBusySymbols[kArmAxisCount] = {
+    "G.arm_reset_output[1].Busy",
+    "G.arm_reset_output[2].Busy",
+    "G.arm_reset_output[3].Busy",
+    "G.arm_reset_output[4].Busy",
+    "G.arm_reset_output[5].Busy"
+};
+
+const char* const kArmResetErrorSymbols[kArmAxisCount] = {
+    "G.arm_reset_output[1].Error",
+    "G.arm_reset_output[2].Error",
+    "G.arm_reset_output[3].Error",
+    "G.arm_reset_output[4].Error",
+    "G.arm_reset_output[5].Error"
+};
+
+const char* const kArmResetErrorIdSymbols[kArmAxisCount] = {
+    "G.arm_reset_output[1].ErrorID",
+    "G.arm_reset_output[2].ErrorID",
+    "G.arm_reset_output[3].ErrorID",
+    "G.arm_reset_output[4].ErrorID",
+    "G.arm_reset_output[5].ErrorID"
+};
+
 double getAveragePos(Handle& handle, int axis, int samples)
 {
     double sum = 0.0;
@@ -130,6 +196,8 @@ bool ControlEngine::init()
 
     loadPosFromActual();
     writeRefer();
+    writeArmCommands();
+    readArmState();
 
     has_self_check_flag_ = ads_->ADSRead("G.self_check_done", sizeof(self_check_done_), &self_check_done_);
     if (has_self_check_flag_)
@@ -161,6 +229,7 @@ bool ControlEngine::tick()
 {
     const UIToControl cmd = shared_.readUICommands();
     applyUICommands(cmd);
+    writeArmCommands();
 
     if (cmd.cmd_quit)
     {
@@ -179,6 +248,11 @@ bool ControlEngine::tick()
     ++loop_count_;
     axis1_fast_return_ = false;
     axis6_fast_retract_ = false;
+
+    if ((loop_count_ % 5) == 0)
+    {
+        readArmState();
+    }
 
     updateControlMode();
 
@@ -633,6 +707,8 @@ bool ControlEngine::tick()
 
 void ControlEngine::shutdown()
 {
+    stopArmMotionRequests();
+
     if (handle_axis1_ != nullptr)
     {
         handle_axis1_->close();
@@ -668,6 +744,53 @@ bool ControlEngine::readPlcState()
     return ok;
 }
 
+bool ControlEngine::readArmState()
+{
+    if (ads_ == nullptr || !ads_->IsCommOpen())
+    {
+        return false;
+    }
+
+    bool ok = true;
+    ok = ads_->ADSRead("G.arm_act_pos",
+                       static_cast<unsigned long>(sizeof(double) * arm_act_pos_.size()),
+                       arm_act_pos_.data()) && ok;
+    ok = ads_->ADSRead("G.arm_act_vel",
+                       static_cast<unsigned long>(sizeof(double) * arm_act_vel_.size()),
+                       arm_act_vel_.data()) && ok;
+    ok = ads_->ADSRead("G.arm_motion_busy",
+                       static_cast<unsigned long>(sizeof(bool) * arm_motion_busy_.size()),
+                       arm_motion_busy_.data()) && ok;
+    ok = ads_->ADSRead("G.arm_motion_done",
+                       static_cast<unsigned long>(sizeof(bool) * arm_motion_done_.size()),
+                       arm_motion_done_.data()) && ok;
+    ok = ads_->ADSRead("G.arm_motion_error",
+                       static_cast<unsigned long>(sizeof(bool) * arm_motion_error_.size()),
+                       arm_motion_error_.data()) && ok;
+    ok = ads_->ADSRead("G.arm_motion_error_id",
+                       static_cast<unsigned long>(sizeof(unsigned long) * arm_motion_error_id_.size()),
+                       arm_motion_error_id_.data()) && ok;
+    ok = ads_->ADSRead("G.arm_cmd_dir",
+                       static_cast<unsigned long>(sizeof(signed char) * arm_cmd_dir_.size()),
+                       arm_cmd_dir_.data()) && ok;
+    ok = ads_->ADSRead("G.arm_cmd_conflict",
+                       static_cast<unsigned long>(sizeof(bool) * arm_cmd_conflict_.size()),
+                       arm_cmd_conflict_.data()) && ok;
+
+    for (int i = 0; i < kArmAxisCount; ++i)
+    {
+        ok = ads_->ADSRead(kArmPowerDoneSymbols[i], sizeof(arm_power_done_[i]), &arm_power_done_[i]) && ok;
+        ok = ads_->ADSRead(kArmPowerErrorSymbols[i], sizeof(arm_power_error_[i]), &arm_power_error_[i]) && ok;
+        ok = ads_->ADSRead(kArmPowerErrorIdSymbols[i], sizeof(arm_power_error_id_[i]), &arm_power_error_id_[i]) && ok;
+        ok = ads_->ADSRead(kArmResetDoneSymbols[i], sizeof(arm_reset_done_[i]), &arm_reset_done_[i]) && ok;
+        ok = ads_->ADSRead(kArmResetBusySymbols[i], sizeof(arm_reset_busy_[i]), &arm_reset_busy_[i]) && ok;
+        ok = ads_->ADSRead(kArmResetErrorSymbols[i], sizeof(arm_reset_error_[i]), &arm_reset_error_[i]) && ok;
+        ok = ads_->ADSRead(kArmResetErrorIdSymbols[i], sizeof(arm_reset_error_id_[i]), &arm_reset_error_id_[i]) && ok;
+    }
+
+    return ok;
+}
+
 bool ControlEngine::writeRefer()
 {
     if (ads_ == nullptr || !ads_->IsCommOpen())
@@ -675,6 +798,111 @@ bool ControlEngine::writeRefer()
         return false;
     }
     return ads_->ADSWrite("G.refer", sizeof(pos_), pos_);
+}
+
+bool ControlEngine::writeArmCommands()
+{
+    if (ads_ == nullptr || !ads_->IsCommOpen())
+    {
+        return false;
+    }
+
+    bool ok = true;
+
+    if (arm_manual_dirty_)
+    {
+        bool value = arm_manual_enable_;
+        const bool wrote = ads_->ADSWrite("G.arm_manual_enable", sizeof(value), &value);
+        arm_manual_dirty_ = !wrote;
+        ok = wrote && ok;
+    }
+
+    if (arm_enable_dirty_)
+    {
+        const bool wrote = ads_->ADSWrite(
+            "G.arm_enable_req",
+            static_cast<unsigned long>(sizeof(bool) * arm_enable_req_.size()),
+            arm_enable_req_.data());
+        arm_enable_dirty_ = !wrote;
+        ok = wrote && ok;
+    }
+
+    for (int i = 0; i < kArmAxisCount; ++i)
+    {
+        if (arm_reset_pending_[i])
+        {
+            bool request = true;
+            const bool wrote = ads_->ADSWrite(kArmResetReqSymbols[i], sizeof(request), &request);
+            if (wrote)
+            {
+                arm_reset_pending_[i] = false;
+            }
+            ok = wrote && ok;
+        }
+    }
+
+    if (arm_jog_pos_dirty_)
+    {
+        const bool wrote = ads_->ADSWrite(
+            "G.arm_jog_pos_req",
+            static_cast<unsigned long>(sizeof(bool) * arm_jog_pos_req_.size()),
+            arm_jog_pos_req_.data());
+        arm_jog_pos_dirty_ = !wrote;
+        ok = wrote && ok;
+    }
+
+    if (arm_jog_neg_dirty_)
+    {
+        const bool wrote = ads_->ADSWrite(
+            "G.arm_jog_neg_req",
+            static_cast<unsigned long>(sizeof(bool) * arm_jog_neg_req_.size()),
+            arm_jog_neg_req_.data());
+        arm_jog_neg_dirty_ = !wrote;
+        ok = wrote && ok;
+    }
+
+    if (arm_params_dirty_)
+    {
+        bool wrote = true;
+        wrote = ads_->ADSWrite(
+            "G.arm_jog_velocity",
+            static_cast<unsigned long>(sizeof(double) * arm_jog_velocity_.size()),
+            arm_jog_velocity_.data()) && wrote;
+        wrote = ads_->ADSWrite(
+            "G.arm_jog_acc",
+            static_cast<unsigned long>(sizeof(double) * arm_jog_acc_.size()),
+            arm_jog_acc_.data()) && wrote;
+        wrote = ads_->ADSWrite(
+            "G.arm_jog_dec",
+            static_cast<unsigned long>(sizeof(double) * arm_jog_dec_.size()),
+            arm_jog_dec_.data()) && wrote;
+        wrote = ads_->ADSWrite(
+            "G.arm_jog_jerk",
+            static_cast<unsigned long>(sizeof(double) * arm_jog_jerk_.size()),
+            arm_jog_jerk_.data()) && wrote;
+        arm_params_dirty_ = !wrote;
+        ok = wrote && ok;
+    }
+
+    return ok;
+}
+
+void ControlEngine::stopArmMotionRequests()
+{
+    if (ads_ == nullptr || !ads_->IsCommOpen())
+    {
+        return;
+    }
+
+    std::array<bool, 5> stop_requests = {};
+    bool manual_enable = false;
+    ads_->ADSWrite("G.arm_jog_pos_req",
+                   static_cast<unsigned long>(sizeof(bool) * stop_requests.size()),
+                   stop_requests.data());
+    ads_->ADSWrite("G.arm_jog_neg_req",
+                   static_cast<unsigned long>(sizeof(bool) * stop_requests.size()),
+                   stop_requests.data());
+    ads_->ADSWrite("G.arm_manual_enable", sizeof(manual_enable), &manual_enable);
 }
 
 void ControlEngine::loadPosFromActual()
@@ -706,6 +934,45 @@ void ControlEngine::applyUICommands(const UIToControl& cmd)
         break;
     }
     handle_sensitivity_ = cmd.handle_sensitivity * preset_scale;
+
+    if (arm_manual_enable_ != cmd.arm_manual_enable)
+    {
+        arm_manual_enable_ = cmd.arm_manual_enable;
+        arm_manual_dirty_ = true;
+    }
+    if (arm_enable_req_ != cmd.arm_enable_req)
+    {
+        arm_enable_req_ = cmd.arm_enable_req;
+        arm_enable_dirty_ = true;
+    }
+    for (int i = 0; i < kArmAxisCount; ++i)
+    {
+        if (cmd.arm_reset_req[i])
+        {
+            arm_reset_pending_[i] = true;
+        }
+    }
+    if (arm_jog_pos_req_ != cmd.arm_jog_pos_req)
+    {
+        arm_jog_pos_req_ = cmd.arm_jog_pos_req;
+        arm_jog_pos_dirty_ = true;
+    }
+    if (arm_jog_neg_req_ != cmd.arm_jog_neg_req)
+    {
+        arm_jog_neg_req_ = cmd.arm_jog_neg_req;
+        arm_jog_neg_dirty_ = true;
+    }
+    if ((arm_jog_velocity_ != cmd.arm_jog_velocity) ||
+        (arm_jog_acc_ != cmd.arm_jog_acc) ||
+        (arm_jog_dec_ != cmd.arm_jog_dec) ||
+        (arm_jog_jerk_ != cmd.arm_jog_jerk))
+    {
+        arm_jog_velocity_ = cmd.arm_jog_velocity;
+        arm_jog_acc_ = cmd.arm_jog_acc;
+        arm_jog_dec_ = cmd.arm_jog_dec;
+        arm_jog_jerk_ = cmd.arm_jog_jerk;
+        arm_params_dirty_ = true;
+    }
 
     if (force_feedback_changed)
     {
@@ -831,6 +1098,25 @@ void ControlEngine::publishState()
     }
 
     state.cylinder_cmds = cylinder_cmds_;
+
+    state.arm_manual_enable = arm_manual_enable_;
+    state.arm_enable_req = arm_enable_req_;
+    state.arm_power_done = arm_power_done_;
+    state.arm_power_error = arm_power_error_;
+    state.arm_power_error_id = arm_power_error_id_;
+    state.arm_reset_done = arm_reset_done_;
+    state.arm_reset_busy = arm_reset_busy_;
+    state.arm_reset_error = arm_reset_error_;
+    state.arm_reset_error_id = arm_reset_error_id_;
+    state.arm_act_pos = arm_act_pos_;
+    state.arm_act_vel = arm_act_vel_;
+    state.arm_motion_busy = arm_motion_busy_;
+    state.arm_motion_done = arm_motion_done_;
+    state.arm_motion_error = arm_motion_error_;
+    state.arm_motion_error_id = arm_motion_error_id_;
+    state.arm_cmd_dir = arm_cmd_dir_;
+    state.arm_cmd_conflict = arm_cmd_conflict_;
+
     state.loop_rate_hz = current_hz_;
 
     shared_.writeControlState(state);

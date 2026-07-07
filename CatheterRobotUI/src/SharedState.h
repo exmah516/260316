@@ -90,6 +90,25 @@ struct ControlToUI
     // 电缸状态
     std::array<unsigned short, 4> cylinder_cmds = {};
 
+    // 定位臂 5 轴状态（对应 PLC G.arm_* 独立通道）
+    bool arm_manual_enable = true;
+    std::array<bool, 5> arm_enable_req = {};
+    std::array<bool, 5> arm_power_done = {};
+    std::array<bool, 5> arm_power_error = {};
+    std::array<unsigned long, 5> arm_power_error_id = {};
+    std::array<bool, 5> arm_reset_done = {};
+    std::array<bool, 5> arm_reset_busy = {};
+    std::array<bool, 5> arm_reset_error = {};
+    std::array<unsigned long, 5> arm_reset_error_id = {};
+    std::array<double, 5> arm_act_pos = {};
+    std::array<double, 5> arm_act_vel = {};
+    std::array<bool, 5> arm_motion_busy = {};
+    std::array<bool, 5> arm_motion_done = {};
+    std::array<bool, 5> arm_motion_error = {};
+    std::array<unsigned long, 5> arm_motion_error_id = {};
+    std::array<signed char, 5> arm_cmd_dir = {};
+    std::array<bool, 5> arm_cmd_conflict = {};
+
     // 性能
     double loop_rate_hz = 0.0;
 };
@@ -117,6 +136,17 @@ struct UIToControl
     bool   cmd_estop          = false;  // UI 软急停
     bool   cmd_redo_selfcheck = false;  // 重新自检
     bool   cmd_quit           = false;  // 退出
+
+    // 定位臂手动点动命令；只写 G.arm_*，不进入原 7 轴 refer 控制链路
+    bool arm_manual_enable = true;
+    std::array<bool, 5> arm_enable_req = {};
+    std::array<bool, 5> arm_reset_req = {};
+    std::array<bool, 5> arm_jog_pos_req = {};
+    std::array<bool, 5> arm_jog_neg_req = {};
+    std::array<double, 5> arm_jog_velocity = { 5.0, 5.0, 5.0, 5.0, 5.0 };
+    std::array<double, 5> arm_jog_acc = { 50.0, 50.0, 50.0, 50.0, 50.0 };
+    std::array<double, 5> arm_jog_dec = { 50.0, 50.0, 50.0, 50.0, 50.0 };
+    std::array<double, 5> arm_jog_jerk = { 500.0, 500.0, 500.0, 500.0, 500.0 };
 
     // 速度模式预设
     enum class SpeedPreset { Fine, Normal, Fast };
@@ -153,6 +183,10 @@ public:
         ui_to_ctrl_.force_record_stop  = false;
         ui_to_ctrl_.cmd_redo_selfcheck = false;
         ui_to_ctrl_.cmd_estop          = false;
+        for (bool& reset_req : ui_to_ctrl_.arm_reset_req)
+        {
+            reset_req = false;
+        }
         return copy;
     }
 

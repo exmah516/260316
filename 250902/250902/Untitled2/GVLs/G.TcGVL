@@ -59,6 +59,28 @@ VAR_GLOBAL
 	pid_e_prev			: ARRAY[1..7] OF LREAL := [0,0,0,0,0,0,0];
 	pid_i_limit			: ARRAY[1..7] OF LREAL := [100,100,100,100,100,100,100];
 
+	// ========== 定位臂 5 轴独立点动控制变量 ==========
+	arm_axis			: ARRAY[1..5] OF AXIS_REF;	// 定位臂轴对象，链接到 NC Axis 1..5
+	arm_manual_enable	: BOOL := FALSE;			// 定位臂手动控制总使能，FALSE 时所有点动请求无效
+	arm_enable_req		: ARRAY[1..5] OF BOOL := [FALSE,FALSE,FALSE,FALSE,FALSE];	// TRUE=对应轴保持上电
+	arm_reset_req		: ARRAY[1..5] OF BOOL := [FALSE,FALSE,FALSE,FALSE,FALSE];	// TRUE=请求清错，PLC 完成后自动清零
+	arm_jog_pos_req		: ARRAY[1..5] OF BOOL := [FALSE,FALSE,FALSE,FALSE,FALSE];	// UI 正向点动按钮，按下 TRUE、松开 FALSE
+	arm_jog_neg_req		: ARRAY[1..5] OF BOOL := [FALSE,FALSE,FALSE,FALSE,FALSE];	// UI 反向点动按钮，按下 TRUE、松开 FALSE
+	arm_jog_velocity	: ARRAY[1..5] OF LREAL := [5.0,5.0,5.0,5.0,5.0];
+	arm_jog_acc		: ARRAY[1..5] OF LREAL := [50.0,50.0,50.0,50.0,50.0];
+	arm_jog_dec		: ARRAY[1..5] OF LREAL := [50.0,50.0,50.0,50.0,50.0];
+	arm_jog_jerk		: ARRAY[1..5] OF LREAL := [500.0,500.0,500.0,500.0,500.0];
+	arm_power_output	: ARRAY[1..5] OF ST_McOutputs;
+	arm_reset_output	: ARRAY[1..5] OF ST_McOutputs;
+	arm_act_pos		: ARRAY[1..5] OF LREAL;
+	arm_act_vel		: ARRAY[1..5] OF LREAL;
+	arm_motion_busy		: ARRAY[1..5] OF BOOL := [FALSE,FALSE,FALSE,FALSE,FALSE];
+	arm_motion_done		: ARRAY[1..5] OF BOOL := [FALSE,FALSE,FALSE,FALSE,FALSE];
+	arm_motion_error	: ARRAY[1..5] OF BOOL := [FALSE,FALSE,FALSE,FALSE,FALSE];
+	arm_motion_error_id	: ARRAY[1..5] OF UDINT := [0,0,0,0,0];
+	arm_cmd_dir		: ARRAY[1..5] OF SINT := [0,0,0,0,0];	// -1=反向，0=停止，1=正向
+	arm_cmd_conflict	: ARRAY[1..5] OF BOOL := [FALSE,FALSE,FALSE,FALSE,FALSE];	// 正反向同时请求
+
 	// ========== 电缸控制变量 ==========
 	cylinder1_value		AT %Q* : WORD;		// 电缸1控制值 (安装在夹持机构上)
 	cylinder2_value		AT %Q* : WORD;		// 电缸2控制值 (安装在轴1机构上)

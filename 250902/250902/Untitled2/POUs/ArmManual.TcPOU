@@ -1,0 +1,242 @@
+<?xml version="1.0" encoding="utf-8"?>
+<TcPlcObject Version="1.1.0.1" ProductVersion="3.1.4024.15">
+  <POU Name="ArmManual" Id="{9d6b6d41-68ef-4d42-a46d-bf8fd6a5e501}" SpecialFunc="None">
+    <Declaration><![CDATA[FUNCTION_BLOCK ArmManual
+VAR
+	i : INT;
+	req_dir : SINT;
+	cmd_velocity : LREAL;
+	cmd_acc : LREAL;
+	cmd_dec : LREAL;
+	cmd_jerk : LREAL;
+	allow_jog : BOOL;
+
+	// 每轴独立状态：0=空闲，10=点动中，20=停止中，30=换向停止中
+	axis_state : ARRAY[1..5] OF INT := [0,0,0,0,0];
+	current_dir : ARRAY[1..5] OF SINT := [0,0,0,0,0];
+	pending_dir : ARRAY[1..5] OF SINT := [0,0,0,0,0];
+	move_exec : ARRAY[1..5] OF BOOL := [FALSE,FALSE,FALSE,FALSE,FALSE];
+	stop_exec : ARRAY[1..5] OF BOOL := [FALSE,FALSE,FALSE,FALSE,FALSE];
+	reset_exec : ARRAY[1..5] OF BOOL := [FALSE,FALSE,FALSE,FALSE,FALSE];
+	move_direction : ARRAY[1..5] OF MC_Direction;
+
+	fb_power : ARRAY[1..5] OF MC_Power;
+	fb_reset : ARRAY[1..5] OF MC_Reset;
+	fb_move_vel : ARRAY[1..5] OF MC_MoveVelocity;
+	fb_stop : ARRAY[1..5] OF MC_Stop;
+END_VAR
+]]></Declaration>
+    <Implementation>
+      <ST><![CDATA[FOR i:=1 TO 5 DO
+	// 定位臂轴独立刷新，不影响介入机器人 G.axis[1..7] 主链路
+	G.arm_axis[i]();
+	G.arm_act_pos[i] := G.arm_axis[i].NcToPlc.ActPos;
+	G.arm_act_vel[i] := G.arm_axis[i].NcToPlc.ActVelo;
+
+	cmd_velocity := G.arm_jog_velocity[i];
+	IF cmd_velocity <= 0.0 THEN
+		cmd_velocity := 5.0;
+	END_IF
+	cmd_acc := G.arm_jog_acc[i];
+	IF cmd_acc <= 0.0 THEN
+		cmd_acc := 50.0;
+	END_IF
+	cmd_dec := G.arm_jog_dec[i];
+	IF cmd_dec <= 0.0 THEN
+		cmd_dec := 50.0;
+	END_IF
+	cmd_jerk := G.arm_jog_jerk[i];
+	IF cmd_jerk <= 0.0 THEN
+		cmd_jerk := 500.0;
+	END_IF
+
+	fb_power[i](
+		Axis:=G.arm_axis[i],
+		Enable:=G.arm_enable_req[i],
+		Enable_Positive:=TRUE,
+		Enable_Negative:=TRUE
+	);
+	G.arm_power_output[i].Done := fb_power[i].Status;
+	G.arm_power_output[i].Busy := fb_power[i].Busy;
+	G.arm_power_output[i].Active := fb_power[i].Active;
+	G.arm_power_output[i].Error := fb_power[i].Error;
+	G.arm_power_output[i].ErrorID := fb_power[i].ErrorID;
+
+	IF G.arm_reset_req[i] AND NOT reset_exec[i] THEN
+		reset_exec[i] := TRUE;
+		move_exec[i] := FALSE;
+		stop_exec[i] := TRUE;
+		axis_state[i] := 20;
+		current_dir[i] := 0;
+	END_IF
+
+	fb_reset[i](Axis:=G.arm_axis[i], Execute:=reset_exec[i]);
+	G.arm_reset_output[i].Done := fb_reset[i].Done;
+	G.arm_reset_output[i].Busy := fb_reset[i].Busy;
+	G.arm_reset_output[i].Active := FALSE;
+	G.arm_reset_output[i].Error := fb_reset[i].Error;
+	G.arm_reset_output[i].ErrorID := fb_reset[i].ErrorID;
+	IF reset_exec[i] AND (fb_reset[i].Done OR fb_reset[i].Error) THEN
+		IF fb_reset[i].Done AND NOT G.arm_axis[i].Status.Error THEN
+			G.arm_motion_error[i] := FALSE;
+			G.arm_motion_error_id[i] := 0;
+			G.arm_motion_done[i] := TRUE;
+		ELSIF fb_reset[i].Error THEN
+			G.arm_motion_error[i] := TRUE;
+			G.arm_motion_error_id[i] := fb_reset[i].ErrorID;
+		END_IF
+		reset_exec[i] := FALSE;
+		G.arm_reset_req[i] := FALSE;
+	END_IF
+
+	G.arm_cmd_conflict[i] := G.arm_jog_pos_req[i] AND G.arm_jog_neg_req[i];
+	IF G.arm_cmd_conflict[i] THEN
+		req_dir := 0;
+	ELSIF G.arm_jog_pos_req[i] THEN
+		req_dir := 1;
+	ELSIF G.arm_jog_neg_req[i] THEN
+		req_dir := -1;
+	ELSE
+		req_dir := 0;
+	END_IF
+
+	allow_jog := G.arm_manual_enable
+		AND G.arm_power_output[i].Done
+		AND NOT reset_exec[i]
+		AND NOT G.arm_cmd_conflict[i]
+		AND NOT G.arm_axis[i].Status.Error
+		AND NOT G.arm_power_output[i].Error
+		AND NOT G.arm_reset_output[i].Error;
+	IF NOT allow_jog THEN
+		req_dir := 0;
+	END_IF
+
+	IF fb_move_vel[i].Error THEN
+		G.arm_motion_error[i] := TRUE;
+		G.arm_motion_error_id[i] := fb_move_vel[i].ErrorID;
+		move_exec[i] := FALSE;
+		stop_exec[i] := FALSE;
+		current_dir[i] := 0;
+		axis_state[i] := 0;
+	ELSIF fb_stop[i].Error THEN
+		G.arm_motion_error[i] := TRUE;
+		G.arm_motion_error_id[i] := fb_stop[i].ErrorID;
+		move_exec[i] := FALSE;
+		stop_exec[i] := FALSE;
+		current_dir[i] := 0;
+		axis_state[i] := 0;
+	END_IF
+
+	CASE axis_state[i] OF
+	0: // 空闲，等待新的正/反点动命令
+		move_exec[i] := FALSE;
+		stop_exec[i] := FALSE;
+		current_dir[i] := 0;
+		pending_dir[i] := 0;
+		IF req_dir <> 0 THEN
+			IF req_dir > 0 THEN
+				move_direction[i] := MC_Direction.MC_Positive_Direction;
+			ELSE
+				move_direction[i] := MC_Direction.MC_Negative_Direction;
+			END_IF
+			move_exec[i] := TRUE;
+			current_dir[i] := req_dir;
+			G.arm_motion_done[i] := FALSE;
+			G.arm_motion_error[i] := FALSE;
+			G.arm_motion_error_id[i] := 0;
+			axis_state[i] := 10;
+		END_IF
+
+	10: // 点动中：松开即停，方向变化先停稳再反向启动
+		stop_exec[i] := FALSE;
+		IF req_dir = 0 THEN
+			move_exec[i] := FALSE;
+			stop_exec[i] := TRUE;
+			current_dir[i] := 0;
+			axis_state[i] := 20;
+		ELSIF req_dir <> current_dir[i] THEN
+			move_exec[i] := FALSE;
+			stop_exec[i] := TRUE;
+			pending_dir[i] := req_dir;
+			current_dir[i] := 0;
+			axis_state[i] := 30;
+		ELSE
+			move_exec[i] := TRUE;
+		END_IF
+
+	20: // 常规停止
+		move_exec[i] := FALSE;
+		stop_exec[i] := TRUE;
+		IF fb_stop[i].Done OR ((ABS(G.arm_act_vel[i]) < 0.01) AND NOT fb_stop[i].Busy) THEN
+			stop_exec[i] := FALSE;
+			G.arm_motion_done[i] := TRUE;
+			axis_state[i] := 0;
+		END_IF
+
+	30: // 换向停止，停稳后仍保持新方向按钮才重新启动
+		move_exec[i] := FALSE;
+		stop_exec[i] := TRUE;
+		IF fb_stop[i].Done OR ((ABS(G.arm_act_vel[i]) < 0.01) AND NOT fb_stop[i].Busy) THEN
+			stop_exec[i] := FALSE;
+			IF (pending_dir[i] <> 0) AND (req_dir = pending_dir[i]) THEN
+				IF pending_dir[i] > 0 THEN
+					move_direction[i] := MC_Direction.MC_Positive_Direction;
+				ELSE
+					move_direction[i] := MC_Direction.MC_Negative_Direction;
+				END_IF
+				move_exec[i] := TRUE;
+				current_dir[i] := pending_dir[i];
+				pending_dir[i] := 0;
+				G.arm_motion_done[i] := FALSE;
+				G.arm_motion_error[i] := FALSE;
+				G.arm_motion_error_id[i] := 0;
+				axis_state[i] := 10;
+			ELSE
+				pending_dir[i] := 0;
+				G.arm_motion_done[i] := TRUE;
+				axis_state[i] := 0;
+			END_IF
+		END_IF
+
+	ELSE
+		move_exec[i] := FALSE;
+		stop_exec[i] := FALSE;
+		current_dir[i] := 0;
+		pending_dir[i] := 0;
+		axis_state[i] := 0;
+	END_CASE
+
+	fb_move_vel[i](
+		Axis:=G.arm_axis[i],
+		Execute:=move_exec[i],
+		Velocity:=cmd_velocity,
+		Acceleration:=cmd_acc,
+		Deceleration:=cmd_dec,
+		Jerk:=cmd_jerk,
+		Direction:=move_direction[i]
+	);
+
+	fb_stop[i](
+		Axis:=G.arm_axis[i],
+		Execute:=stop_exec[i],
+		Deceleration:=cmd_dec,
+		Jerk:=cmd_jerk
+	);
+
+	IF G.arm_axis[i].Status.Error THEN
+		G.arm_motion_error[i] := TRUE;
+		IF G.arm_power_output[i].Error THEN
+			G.arm_motion_error_id[i] := G.arm_power_output[i].ErrorID;
+		ELSIF G.arm_reset_output[i].Error THEN
+			G.arm_motion_error_id[i] := G.arm_reset_output[i].ErrorID;
+		ELSE
+			G.arm_motion_error_id[i] := 0;
+		END_IF
+	END_IF
+
+	G.arm_cmd_dir[i] := current_dir[i];
+	G.arm_motion_busy[i] := (axis_state[i] <> 0) OR fb_move_vel[i].Busy OR fb_stop[i].Busy OR reset_exec[i];
+END_FOR]]></ST>
+    </Implementation>
+  </POU>
+</TcPlcObject>

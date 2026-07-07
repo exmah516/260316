@@ -239,6 +239,30 @@ PLC 实际位置变化
       → 反馈: handle_axis1_->setforce_axis() → 手柄电机
 ```
 
+## 定位臂手动控制（2026-07-06）
+
+Qt 界面新增“定位臂手动控制”面板，包含 5 行轴控制。每行提供上电、复位、Jog-、Jog+、Vel/Acc/Dec/Jerk 参数编辑、实际位置/速度和状态显示。
+
+数据流仍遵守本指南的线程边界：
+
+```
+UI 按钮/参数
+  → MainWindow 修改 UIToControl.arm_*
+    → ControlEngine::writeArmCommands() 按变化写 G.arm_*
+      → PLC ArmManual.TcPOU 执行单轴上电/复位/点动
+        → ControlEngine::readArmState() 约 50ms 降频读取状态
+          → ControlToUI.arm_* → MainWindow 刷新显示
+```
+
+当前只实现单轴手动点动：
+- `G.arm_manual_enable` 默认写 TRUE；
+- `G.arm_enable_req[1..5]` 由“上电”按钮保持；
+- `G.arm_reset_req[i]` 由“复位”按钮写 TRUE，PLC 消费后自动清零；
+- `G.arm_jog_pos_req` / `G.arm_jog_neg_req` 由 Jog+ / Jog- 的 pressed/released 控制；
+- 默认点动参数为 velocity=5.0、acc=50.0、dec=50.0、jerk=500.0。
+
+正运动学、逆运动学和整体位姿联动暂不接入；后续若实现，应新增独立模块和 UI 命令，不要复用原介入机器人 7 轴 `G.refer` 高频链路。
+
 ---
 
 ## 编译与运行
