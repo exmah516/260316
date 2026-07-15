@@ -12,15 +12,6 @@ VAR
 	settle_timer:TON;
 	all_powered:BOOL;
 	has_err:BOOL;
-
-	Kp			:	LREAL:=0.14;
-	Ki			:	LREAL:=0.016;
-	Kd			:	LREAL:=0.1;
-
-	err, err_f, value_f,err_sum, v_limit,  refer :	ARRAY[1..7] OF LREAL;
-	v1			:	LREAL:=7.5;
-	v2			:	LREAL:=1.5;
-	act_hh		:	ARRAY[1..7] OF ARRAY [1..30] OF LREAL;
 END_VAR
 
 ]]></Declaration>

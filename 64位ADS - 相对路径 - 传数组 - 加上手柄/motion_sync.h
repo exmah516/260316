@@ -18,13 +18,11 @@ namespace motion_sync
 	void apply_locked_axis6_window(AppContext& ctx);
 	bool rebuild_axis6_window_if_covered(AppContext& ctx, const char* reason, bool log_result);
 
-	bool sync_axis1(AppContext& ctx, int samples, bool wait_rearm, int rearm_dir);
+	bool sync_axis1(AppContext& ctx, int samples);
 	bool sync_axis6(
 		AppContext& ctx,
 		int samples,
 		bool capture_window,
-		bool wait_rearm,
-		int rearm_dir,
 		bool check_window_cover,
 		bool log_window_cover);
 	bool sync_all(AppContext& ctx, int samples);

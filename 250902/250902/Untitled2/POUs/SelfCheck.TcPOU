@@ -10,9 +10,6 @@ VAR
     fb_stop     : ARRAY[1..7] OF MC_Stop;
     fb_set_pos  : ARRAY[1..7] OF MC_SetPosition;
     // fb_set_blocked is a function, no instantiation needed
-    dist_scan_large : LREAL := 1000.0;
-    target_pos_large : LREAL := 1000.0;
-    power_not_ready_errid : UDINT := 16#00004650;
     vel_scan : LREAL := 30.0;   // 寻参逼近速度，>0（单位随轴：mm/s 或 deg/s
     vel_back : LREAL := 50.0;   // 回退速度，>0（单位随轴：mm/s 或 deg/s）
 
@@ -27,7 +24,6 @@ VAR
     all_reach_limit : BOOL;
     
     // 日志触发 (示例)
-    log_trigger : ARRAY[1..7] OF R_TRIG;
 	Execute: INT;
     
     // 调试变量，用于排查回退距离问题
@@ -54,7 +50,7 @@ END_VAR
       <ST><![CDATA[(*
 FUNCTION_BLOCK: SelfCheck
 功能说明:
-  上电自检/寻参流程（正向低速逼近右限位 + 顺序回退），用于建立各轴相对坐标系零点并消除进入外部给定模式前的 SetPos/ActPos 偏差。
+  上电自检/寻参流程（负向低速逼近左限位 + 顺序回退），用于建立各轴相对坐标系零点并消除进入外部给定模式前的 SetPos/ActPos 偏差。
 
 自检流程:
   1) 对 target_axes[]包括的平移轴：禁用外部给定（SetPointGenDisable），反向低速逼近左限位并记录 G.leftlimit[]
@@ -179,7 +175,7 @@ FOR i:=1 TO 7 DO
             );
             IF fb_move_vel[i].Error OR wait_timer[i].Q THEN
                
-                // 记录右限位（绝对坐标）
+                // 记录左限位（绝对坐标）
                 G.leftlimit[i] := G.axis[i].NcToPlc.ActPos;
                 
                 // 停止逼近：先撤销 MoveVelocity，再发 MC_Stop 做平滑减速
@@ -314,7 +310,7 @@ FOR i:=1 TO 7 DO
                 fb_set_pos[i](Axis:=G.axis[i], Execute:=FALSE);
                 
                
-                // 启动绝对回退（目标=右限位绝对坐标 + 回退距离）
+                // 启动绝对回退（目标=左限位绝对坐标 + 回退距离）
                 debug_limit_pos[i] := G.leftlimit[i];
                 debug_init_target_pos[i] := G.leftlimit[i] + init_target_from_left[i];
                 

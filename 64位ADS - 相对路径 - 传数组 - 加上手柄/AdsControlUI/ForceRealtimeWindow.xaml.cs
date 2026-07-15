@@ -27,14 +27,21 @@ namespace AdsControlUI
         public ForceRealtimeWindow()
         {
             InitializeComponent();
-            StatusText.Text = "等待实时力反馈数据...";
+            SetEmptyState("等待实时力反馈数据", "请先开启力反馈并完成零点标定，数据将显示于此");
+            StatusText.Text = "等待数据";
         }
 
         public void AddState(VisState state)
         {
             if (!state.ff_enabled || !state.cal_zeroed)
             {
-                StatusText.Text = "力反馈未开启或未标零";
+                string title = !state.ff_enabled ? "力反馈未开启" : "力传感器未标零";
+                string hint = !state.ff_enabled
+                    ? "请在主界面开启力反馈后，本窗口将开始绘制曲线"
+                    : "请先完成力传感器零点采集，再查看实时力曲线";
+                SetEmptyState(title, hint);
+                StatusText.Text = title;
+                ClearReadouts();
                 return;
             }
 
@@ -59,12 +66,28 @@ namespace AdsControlUI
                 _points.RemoveAt(0);
             }
 
-            StatusText.Text = $"显示最近 {WindowSeconds:F0} s";
-            ForceValueText.Text = $"F actual = {state.force_582_f:F3} N";
-            TorqueValueText.Text = $"T actual = {state.force_582_n:F5} N·m";
-            ForceTheoryValueText.Text = $"F theory = {state.force_582_theory_f:F3} N";
-            TorqueTheoryValueText.Text = $"T theory = {state.force_582_theory_n:F5} N·m";
+            EmptyOverlay.Visibility = Visibility.Collapsed;
+            StatusText.Text = $"最近 {WindowSeconds:F0} s";
+            ForceValueText.Text = $"{state.force_582_f:F3}";
+            TorqueValueText.Text = $"{state.force_582_n:F5}";
+            ForceTheoryValueText.Text = $"{state.force_582_theory_f:F3}";
+            TorqueTheoryValueText.Text = $"{state.force_582_theory_n:F5}";
             Redraw();
+        }
+
+        private void SetEmptyState(string title, string hint)
+        {
+            EmptyTitleText.Text = title;
+            EmptyHintText.Text = hint;
+            EmptyOverlay.Visibility = Visibility.Visible;
+        }
+
+        private void ClearReadouts()
+        {
+            ForceValueText.Text = "—";
+            TorqueValueText.Text = "—";
+            ForceTheoryValueText.Text = "—";
+            TorqueTheoryValueText.Text = "—";
         }
 
         private static double TickDeltaSeconds(uint tick, uint firstTick)
@@ -88,9 +111,9 @@ namespace AdsControlUI
 
             PlotCanvas.Children.OfType<Line>().ToList().ForEach(line => PlotCanvas.Children.Remove(line));
 
-            double left = 44.0;
+            double left = 48.0;
             double right = 12.0;
-            double top = 12.0;
+            double top = 14.0;
             double bottom = 30.0;
             double plotW = Math.Max(1.0, width - left - right);
             double plotH = Math.Max(1.0, height - top - bottom);

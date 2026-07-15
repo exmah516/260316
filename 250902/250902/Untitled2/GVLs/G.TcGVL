@@ -16,7 +16,7 @@ VAR_GLOBAL
 	move_jog			: 	ARRAY [1..7] OF MC_Jog;
 	enable,	disable		:	BOOL;	//跟随运动变量
 	flag:INT:=0;
-	flagpos:LREAL:=0;
+	flagpos:LREAL:=0; // 遗留调试量，当前无业务读取
     //其他变量
     init_pos			: ARRAY[1..7] OF LREAL := [30, 9, 0, 0, 0, 30, 13];
     refer,Act_pos,act_h,act_hf	: ARRAY[1..7] OF LREAL;
@@ -52,6 +52,7 @@ VAR_GLOBAL
 	ref_slow			: ARRAY[1..7] OF LREAL := [0,0,0,0,0,0,0];
 
 	// PID 参数（可按轴整定）及状态量
+	// 以下 PID 参数已废弃：控制路径已改为速率限制+滑动平均+轨迹滤波，上位机勿依赖。
 	Kp					: ARRAY[1..7] OF LREAL := [0.14,0.14,0.14,0.14,0.14,0.14,0.14];
 	Ki					: ARRAY[1..7] OF LREAL := [0.016,0.016,0.016,0.016,0.016,0.016,0.016];
 	Kd					: ARRAY[1..7] OF LREAL := [0.1,0.1,0.1,0.1,0.1,0.1,0.1];

@@ -479,14 +479,12 @@ int main(int argc, char* argv[])
 	{
 		return motion_sync::rebuild_axis6_window_if_covered(ctx, reason, log_result);
 	};
-	auto sync_axis1 = [&](int samples, bool wait_rearm, int rearm_dir) -> bool
+	auto sync_axis1 = [&](int samples) -> bool
 	{
-		return motion_sync::sync_axis1(ctx, samples, wait_rearm, rearm_dir);
+		return motion_sync::sync_axis1(ctx, samples);
 	};
 	auto sync_axis6 = [&](int samples,
 		bool capture_window,
-		bool wait_rearm,
-		int rearm_dir,
 		bool check_window_cover,
 		bool log_window_cover) -> bool
 	{
@@ -494,8 +492,6 @@ int main(int argc, char* argv[])
 			ctx,
 			samples,
 			capture_window,
-			wait_rearm,
-			rearm_dir,
 			check_window_cover,
 			log_window_cover);
 	};
@@ -576,16 +572,13 @@ int main(int argc, char* argv[])
 	int loop_count = 0;
 	DWORD force_sample_last_sample_ms = 0;
 	DWORD force_log_warn_last_ms = 0;
-	bool cylinder5_diag_edge_pending = false;
-	DWORD cylinder5_diag_last_log_ms = 0;
 	startup_smoothing_bypass = false;
 	ads.ADSWrite(AdsSymbol::startup_smoothing_bypass, sizeof(startup_smoothing_bypass), &startup_smoothing_bypass);
 
 	std::cout << "力反馈：关闭（按 F 键切换）。" << std::endl;
 	clear_force_output();
 
-	// 力感记录改为在用户选择 C/S 后再启动；文件名包含日期与 24 小时制时间（到秒）。
-	// 旧 ForceLogState 路径已停用（保留结构以兼容其他模块对 ctx.force_log 的引用）。
+	// 力感高频记录在用户选择 C/S 后启动；force_log.period_ms 仅控制力采样节拍。
 	force_log.period_ms = cfg.force_log_period_ms;
 	force_log.enabled = false;
 	bool force_log_started = false;
@@ -857,7 +850,6 @@ int main(int argc, char* argv[])
 		else if (pause_pressed != pause_pressed_prev)
 		{
 			// 正式控制阶段下，b6 仅用于切换电缸5，不再触发 freeze/pause。
-			cylinder5_diag_edge_pending = true;
 			std::cout << "582 b6："
 				<< (pause_pressed ? "按下，电缸5 -> 0。" : "松开，电缸5 -> 2000。")
 				<< std::endl;
@@ -1269,6 +1261,7 @@ int main(int argc, char* argv[])
 		{
 			cylinder5_cmd = pause_pressed ? static_cast<unsigned short>(0) : static_cast<unsigned short>(2000);
 		}
+		// 轴4 接线方向与按键语义相反，此处交换映射。
 		bool axis4_manual_forward_req = axis4_reverse_request;
 		bool axis4_manual_reverse_req = axis4_forward_request;
 
@@ -1387,8 +1380,7 @@ int main(int argc, char* argv[])
 				double axis6_increment_mm,
 				bool axis6_reverse_mode,
 				bool axis6_user_increment_active,
-				bool require_user_increment_for_trigger,
-				bool use_sequential_cylinder)
+				bool require_user_increment_for_trigger)
 			{
 				if (axis6_crawl.phase == CrawlState::Phase::Follow)
 				{
@@ -1439,7 +1431,6 @@ int main(int argc, char* argv[])
 						axis6_crawl.phase_t0 = now_ms;
 						axis6_crawl.cyl_seq_stage = 0;
 						axis6_crawl.cyl_seq_t0 = now_ms;
-						axis6_crawl.rearm_dir = 0;
 						axis6_crawl.plc_move_requested = false;
 						staggered_pair(cylinder3_cmd, cyl.cyl3_clamp,
 							cylinder4_cmd, cyl.cyl4_open,
@@ -1490,7 +1481,7 @@ int main(int argc, char* argv[])
 							clear_axis_return_request(AdsSymbol::axis6_return);
 							axis6_crawl.plc_move_requested = false;
 							std::cout << "轴6 计划回退报错，错误码: " << axis6_return_status.error_id << std::endl;
-							if (!sync_axis6(3, false, false, 0, false, false))
+							if (!sync_axis6(3, false, false, false))
 							{
 								std::cout << "轴6 计划回退报错后重同步失败。" << std::endl;
 							}
@@ -1529,7 +1520,7 @@ int main(int argc, char* argv[])
 					if ((now_ms - axis6_crawl.phase_t0) >=
 						(cfg.axis6_cylinder_interstep_wait_ms + cfg.axis6_post_return_cylinder_wait_ms))
 					{
-						if (!sync_axis6(3, false, false, 0, false, false))
+						if (!sync_axis6(3, false, false, false))
 						{
 							std::cout << "轴6 计划回退后重同步失败。" << std::endl;
 						}
@@ -1692,8 +1683,7 @@ int main(int argc, char* argv[])
 					axis6_linear_increment_mm,
 					axis6_effective_reverse_pressed,
 					axis6_linear_increment_active,
-					false,
-					true);
+					false);
 			}
 			else
 			{
@@ -1845,7 +1835,6 @@ int main(int argc, char* argv[])
 								axis1_crawl.phase_t0 = now_ms;
 								axis1_crawl.cyl_seq_stage = 1;
 								axis1_crawl.cyl_seq_t0 = now_ms;
-								axis1_crawl.rearm_dir = 0;
 								axis1_crawl.plc_move_requested = false;
 								staggered_pair(cylinder1_cmd, cyl.cyl1_clamp,
 									cylinder2_cmd, cyl.cyl2_open,
@@ -1994,7 +1983,7 @@ int main(int argc, char* argv[])
 							axis6_coupled_done = false;
 							axis6_coupled_error = false;
 							axis6_coupled_error_id = 0;
-							if (!sync_axis1(3, false, 0))
+							if (!sync_axis1(3))
 							{
 								std::cout << "轴1 计划回退报错后重同步失败。" << std::endl;
 							}
@@ -2019,7 +2008,7 @@ int main(int argc, char* argv[])
 									axis6_coupled_done = false;
 									axis6_coupled_error = false;
 									axis6_coupled_error_id = 0;
-									if (!sync_axis1(3, false, 0))
+									if (!sync_axis1(3))
 									{
 										std::cout << "轴6 协同快进报错后重同步失败。" << std::endl;
 									}
@@ -2098,7 +2087,7 @@ int main(int argc, char* argv[])
 					}
 					if ((now_ms - axis1_crawl.phase_t0) >= coupled_post_return_wait_ms)
 					{
-						if (!sync_axis1(3, false, 0))
+						if (!sync_axis1(3))
 						{
 							std::cout << "轴1 计划回退后重同步失败。" << std::endl;
 						}
@@ -2142,8 +2131,7 @@ int main(int argc, char* argv[])
 							axis6_combined_increment_mm,
 							axis6_effective_reverse_pressed,
 							axis6_linear_increment_active,
-							true,
-							false);
+							true);
 					}
 					else
 					{
@@ -2154,8 +2142,7 @@ int main(int argc, char* argv[])
 							0.0,
 							axis6_effective_reverse_pressed,
 							false,
-							true,
-							false);
+							true);
 					}
 				}
 			}
@@ -2193,8 +2180,6 @@ int main(int argc, char* argv[])
 		}
 
 		// 10) 仅在运动激活时驱动气缸；快速回退标志始终会写入。
-		bool cylinder5_write_attempted = false;
-		bool cylinder5_write_ok = false;
 		bool cylinder5_req = formal_control_stage ? pause_pressed : false;
 		if (!freeze_active && (control_active || motion_startup_active))
 		{
@@ -2206,62 +2191,9 @@ int main(int argc, char* argv[])
 			ads.ADSWrite(AdsSymbol::cylinder2_value, sizeof(cylinder2_cmd), &cylinder2_cmd);
 			ads.ADSWrite(AdsSymbol::cylinder3_value, sizeof(cylinder3_cmd), &cylinder3_cmd);
 			ads.ADSWrite(AdsSymbol::cylinder4_value, sizeof(cylinder4_cmd), &cylinder4_cmd);
-			cylinder5_write_attempted = true;
-			// 电缸5改为写 BOOL 请求，再由 PLC handle 周期映射为 0/2000。
-			cylinder5_write_ok = ads.ADSWrite(AdsSymbol::cylinder5_press_req, sizeof(cylinder5_req), &cylinder5_req);
+			// 电缸5写 BOOL 请求，由 PLC handle 周期映射为 0/2000。
+			ads.ADSWrite(AdsSymbol::cylinder5_press_req, sizeof(cylinder5_req), &cylinder5_req);
 		}
-
-		const DWORD cylinder5_diag_now_ms = GetTickCount();
-		// const bool cylinder5_need_diag = cylinder5_diag_edge_pending || (cylinder5_write_attempted && !cylinder5_write_ok);
-		const bool cylinder5_need_diag = false;
-		if (cylinder5_need_diag &&
-			(cylinder5_diag_edge_pending || (cylinder5_diag_now_ms - cylinder5_diag_last_log_ms) >= 500))
-		{
-			bool cylinder5_req_readback = false;
-			const bool cylinder5_req_read_ok =
-				ads.ADSRead(AdsSymbol::cylinder5_press_req, sizeof(cylinder5_req_readback), &cylinder5_req_readback);
-			unsigned short cylinder5_cmd_readback = 0;
-			const bool cylinder5_cmd_read_ok =
-				ads.ADSRead(AdsSymbol::cylinder5_cmd, sizeof(cylinder5_cmd_readback), &cylinder5_cmd_readback);
-			unsigned short cylinder5_out_readback = 0;
-			const bool cylinder5_out_read_ok =
-				ads.ADSRead(AdsSymbol::cylinder5_value, sizeof(cylinder5_out_readback), &cylinder5_out_readback);
-			unsigned short gen_state_now = 0;
-			const bool gen_state_read_ok =
-				ads.ADSRead(AdsSymbol::gen_state, sizeof(gen_state_now), &gen_state_now);
-			bool self_check_done_now = false;
-			const bool self_check_read_ok =
-				ads.ADSRead(AdsSymbol::self_check_done, sizeof(self_check_done_now), &self_check_done_now);
-			std::cout << "电缸5诊断：cmd=" << cylinder5_cmd
-				<< "，write_attempt=" << (cylinder5_write_attempted ? "Y" : "N")
-				<< "，write_ok=" << (cylinder5_write_ok ? "Y" : "N")
-				<< "，req=" << (cylinder5_req ? "1" : "0")
-				<< "，req_read_ok=" << (cylinder5_req_read_ok ? "Y" : "N")
-				<< "，req_readback=" << (cylinder5_req_read_ok ? (cylinder5_req_readback ? "1" : "0") : "N/A")
-				<< "，cmd_read_ok=" << (cylinder5_cmd_read_ok ? "Y" : "N")
-				<< "，cmd_readback=" << (cylinder5_cmd_read_ok ? std::to_string(cylinder5_cmd_readback) : "N/A")
-				<< "，out_read_ok=" << (cylinder5_out_read_ok ? "Y" : "N")
-				<< "，out_readback=" << (cylinder5_out_read_ok ? std::to_string(cylinder5_out_readback) : "N/A")
-				<< "，gen_state=" << (gen_state_read_ok ? std::to_string(gen_state_now) : "N/A")
-				<< "，self_check_done=" << (self_check_read_ok ? (self_check_done_now ? "1" : "0") : "N/A")
-				<< "，formal=" << (formal_control_stage ? "Y" : "N")
-				<< "，pause=" << (pause_pressed ? "1" : "0")
-				<< "，freeze=" << (freeze_active ? "Y" : "N")
-				<< "，estop_hold=" << (estop_hold_active ? "Y" : "N")
-				<< "，control_active=" << (control_active ? "Y" : "N")
-				<< "，startup_active=" << (motion_startup_active ? "Y" : "N");
-			if (cylinder5_write_attempted && !cylinder5_write_ok)
-			{
-				std::cout << "，write_err=" << ads.GetLastError();
-			}
-			if (!cylinder5_req_read_ok || !cylinder5_cmd_read_ok || !cylinder5_out_read_ok)
-			{
-				std::cout << "，read_err=" << ads.GetLastError();
-			}
-			std::cout << std::endl;
-			cylinder5_diag_last_log_ms = cylinder5_diag_now_ms;
-		}
-		cylinder5_diag_edge_pending = false;
 
 		write_axis4_manual_requests(axis4_manual_forward_req, axis4_manual_reverse_req);
 		ads.ADSWrite(AdsSymbol::startup_smoothing_bypass, sizeof(startup_smoothing_bypass), &startup_smoothing_bypass);

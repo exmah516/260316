@@ -10,9 +10,8 @@ VAR
 	i,j,k:INT;
 	v_step		: LREAL;
 	avg_window	: INT;
+	avg_window_size : INT := 20;
 	return_handoff_bypass : BOOL;
-	avg_window_follow : INT := 20;
-	avg_window_legacy : INT := 20;
 
 	act_hh		:	ARRAY[1..7] OF ARRAY [1..30] OF LREAL;
 	pos_abs		:	LREAL;
@@ -61,13 +60,6 @@ VAR
 	fb_axis4_stop : MC_Stop;
 	ramp_counter: ARRAY[1..7] OF INT;
 	act_h_prev : ARRAY[1..7] OF LREAL;
-	refer_prev      : ARRAY[1..7] OF LREAL;
-	refer_interp    : ARRAY[1..7] OF LREAL;
-	refer_step_from : ARRAY[1..7] OF LREAL;
-	refer_step_to   : ARRAY[1..7] OF LREAL;
-	refer_interval  : ARRAY[1..7] OF INT;
-	refer_tick      : ARRAY[1..7] OF INT;
-	refer_progress  : ARRAY[1..7] OF INT;
 
 	traj_pos     : ARRAY[1..7] OF LREAL;
 	traj_vel     : ARRAY[1..7] OF LREAL;
@@ -96,9 +88,6 @@ END_VAR
 		return_exec[i] := FALSE;
 		return_finish_error[i] := FALSE;
 		return_error_id_pending[i] := 0;
-		refer_interval[i] := 50;
-		refer_tick[i] := 0;
-		refer_progress[i] := 50;
 		traj_pos[i] := 0.0;
 		traj_vel[i] := 0.0;
 		traj_acc[i] := 0.0;
@@ -150,13 +139,6 @@ IF NOT init_done THEN
 				act_hh[j][k] := G.Act_pos[j];
 			END_FOR
 			act_h_prev[j] := G.Act_pos[j];
-			refer_prev[j] := G.Act_pos[j];
-			refer_interp[j] := G.Act_pos[j];
-			refer_step_from[j] := G.Act_pos[j];
-			refer_step_to[j] := G.Act_pos[j];
-			refer_interval[j] := 50;
-			refer_tick[j] := 0;
-			refer_progress[j] := 50;
 			traj_pos[j] := G.Act_pos[j];
 			traj_vel[j] := 0.0;
 			traj_acc[j] := 0.0;
@@ -265,11 +247,8 @@ FOR j:=1 TO 7 DO
 	IF return_handoff_bypass THEN
 		avg_window := 1;
 		ramp_counter[j] := 0;
-	ELSIF G.startup_smoothing_bypass THEN
-		ramp_counter[j] := MIN(ramp_counter[j] + 1, avg_window_legacy);
-		avg_window := MAX(1, ramp_counter[j]);
 	ELSE
-		ramp_counter[j] := MIN(ramp_counter[j] + 1, avg_window_follow);
+		ramp_counter[j] := MIN(ramp_counter[j] + 1, avg_window_size);
 		avg_window := MAX(1, ramp_counter[j]);
 	END_IF
 
@@ -515,11 +494,6 @@ axis4_manual_state := 40;
 	FOR k:=1 TO 30 DO
 		act_hh[4][k] := G.Act_pos[4];
 	END_FOR
-	refer_prev[4] := G.Act_pos[4];
-	refer_interp[4] := G.Act_pos[4];
-	refer_step_from[4] := G.Act_pos[4];
-	refer_step_to[4] := G.Act_pos[4];
-	refer_progress[4] := refer_interval[4];
 	act_h_prev[4] := G.Act_pos[4];
 	traj_pos[4] := G.Act_pos[4];
 	traj_vel[4] := 0.0;
@@ -546,8 +520,6 @@ END_CASE
 FOR i:=1 TO 7 DO
 	IF G.power_output[i].Error THEN
 		G.axis_Reset[i].Execute := TRUE;
-		G.flag := i;
-		G.flagpos := G.axis[i].NcToPlc.ActPos;
 	END_IF
 END_FOR
 

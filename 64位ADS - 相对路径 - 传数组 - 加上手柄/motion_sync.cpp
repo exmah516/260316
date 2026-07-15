@@ -99,10 +99,8 @@ namespace motion_sync
 		return true;
 	}
 
-	bool sync_axis1(AppContext& ctx, int samples, bool wait_rearm, int rearm_dir)
+	bool sync_axis1(AppContext& ctx, int samples)
 	{
-		(void)wait_rearm;
-		(void)rearm_dir;
 		const double preserved_axis2_hold_rel = *ctx.axis2_hold_rel;
 		plc_io::clear_axis1_group_return_requests(ctx);
 
@@ -135,8 +133,6 @@ namespace motion_sync
 		ctx.axis1_crawl->phase_t0 = GetTickCount();
 		ctx.axis1_crawl->cyl_seq_stage = 0;
 		ctx.axis1_crawl->cyl_seq_t0 = ctx.axis1_crawl->phase_t0;
-		ctx.axis1_crawl->wait_rearm = false;
-		ctx.axis1_crawl->rearm_dir = 0;
 
 		*ctx.axis2_hold_rel = preserved_axis2_hold_rel;
 		*ctx.axis1_reverse_switch_guard_active = false;
@@ -159,13 +155,9 @@ namespace motion_sync
 		AppContext& ctx,
 		int samples,
 		bool capture_window,
-		bool wait_rearm,
-		int rearm_dir,
 		bool check_window_cover,
 		bool log_window_cover)
 	{
-		(void)wait_rearm;
-		(void)rearm_dir;
 		const double preserved_axis7_hold_rel = *ctx.axis7_hold_rel;
 		plc_io::clear_axis_return_request(ctx, AdsSymbol::axis6_return);
 
@@ -222,8 +214,6 @@ namespace motion_sync
 		ctx.axis6_crawl->phase_t0 = GetTickCount();
 		ctx.axis6_crawl->cyl_seq_stage = 0;
 		ctx.axis6_crawl->cyl_seq_t0 = ctx.axis6_crawl->phase_t0;
-		ctx.axis6_crawl->wait_rearm = false;
-		ctx.axis6_crawl->rearm_dir = 0;
 		ctx.axis6_crawl->enabled = true;
 		*ctx.axis6_coop_ff_inited = false;
 		*ctx.axis6_coop_prev_axis1_cmd_abs = 0.0;
@@ -303,8 +293,6 @@ namespace motion_sync
 		ctx.axis1_crawl->phase_t0 = GetTickCount();
 		ctx.axis1_crawl->cyl_seq_stage = 0;
 		ctx.axis1_crawl->cyl_seq_t0 = ctx.axis1_crawl->phase_t0;
-		ctx.axis1_crawl->wait_rearm = false;
-		ctx.axis1_crawl->rearm_dir = 0;
 		ctx.axis1_crawl->enabled = true;
 		*ctx.axis1_follow_cmd_abs = ctx.plc_act_pos[0] + ctx.plc_init_pos[0];
 
@@ -328,8 +316,6 @@ namespace motion_sync
 		ctx.axis6_crawl->phase_t0 = GetTickCount();
 		ctx.axis6_crawl->cyl_seq_stage = 0;
 		ctx.axis6_crawl->cyl_seq_t0 = ctx.axis6_crawl->phase_t0;
-		ctx.axis6_crawl->wait_rearm = false;
-		ctx.axis6_crawl->rearm_dir = 0;
 		ctx.axis6_crawl->enabled = false;
 		*ctx.axis6_window_locked = false;
 		*ctx.axis6_coop_ff_inited = false;

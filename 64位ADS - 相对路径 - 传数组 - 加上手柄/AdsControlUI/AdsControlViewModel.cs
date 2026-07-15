@@ -26,10 +26,138 @@ namespace AdsControlUI
             _refreshTimer.Start();
         }
 
+        // 位置类显示值变化阈值，避免 33ms 全量刷绑定。
+        private const double PosEpsilon = 1e-4;
+        private const double ForceEpsilon = 1e-6;
+
+        private bool _hasUiSnapshot;
+        private bool _prevConnected;
+        private VisState _prevState;
+
         private void RefreshFromPipe()
         {
-            if (!_client.TryGetLatestState(out var state)) return;
+            bool connected = _client.IsConnected;
+            if (!_client.TryGetLatestState(out var state))
+            {
+                NotifyIfChanged(ref _prevConnected, connected, nameof(IsConnected));
+                return;
+            }
+
             _state = state;
+            if (!_hasUiSnapshot)
+            {
+                NotifyAllUiProperties();
+                _prevState = state;
+                _prevConnected = connected;
+                _hasUiSnapshot = true;
+                StateUpdated?.Invoke(state);
+                return;
+            }
+
+            var prev = _prevState;
+
+            // 轴位置与文本
+            if (AxisChanged(prev, state, 0))
+            {
+                OnPropertyChanged(nameof(Axis1Pos));
+                OnPropertyChanged(nameof(Axis1FromLeft));
+                OnPropertyChanged(nameof(Axis1EffectiveTravel));
+                OnPropertyChanged(nameof(Axis1StrokeText));
+            }
+            if (AxisChanged(prev, state, 1))
+            {
+                OnPropertyChanged(nameof(Axis2Pos));
+                OnPropertyChanged(nameof(Axis2RotationText));
+            }
+            if (AxisChanged(prev, state, 2))
+            {
+                OnPropertyChanged(nameof(Axis3Pos));
+                OnPropertyChanged(nameof(Axis3FromLeft));
+                OnPropertyChanged(nameof(Axis3EffectiveTravel));
+                OnPropertyChanged(nameof(Axis3StrokeText));
+            }
+            if (AxisChanged(prev, state, 3))
+            {
+                OnPropertyChanged(nameof(Axis4Pos));
+                OnPropertyChanged(nameof(Axis4RotationText));
+            }
+            if (AxisChanged(prev, state, 4))
+            {
+                OnPropertyChanged(nameof(Axis5Pos));
+                OnPropertyChanged(nameof(Axis5FromLeft));
+                OnPropertyChanged(nameof(Axis5EffectiveTravel));
+                OnPropertyChanged(nameof(Axis5StrokeText));
+            }
+            if (AxisChanged(prev, state, 5))
+            {
+                OnPropertyChanged(nameof(Axis6Pos));
+                OnPropertyChanged(nameof(Axis6FromLeft));
+                OnPropertyChanged(nameof(Axis6EffectiveTravel));
+                OnPropertyChanged(nameof(Axis6StrokeText));
+            }
+            if (AxisChanged(prev, state, 6))
+            {
+                OnPropertyChanged(nameof(Axis7Pos));
+                OnPropertyChanged(nameof(Axis7RotationText));
+            }
+
+            // 电缸开合（与属性阈值一致）
+            if (CylOpenChanged(prev, state, 0)) OnPropertyChanged(nameof(Cyl1Open));
+            if (CylOpenChanged(prev, state, 1)) OnPropertyChanged(nameof(Cyl2Open));
+            if (CylOpenChanged(prev, state, 2)) OnPropertyChanged(nameof(Cyl3Open));
+            if (CylOpenChanged(prev, state, 3)) OnPropertyChanged(nameof(Cyl4Open));
+
+            // 模式与方向
+            if (prev.guidewire_mode != state.guidewire_mode ||
+                prev.axis1_reverse != state.axis1_reverse ||
+                prev.axis6_reverse != state.axis6_reverse)
+            {
+                OnPropertyChanged(nameof(ModeText));
+                OnPropertyChanged(nameof(ModeCathFwdSelected));
+                OnPropertyChanged(nameof(ModeCathRevSelected));
+                OnPropertyChanged(nameof(ModeGuideFwdSelected));
+                OnPropertyChanged(nameof(ModeGuideRevSelected));
+                OnPropertyChanged(nameof(Axis1Reverse));
+                OnPropertyChanged(nameof(Axis6Reverse));
+            }
+
+            if (prev.control_active != state.control_active) OnPropertyChanged(nameof(ControlActive));
+            if (prev.freeze_active != state.freeze_active) OnPropertyChanged(nameof(FreezeActive));
+            if (prev.estop_hold != state.estop_hold) OnPropertyChanged(nameof(EstopHold));
+            if (prev.ff_enabled != state.ff_enabled) OnPropertyChanged(nameof(FfEnabled));
+            if (prev.cal_zeroed != state.cal_zeroed) OnPropertyChanged(nameof(CalZeroed));
+            if (prev.gravity_comp_enabled != state.gravity_comp_enabled) OnPropertyChanged(nameof(GravityCompEnabled));
+            if (prev.force_log_running != state.force_log_running) OnPropertyChanged(nameof(ForceLogRunning));
+            if (prev.startup_waiting != state.startup_waiting) OnPropertyChanged(nameof(StartupWaiting));
+            if (prev.startup_completed != state.startup_completed) OnPropertyChanged(nameof(StartupCompleted));
+            if (prev.startup_waiting != state.startup_waiting || prev.startup_completed != state.startup_completed)
+                OnPropertyChanged(nameof(PhaseText));
+
+            if (Changed(prev.force_582_f, state.force_582_f, ForceEpsilon)) OnPropertyChanged(nameof(Force582F));
+            if (Changed(prev.force_582_n, state.force_582_n, ForceEpsilon)) OnPropertyChanged(nameof(Force582N));
+            if (Changed(prev.force_582_theory_f, state.force_582_theory_f, ForceEpsilon)) OnPropertyChanged(nameof(Force582TheoryF));
+            if (Changed(prev.force_582_theory_n, state.force_582_theory_n, ForceEpsilon)) OnPropertyChanged(nameof(Force582TheoryN));
+
+            if (prev.ft_exp_phase != state.ft_exp_phase)
+            {
+                OnPropertyChanged(nameof(FtExpPhase));
+                OnPropertyChanged(nameof(FtExpPhaseText));
+            }
+            if (prev.ft_exp_velocity_level != state.ft_exp_velocity_level) OnPropertyChanged(nameof(FtExpVelocityLevel));
+            if (prev.ft_exp_trial_id != state.ft_exp_trial_id) OnPropertyChanged(nameof(FtExpTrialId));
+            if (prev.ft_exp_repeat_in_lvl != state.ft_exp_repeat_in_lvl) OnPropertyChanged(nameof(FtExpRepeatInLevel));
+            if (Changed(prev.ft_exp_v_ratio_curr, state.ft_exp_v_ratio_curr, ForceEpsilon)) OnPropertyChanged(nameof(FtExpVRatioCurr));
+            if (Changed(prev.ft_exp_axis1_target, state.ft_exp_axis1_target, PosEpsilon)) OnPropertyChanged(nameof(FtExpAxis1Target));
+            if (prev.ft_exp_active != state.ft_exp_active) OnPropertyChanged(nameof(FtExpActive));
+            if (prev.ft_exp_aborted != state.ft_exp_aborted) OnPropertyChanged(nameof(FtExpAborted));
+
+            NotifyIfChanged(ref _prevConnected, connected, nameof(IsConnected));
+            _prevState = state;
+            StateUpdated?.Invoke(state);
+        }
+
+        private void NotifyAllUiProperties()
+        {
             OnPropertyChanged(nameof(Axis1Pos));
             OnPropertyChanged(nameof(Axis2Pos));
             OnPropertyChanged(nameof(Axis3Pos));
@@ -87,7 +215,37 @@ namespace AdsControlUI
             OnPropertyChanged(nameof(FtExpActive));
             OnPropertyChanged(nameof(FtExpAborted));
             OnPropertyChanged(nameof(FtExpPhaseText));
-            StateUpdated?.Invoke(state);
+        }
+
+        private static bool Changed(double a, double b, double eps) => Math.Abs(a - b) > eps;
+
+        private static double AxisValue(VisState s, int index)
+        {
+            if (s.axis_pos_from_left != null && s.axis_pos_from_left.Length > index)
+                return s.axis_pos_from_left[index];
+            if (s.axis_pos != null && s.axis_pos.Length > index)
+                return s.axis_pos[index];
+            return 0.0;
+        }
+
+        private static bool AxisChanged(VisState prev, VisState cur, int index) =>
+            Changed(AxisValue(prev, index), AxisValue(cur, index), PosEpsilon);
+
+        private static bool CylOpen(VisState s, int index)
+        {
+            ushort v = (s.cylinder_cmd != null && s.cylinder_cmd.Length > index) ? s.cylinder_cmd[index] : (ushort)0;
+            // 与 Cyl1Open/Cyl2Open 等属性阈值一致：1/3 大开，2/4 小开
+            return (index == 0 || index == 2) ? (v > 200) : (v < 200);
+        }
+
+        private static bool CylOpenChanged(VisState prev, VisState cur, int index) =>
+            CylOpen(prev, index) != CylOpen(cur, index);
+
+        private void NotifyIfChanged(ref bool cache, bool value, string name)
+        {
+            if (cache == value) return;
+            cache = value;
+            OnPropertyChanged(name);
         }
 
         public bool IsConnected => _client.IsConnected;

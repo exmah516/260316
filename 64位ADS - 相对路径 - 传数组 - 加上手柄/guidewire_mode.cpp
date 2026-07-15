@@ -57,8 +57,6 @@ namespace guidewire_mode_ctrl
 		ctx.axis6_crawl->phase_t0 = GetTickCount();
 		ctx.axis6_crawl->cyl_seq_stage = 0;
 		ctx.axis6_crawl->cyl_seq_t0 = ctx.axis6_crawl->phase_t0;
-		ctx.axis6_crawl->wait_rearm = false;
-		ctx.axis6_crawl->rearm_dir = 0;
 		ctx.axis6_crawl->window_active = is_within_range(
 			ctx.plc_act_pos[5] + ctx.plc_init_pos[5],
 			ctx.axis6_crawl->min_abs(),
@@ -82,7 +80,7 @@ namespace guidewire_mode_ctrl
 
 	bool enter_cooperative_guidewire_mode(AppContext& ctx)
 	{
-		return motion_sync::sync_axis6(ctx, 20, true, false, 0, true, true);
+		return motion_sync::sync_axis6(ctx, 20, true, true, true);
 	}
 
 	bool check_axis6_guidewire_entry_gate(AppContext& ctx, double& axis6_from_left_mm)
@@ -111,7 +109,7 @@ namespace guidewire_mode_ctrl
 		*ctx.axis7_hold_rel = ctx.plc_act_pos[6];
 		*ctx.axis1_reverse_switch_guard_active = false;
 		*ctx.axis6_reverse_switch_guard_active = false;
-		return motion_sync::sync_axis1(ctx, 20, false, 0);
+		return motion_sync::sync_axis1(ctx, 20);
 	}
 }
 

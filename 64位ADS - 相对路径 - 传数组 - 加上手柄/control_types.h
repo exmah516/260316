@@ -165,7 +165,7 @@ struct ControlConfig
 	double startup_axis5_ready_from_left_mm = 290.0;
 	double startup_axis3_ready_from_left_mm = 635.0;
 	double startup_rot_arrive_tol_deg = 0.2;
-	// 在 axis3 完全到达目标前提前触发 cylinder2 夹紧；现场调参使其领先约 0.5 s。claude --resume 468e1550-aa83-4d08-a9a0-cf47f347128b
+	// 在 axis3 完全到达目标前提前触发 cylinder2 夹紧；现场调参使其领先约 0.5 s。
 	double startup_axis3_cyl2_clamp_advance_mm = 10.0;
 };
 
@@ -220,16 +220,12 @@ struct CrawlState
 		Follow,
 		SwitchWait,
 		FastMove,
-		SettleHold,
-		ClampWait,
 		RestoreWait
 	};
 
 	bool enabled = false;
 	Phase phase = Phase::Follow;
-	bool wait_rearm = false;
 	bool window_active = false;
-	int rearm_dir = 0;
 	double handle_ref = 0.0; // 当前控制段的手柄线性基准（重同步/重建基线时更新）
 	double rot_ref = 0.0; // 当前控制段的手柄旋转基准
 	double base_rel = 0.0; // 当前控制段的轴相对基线（PLC Act_pos 坐标）
