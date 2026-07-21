@@ -469,31 +469,19 @@ int main(int argc, char* argv[])
 
 	auto axis1_window_left_abs = [&]() -> double { return motion_sync::axis1_window_left_abs(ctx); };
 	auto axis1_window_right_abs = [&]() -> double { return motion_sync::axis1_window_right_abs(ctx); };
-	auto set_axis6_independent_window = [&](double window_right_abs, bool log_clamp) -> bool
-	{
-		return motion_sync::set_axis6_independent_window(ctx, window_right_abs, log_clamp);
-	};
-	auto lock_axis6_window_from_current = [&]() { motion_sync::lock_axis6_window_from_current(ctx); };
-	auto apply_locked_axis6_window = [&]() { motion_sync::apply_locked_axis6_window(ctx); };
-	auto rebuild_axis6_window_if_covered = [&](const char* reason, bool log_result) -> bool
-	{
-		return motion_sync::rebuild_axis6_window_if_covered(ctx, reason, log_result);
-	};
 	auto sync_axis1 = [&](int samples) -> bool
 	{
 		return motion_sync::sync_axis1(ctx, samples);
 	};
 	auto sync_axis6 = [&](int samples,
-		bool capture_window,
-		bool check_window_cover,
-		bool log_window_cover) -> bool
+		bool rebuild_window,
+		bool log_window_rebuild) -> bool
 	{
 		return motion_sync::sync_axis6(
 			ctx,
 			samples,
-			capture_window,
-			check_window_cover,
-			log_window_cover);
+			rebuild_window,
+			log_window_rebuild);
 	};
 	auto sync_all = [&](int samples) -> bool { return motion_sync::sync_all(ctx, samples); };
 	auto clear_plc_reinit_req = [&]() { plc_io::clear_plc_reinit_req(ctx); };
@@ -566,6 +554,7 @@ int main(int argc, char* argv[])
 	GuidewireMode requested_guidewire_mode_prev = GuidewireMode::None;
 	bool axis1_fast_return = false; // 轴1快退旁路标志（写入 G.axis1_fast_return）
 	bool axis6_fast_retract = false; // 轴6快退旁路标志（写入 G.axis6_fast_retract）
+	bool return_ads_fault_hold = false; // 回退 ADS 故障后保持停控，重启上位机并重新检查后解除
 	AxisReturnStatus axis1_return_status;
 	AxisReturnStatus axis6_return_status;
 	ForceSampleFrame force_sample;
@@ -683,7 +672,18 @@ int main(int argc, char* argv[])
 		}
 	}
 
-	bool cylinder_manual_open_override[4] = { false, false, false, false };
+	enum class CylinderManualMode : unsigned char
+	{
+		Automatic,
+		Open,
+		Closed
+	};
+	CylinderManualMode cylinder_manual_mode[4] = {
+		CylinderManualMode::Automatic,
+		CylinderManualMode::Automatic,
+		CylinderManualMode::Automatic,
+		CylinderManualMode::Automatic
+	};
 	bool vis_reverse_override_active = false;
 	bool vis_reverse_override_value = false;
 	int vis_reverse_override_target = 0;
@@ -724,6 +724,10 @@ int main(int argc, char* argv[])
 		++loop_count;
 		axis1_fast_return = false; // 每周期先清零，仅在快退状态机阶段置 TRUE
 		axis6_fast_retract = false; // 每周期先清零，仅在快退状态机阶段置 TRUE
+		if (return_ads_fault_hold)
+		{
+			control_active = false;
+		}
 
 		// from-left 观测量仅用于监测/门控，不需要每帧刷新。
 		// 降频到每 5 帧读取一次，减少 ADS 通信负担。
@@ -1041,23 +1045,27 @@ int main(int argc, char* argv[])
 			}
 			else if (ch == 'q' || ch == 'Q')
 			{
-				cylinder_manual_open_override[0] = !cylinder_manual_open_override[0];
-				std::cout << "电缸1 手动开覆盖：" << (cylinder_manual_open_override[0] ? "开启" : "关闭") << std::endl;
+				cylinder_manual_mode[0] = cylinder_manual_mode[0] == CylinderManualMode::Open
+					? CylinderManualMode::Automatic : CylinderManualMode::Open;
+				std::cout << "电缸1 手动开覆盖：" << (cylinder_manual_mode[0] == CylinderManualMode::Open ? "开启" : "关闭") << std::endl;
 			}
 			else if (ch == 'w' || ch == 'W')
 			{
-				cylinder_manual_open_override[1] = !cylinder_manual_open_override[1];
-				std::cout << "电缸2 手动开覆盖：" << (cylinder_manual_open_override[1] ? "开启" : "关闭") << std::endl;
+				cylinder_manual_mode[1] = cylinder_manual_mode[1] == CylinderManualMode::Open
+					? CylinderManualMode::Automatic : CylinderManualMode::Open;
+				std::cout << "电缸2 手动开覆盖：" << (cylinder_manual_mode[1] == CylinderManualMode::Open ? "开启" : "关闭") << std::endl;
 			}
 			else if (ch == 'e' || ch == 'E')
 			{
-				cylinder_manual_open_override[2] = !cylinder_manual_open_override[2];
-				std::cout << "电缸3 手动开覆盖：" << (cylinder_manual_open_override[2] ? "开启" : "关闭") << std::endl;
+				cylinder_manual_mode[2] = cylinder_manual_mode[2] == CylinderManualMode::Open
+					? CylinderManualMode::Automatic : CylinderManualMode::Open;
+				std::cout << "电缸3 手动开覆盖：" << (cylinder_manual_mode[2] == CylinderManualMode::Open ? "开启" : "关闭") << std::endl;
 			}
 			else if (ch == 'r' || ch == 'R')
 			{
-				cylinder_manual_open_override[3] = !cylinder_manual_open_override[3];
-				std::cout << "电缸4 手动开覆盖：" << (cylinder_manual_open_override[3] ? "开启" : "关闭") << std::endl;
+				cylinder_manual_mode[3] = cylinder_manual_mode[3] == CylinderManualMode::Open
+					? CylinderManualMode::Automatic : CylinderManualMode::Open;
+				std::cout << "电缸4 手动开覆盖：" << (cylinder_manual_mode[3] == CylinderManualMode::Open ? "开启" : "关闭") << std::endl;
 			}
 			else if (ch == 0 || ch == 224)
 			{
@@ -1221,7 +1229,8 @@ int main(int argc, char* argv[])
 		// 8) 当启动已完成但控制未激活时，通过全量重同步恢复。
 		const bool motion_startup_active = startup.is_active();
 		startup_smoothing_bypass = motion_startup_active;
-		if (!control_active && !motion_startup_active && !freeze_active && !estop_hold_active && startup.completed)
+		if (!control_active && !return_ads_fault_hold && !motion_startup_active &&
+			!freeze_active && !estop_hold_active && startup.completed)
 		{
 			if (sync_all(20))
 			{
@@ -1266,7 +1275,8 @@ int main(int argc, char* argv[])
 		bool axis4_manual_reverse_req = axis4_forward_request;
 
 		// 9) 根据当前顶层模式构建一帧 refer 和一组气缸指令。
-		if (!freeze_active && !estop_hold_active && (control_active || motion_startup_active) && read_plc_state())
+		if (!return_ads_fault_hold && !freeze_active && !estop_hold_active &&
+			(control_active || motion_startup_active) && read_plc_state())
 		{
 			load_pos_from_actual();
 			pos[1] = axis2_hold_rel;
@@ -1412,9 +1422,12 @@ int main(int argc, char* argv[])
 					const bool axis6_trigger_user_ok =
 						(!require_user_increment_for_trigger) || axis6_user_increment_active;
 					const double axis6_prev_abs = axis6_prev_abs_valid ? axis6_prev_abs_for_trigger : axis6_abs;
-					const bool axis6_enter_trigger_edge =
-						(std::abs(axis6_abs - axis6_trigger_edge_abs) <= cfg.crawl_arrive_tol_mm) &&
-						(std::abs(axis6_prev_abs - axis6_trigger_edge_abs) > cfg.crawl_arrive_tol_mm);
+					// 按运动方向判断是否到达或跨过触发边，避免两个 ADS 采样点跨过窄容差窗时漏触发。
+					const bool axis6_enter_trigger_edge = axis6_reverse_mode
+						? ((axis6_prev_abs < (axis6_trigger_edge_abs - cfg.crawl_arrive_tol_mm)) &&
+							(axis6_abs >= (axis6_trigger_edge_abs - cfg.crawl_arrive_tol_mm)))
+						: ((axis6_prev_abs > (axis6_trigger_edge_abs + cfg.crawl_arrive_tol_mm)) &&
+							(axis6_abs <= (axis6_trigger_edge_abs + cfg.crawl_arrive_tol_mm)));
 					const bool axis6_ready_to_trigger =
 						axis6_trigger_user_ok &&
 						axis6_increment_active &&
@@ -1473,6 +1486,20 @@ int main(int argc, char* argv[])
 						{
 							axis6_crawl.plc_move_requested = true;
 						}
+						else
+						{
+							// ADS 下发失败时立即保持实际位置，禁止快速旁路继续追赶远端目标。
+							clear_axis_return_request(AdsSymbol::axis6_return);
+							load_pos_from_actual();
+							axis6_fast_retract = false;
+							axis6_crawl.plc_move_requested = false;
+							axis6_crawl.phase = CrawlState::Phase::Follow;
+							axis6_follow_cmd_abs = plc_act_pos[5] + plc_init_pos[5];
+							return_ads_fault_hold = true;
+							control_active = false;
+							std::cout << "轴6 计划回退 ADS 下发失败，已保持当前位置并停止上位机运动控制。" << std::endl;
+							return;
+						}
 					}
 					else if (read_axis_return_status(AdsSymbol::axis6_return, axis6_return_status))
 					{
@@ -1481,7 +1508,7 @@ int main(int argc, char* argv[])
 							clear_axis_return_request(AdsSymbol::axis6_return);
 							axis6_crawl.plc_move_requested = false;
 							std::cout << "轴6 计划回退报错，错误码: " << axis6_return_status.error_id << std::endl;
-							if (!sync_axis6(3, false, false, false))
+							if (!sync_axis6(3, false, false))
 							{
 								std::cout << "轴6 计划回退报错后重同步失败。" << std::endl;
 							}
@@ -1520,7 +1547,7 @@ int main(int argc, char* argv[])
 					if ((now_ms - axis6_crawl.phase_t0) >=
 						(cfg.axis6_cylinder_interstep_wait_ms + cfg.axis6_post_return_cylinder_wait_ms))
 					{
-						if (!sync_axis6(3, false, false, false))
+						if (!sync_axis6(3, false, false))
 						{
 							std::cout << "轴6 计划回退后重同步失败。" << std::endl;
 						}
@@ -1691,8 +1718,25 @@ int main(int argc, char* argv[])
 				// - axis1/2 由 handle 582 控制
 				// - 轴 3/5 在 Follow 阶段镜像 axis1 平移
 				// - axis6 在导管模式 Follow 阶段保持不动
-				// - axis1 触发快退时，axis6 按等距并行快进
+				// - axis1 触发快退时，axis6 按反向等位移联动，并限制在轴5相对窗口内
 				const bool cooperative_mode = (guidewire_mode == GuidewireMode::Cooperative);
+				double axis6_catheter_window_start_abs = axis6_abs;
+				double axis6_catheter_window_end_abs = axis6_abs;
+				if (!cooperative_mode)
+				{
+					// 导管模式下窗口随轴5移动，仅用于约束轴1快退时的轴6联动目标。
+					motion_sync::calculate_axis6_window_from_axis5(
+						ctx,
+						axis6_catheter_window_start_abs,
+						axis6_catheter_window_end_abs);
+					axis6_crawl.start_abs = axis6_catheter_window_start_abs;
+					axis6_crawl.end_abs = axis6_catheter_window_end_abs;
+					axis6_crawl.window_active = is_within_range(
+						axis6_abs,
+						axis6_crawl.min_abs(),
+						axis6_crawl.max_abs(),
+						cfg.crawl_arrive_tol_mm);
+				}
 				const bool axis1_now_in_window = is_within_range(axis1_abs, axis1_min_abs, axis1_max_abs, cfg.crawl_arrive_tol_mm);
 				if (!axis1_crawl.window_active && axis1_now_in_window)
 				{
@@ -1779,9 +1823,12 @@ int main(int argc, char* argv[])
 						const bool axis1_toward_trigger =
 							axis1_reverse_pressed ? (axis1_linear_increment_mm > 0.0) : (axis1_linear_increment_mm < 0.0);
 						const double axis1_prev_abs = axis1_prev_abs_valid ? axis1_prev_abs_for_trigger : axis1_abs;
-						const bool axis1_enter_trigger_edge =
-							(std::abs(axis1_abs - axis1_trigger_edge_abs) <= cfg.crawl_arrive_tol_mm) &&
-							(std::abs(axis1_prev_abs - axis1_trigger_edge_abs) > cfg.crawl_arrive_tol_mm);
+						// 按运动方向判断是否到达或跨过触发边，避免高速时越过 ±tol 后漏掉回退。
+						const bool axis1_enter_trigger_edge = axis1_reverse_pressed
+							? ((axis1_prev_abs < (axis1_trigger_edge_abs - cfg.crawl_arrive_tol_mm)) &&
+								(axis1_abs >= (axis1_trigger_edge_abs - cfg.crawl_arrive_tol_mm)))
+							: ((axis1_prev_abs > (axis1_trigger_edge_abs + cfg.crawl_arrive_tol_mm)) &&
+								(axis1_abs <= (axis1_trigger_edge_abs + cfg.crawl_arrive_tol_mm)));
 						const bool axis1_ready_to_trigger =
 							axis1_linear_increment_active &&
 							axis1_toward_trigger &&
@@ -1813,9 +1860,24 @@ int main(int argc, char* argv[])
 								axis6_coupled_settle_rel = plc_act_pos[5];
 								if (!cooperative_mode)
 								{
-									// 导管模式：axis6 联动方向与 axis1 快退位移取反（按工艺要求镜像反向）。
-									axis6_coupled_target_abs =
+									// 导管模式：axis6 与 axis1 快退位移镜像反向，目标受轴5相对窗口限制。
+									const double axis6_coupled_target_raw_abs =
 										axis6_fast_entry_abs - (axis1_crawl.target_abs - axis1_fast_entry_abs);
+									axis6_coupled_target_abs = clamp_double(
+										axis6_coupled_target_raw_abs,
+										axis6_catheter_window_start_abs,
+										axis6_catheter_window_end_abs);
+									if (std::abs(axis6_coupled_target_abs - axis6_coupled_target_raw_abs) >
+										cfg.crawl_arrive_tol_mm)
+									{
+										std::cout
+											<< "轴6 导管联动目标已限制在 axis5 相对窗口内：["
+											<< (axis6_catheter_window_start_abs - plc_leftlimit[5])
+											<< ", "
+											<< (axis6_catheter_window_end_abs - plc_leftlimit[5])
+											<< "] mm。"
+											<< std::endl;
+									}
 									axis6_return_entry_rel = plc_act_pos[5];
 									axis6_coupled_active = true;
 									axis6_coupled_requested = false;
@@ -1895,8 +1957,11 @@ int main(int argc, char* argv[])
 					axis1_fast_return = true;
 					if (axis6_coupled_active)
 					{
-						axis6_fast_retract = true;
-						pos[5] = axis6_coupled_target_abs - plc_init_pos[5];
+						// PLC 确认接收联动请求前保持入口位置，避免 ADS 失败时由 refer 直接驱动轴6。
+						axis6_fast_retract = axis6_coupled_requested;
+						pos[5] = axis6_coupled_requested
+							? (axis6_coupled_target_abs - plc_init_pos[5])
+							: axis6_return_entry_rel;
 						staggered_pair(cylinder3_cmd, cyl.cyl3_clamp,
 							cylinder4_cmd, cyl.cyl4_open,
 							axis1_crawl.cyl_seq_t0, cfg.axis6_cylinder_interstep_wait_ms);
@@ -1917,6 +1982,21 @@ int main(int argc, char* argv[])
 						else
 						{
 							clear_axis_return_request(AdsSymbol::axis1_return);
+							clear_axis_return_request(AdsSymbol::axis6_return);
+							load_pos_from_actual();
+							axis1_fast_return = false;
+							axis6_fast_retract = false;
+							axis1_crawl.phase = CrawlState::Phase::Follow;
+							axis1_crawl.plc_move_requested = false;
+							axis1_follow_cmd_abs = plc_act_pos[0] + plc_init_pos[0];
+							axis6_coupled_active = false;
+							axis6_coupled_requested = false;
+							axis6_coupled_done = false;
+							axis6_coupled_error = false;
+							axis6_coupled_error_id = 0;
+							return_ads_fault_hold = true;
+							control_active = false;
+							std::cout << "轴1 计划回退 ADS 下发失败，已保持当前位置并停止上位机运动控制。" << std::endl;
 						}
 					}
 					if (axis6_coupled_active &&
@@ -1933,12 +2013,22 @@ int main(int argc, char* argv[])
 							cfg.axis1_return_jerk_mm_s3))
 						{
 							axis6_coupled_requested = true;
+							axis6_fast_retract = true;
+							pos[5] = axis6_coupled_target_abs - plc_init_pos[5];
 						}
 						else
 						{
 							clear_axis_return_request(AdsSymbol::axis6_return);
-							axis6_coupled_error = true;
+							pos[5] = plc_act_pos[5];
+							axis6_fast_retract = false;
+							axis6_coupled_active = false;
+							axis6_coupled_requested = false;
+							axis6_coupled_done = false;
+							axis6_coupled_error = false;
 							axis6_coupled_error_id = 0;
+							return_ads_fault_hold = true;
+							control_active = false;
+							std::cout << "轴6 联动回退 ADS 下发失败，已保持轴6当前位置并停止上位机运动控制。" << std::endl;
 						}
 					}
 					if (axis6_coupled_active && axis6_coupled_requested && !axis6_coupled_done && !axis6_coupled_error)
@@ -2183,10 +2273,16 @@ int main(int argc, char* argv[])
 		bool cylinder5_req = formal_control_stage ? pause_pressed : false;
 		if (!freeze_active && (control_active || motion_startup_active))
 		{
-			if (cylinder_manual_open_override[0]) cylinder1_cmd = cyl.cyl1_open;
-			if (cylinder_manual_open_override[1]) cylinder2_cmd = cyl.cyl2_open;
-			if (cylinder_manual_open_override[2]) cylinder3_cmd = cyl.cyl3_open;
-			if (cylinder_manual_open_override[3]) cylinder4_cmd = cyl.cyl4_open;
+			auto apply_cylinder_manual_mode = [](CylinderManualMode mode, unsigned short& command,
+				unsigned short open_value, unsigned short closed_value)
+			{
+				if (mode == CylinderManualMode::Open) command = open_value;
+				else if (mode == CylinderManualMode::Closed) command = closed_value;
+			};
+			apply_cylinder_manual_mode(cylinder_manual_mode[0], cylinder1_cmd, cyl.cyl1_open, cyl.cyl1_clamp);
+			apply_cylinder_manual_mode(cylinder_manual_mode[1], cylinder2_cmd, cyl.cyl2_open, cyl.cyl2_clamp);
+			apply_cylinder_manual_mode(cylinder_manual_mode[2], cylinder3_cmd, cyl.cyl3_open, cyl.cyl3_clamp);
+			apply_cylinder_manual_mode(cylinder_manual_mode[3], cylinder4_cmd, cyl.cyl4_open, cyl.cyl4_clamp);
 			ads.ADSWrite(AdsSymbol::cylinder1_value, sizeof(cylinder1_cmd), &cylinder1_cmd);
 			ads.ADSWrite(AdsSymbol::cylinder2_value, sizeof(cylinder2_cmd), &cylinder2_cmd);
 			ads.ADSWrite(AdsSymbol::cylinder3_value, sizeof(cylinder3_cmd), &cylinder3_cmd);
@@ -2512,13 +2608,13 @@ int main(int argc, char* argv[])
 			{
 				switch (vcmd.type)
 				{
-				case VisCommandType::SetCylinderOverride:
+				case VisCommandType::SetCylinderManualOpen:
 					if (vcmd.param1 >= 0 && vcmd.param1 < 4)
-						cylinder_manual_open_override[vcmd.param1] = true;
+						cylinder_manual_mode[vcmd.param1] = CylinderManualMode::Open;
 					break;
-				case VisCommandType::ClearCylinderOverride:
+				case VisCommandType::SetCylinderManualClosed:
 					if (vcmd.param1 >= 0 && vcmd.param1 < 4)
-						cylinder_manual_open_override[vcmd.param1] = false;
+						cylinder_manual_mode[vcmd.param1] = CylinderManualMode::Closed;
 					break;
 				case VisCommandType::RequestModeSwitch:
 					if (single_handle_mode)

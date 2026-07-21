@@ -76,22 +76,22 @@
 | `cylinder5_press_req` | `G.cylinder5_press_req` | bool | 写+读（诊断） | 电缸5按键请求（PLC 映射为 0/2000） |
 | `cylinder5_value` | `G.cylinder5_value` | unsigned short | 读（诊断） | 电缸5实际输出（诊断用） |
 
-### 3.4 计划回退命令（FB 实例，每轴一组）
+### 3.4 计划回退命令（数组元素，每轴一组）
 
-每轴一组共 10 个符号，封装在 `AxisReturnAdsSymbols` 结构里。当前定义了 4 组：`axis1_return` / `axis3_return` / `axis5_return` / `axis6_return`。
+PLC 统一使用 `G.return_cmd[1..7]` 数组；上位机将启用回退的第 1、3、5、6 轴各封装为一组 `AxisReturnAdsSymbols`。不要使用旧的 `G.axisN_return_cmd.*` 命名。
 
 | 字段 | PLC 符号模板 | 类型 | 读写 | 含义 |
 |---|---|---|---|---|
-| `req` | `G.axisN_return_cmd.Req` | bool | 写 | 触发位（true=下发一次回退） |
-| `busy` | `G.axisN_return_cmd.Busy` | bool | 读 | 正在执行 |
-| `done` | `G.axisN_return_cmd.Done` | bool | 读 | 完成 |
-| `error` | `G.axisN_return_cmd.Error` | bool | 读 | 报错 |
-| `error_id` | `G.axisN_return_cmd.ErrorId` | unsigned long | 读 | 错误码 |
-| `target_abs` | `G.axisN_return_cmd.TargetAbs` | double | 写 | 目标绝对位置（mm） |
-| `velocity` | `G.axisN_return_cmd.Velocity` | double | 写 | 速度（mm/s） |
-| `acc` | `G.axisN_return_cmd.Acc` | double | 写 | 加速度（mm/s²） |
-| `dec` | `G.axisN_return_cmd.Dec` | double | 写 | 减速度（mm/s²） |
-| `jerk` | `G.axisN_return_cmd.Jerk` | double | 写 | 加加速度（mm/s³） |
+| `req` | `G.return_cmd[N].Req` | bool | 写 | 触发位（true=下发一次回退） |
+| `busy` | `G.return_cmd[N].Busy` | bool | 读 | 正在执行 |
+| `done` | `G.return_cmd[N].Done` | bool | 读 | 完成 |
+| `error` | `G.return_cmd[N].Error` | bool | 读 | 报错 |
+| `error_id` | `G.return_cmd[N].ErrorId` | unsigned long | 读 | 错误码 |
+| `target_abs` | `G.return_cmd[N].TargetAbs` | double | 写 | 目标绝对位置（mm） |
+| `velocity` | `G.return_cmd[N].Velocity` | double | 写 | 速度（mm/s） |
+| `acc` | `G.return_cmd[N].Acc` | double | 写 | 加速度（mm/s²） |
+| `dec` | `G.return_cmd[N].Dec` | double | 写 | 减速度（mm/s²） |
+| `jerk` | `G.return_cmd[N].Jerk` | double | 写 | 加加速度（mm/s³） |
 
 ### 3.5 axis4 手动点动
 
@@ -170,7 +170,8 @@ if (ads.OpenComm_inside()) {
 ```cpp
 // 触发一次回退
 request_axis_return(symbols, target_abs, vel, acc, dec, jerk)
-  // 顺序写 TargetAbs -> Velocity -> Acc -> Dec -> Jerk -> Req=true
+  // 顺序写 Req=false -> TargetAbs -> Velocity -> Acc -> Dec -> Jerk -> Req=true
+  // 任一步失败都会保持 Req=false，上层保持实际位置并停止运动控制
 
 // 每拍轮询
 read_axis_return_status(symbols, status)
@@ -191,9 +192,9 @@ clear_axis_return_request(symbols)
 - 启动：自检完成或直接控制进入时 `sync_all(30)`。
 - PLC 主动请求：读到 `G.handle_reinit_req == true` -> 清除该位 + `sync_all(30)`。
 - PLC 急停保持解除：`sync_all(20)`。
-- 轴回退报错后：单轴 `sync_axis1(3, false, 0)` 或 `sync_axis6(3, ...)`。
+- 轴回退报错后：单轴 `sync_axis1(3)` 或 `sync_axis6(3, ...)`。
 - 轴回退正常完成 RestoreWait 阶段后：单轴 sync。
-- 导丝模式进入/退出：`sync_axis6` 或 `sync_axis1`。
+- 导丝模式进入前：先清 `G.return_cmd[6].Req` 并确认 `Busy=false`，随后执行 `sync_axis6` 或独立模式同步；退出时执行 `sync_axis1`。
 - 主循环兜底：`startup.completed && !control_active && !freeze && !estop_hold` 时每拍 `sync_all(20)` 尝试恢复。
 
 `sync_*` 内部都会做：清回退请求 → 读 PLC 当前实际位置 → `load_pos_from_actual` 把 refer 重置为 Act_pos → 平均 N 个手柄样本重建基准 → 写 refer。任何一步 ADS 失败都直接返回 false，让上层重试。

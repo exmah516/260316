@@ -389,7 +389,7 @@ namespace AdsControlUI
 
         private static string FormatLinearAxis(string axisName, string description, double effectiveTravel, double fromLeft, double fullStroke)
         {
-            return $"{axisName} ({description}): 有效 {effectiveTravel:F2}/{fullStroke:F0} mm，距左限位 {fromLeft:F2} mm";
+            return $"{axisName} ({description}): 已行进 {effectiveTravel:F2}/{fullStroke:F0} mm，距左限位 {fromLeft:F2} mm";
         }
 
         private static string FormatRotationAxis(string axisName, string description, double angle)
@@ -397,11 +397,10 @@ namespace AdsControlUI
             return $"{axisName} ({description}): {angle:F2}°";
         }
 
-        public void SetCylinderOverride(int index) =>
-            _client.SendCommand(VisCommandType.SetCylinderOverride, index);
-
-        public void ClearCylinderOverride(int index) =>
-            _client.SendCommand(VisCommandType.ClearCylinderOverride, index);
+        public void SetCylinderManualState(int index, bool open) =>
+            _client.SendCommand(open
+                ? VisCommandType.SetCylinderManualOpen
+                : VisCommandType.SetCylinderManualClosed, index);
 
         public void SetMode(int guidewireMode, int reverse) =>
             _client.SendCommand(VisCommandType.SetReverseMode, guidewireMode, reverse);

@@ -39,11 +39,14 @@ namespace startup_sequence
 			copy_positions(ctx.plc_v_limit, ctx.startup->v_limit_backup, 7);
 			double scaled_v_limit[7] = { 0 };
 			copy_positions(ctx.plc_v_limit, scaled_v_limit, 7);
+			// 轴5/6在启动准备中同向靠近，使用共同的较低基准速度，避免轴6追上并推动轴5。
+			const double axis56_common_v_limit =
+				(ctx.plc_v_limit[4] < ctx.plc_v_limit[5]) ? ctx.plc_v_limit[4] : ctx.plc_v_limit[5];
 			scaled_v_limit[0] *= ctx.cfg->startup_motion_speed_scale;
 			scaled_v_limit[1] *= ctx.cfg->startup_motion_speed_scale;
 			scaled_v_limit[2] *= ctx.cfg->startup_motion_speed_scale;
-			scaled_v_limit[4] *= ctx.cfg->startup_motion_speed_scale;
-			scaled_v_limit[5] *= ctx.cfg->startup_motion_speed_scale;
+			scaled_v_limit[4] = axis56_common_v_limit * ctx.cfg->startup_motion_speed_scale;
+			scaled_v_limit[5] = axis56_common_v_limit * ctx.cfg->startup_motion_speed_scale;
 			scaled_v_limit[6] *= ctx.cfg->startup_motion_speed_scale;
 			if (!plc_io::write_v_limit(ctx, scaled_v_limit))
 			{

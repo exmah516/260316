@@ -1,11 +1,11 @@
 using System.Windows;
+using System.Windows.Controls.Primitives;
 
 namespace AdsControlUI
 {
     public partial class MainWindow : Window
     {
         private readonly AdsControlViewModel _vm;
-        private readonly bool[] _cylOverride = new bool[4];
         private ForceRealtimeWindow _forceWindow;
         private ForceTransitionWindow _ftExpWindow;
 
@@ -26,18 +26,15 @@ namespace AdsControlUI
             base.OnClosed(e);
         }
 
-        private void Cyl1_Click(object sender, RoutedEventArgs e) => ToggleCylinder(0);
-        private void Cyl2_Click(object sender, RoutedEventArgs e) => ToggleCylinder(1);
-        private void Cyl3_Click(object sender, RoutedEventArgs e) => ToggleCylinder(2);
-        private void Cyl4_Click(object sender, RoutedEventArgs e) => ToggleCylinder(3);
+        private void Cyl1_Click(object sender, RoutedEventArgs e) => SetCylinderState(sender, 0);
+        private void Cyl2_Click(object sender, RoutedEventArgs e) => SetCylinderState(sender, 1);
+        private void Cyl3_Click(object sender, RoutedEventArgs e) => SetCylinderState(sender, 2);
+        private void Cyl4_Click(object sender, RoutedEventArgs e) => SetCylinderState(sender, 3);
 
-        private void ToggleCylinder(int index)
+        private void SetCylinderState(object sender, int index)
         {
-            _cylOverride[index] = !_cylOverride[index];
-            if (_cylOverride[index])
-                _vm.SetCylinderOverride(index);
-            else
-                _vm.ClearCylinderOverride(index);
+            if (sender is ToggleButton button)
+                _vm.SetCylinderManualState(index, button.IsChecked == true);
         }
 
         private void ModeCathFwd_Click(object sender, RoutedEventArgs e) => _vm.SetMode(0, 0);

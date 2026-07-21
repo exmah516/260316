@@ -56,8 +56,8 @@ struct VisState
 enum class VisCommandType : int
 {
 	None = 0,
-	SetCylinderOverride = 1,
-	ClearCylinderOverride = 2,
+	SetCylinderManualOpen = 1,
+	SetCylinderManualClosed = 2,
 	RequestModeSwitch = 3,
 	ZeroForceSensor = 4,
 	ToggleForceFeedback = 5,

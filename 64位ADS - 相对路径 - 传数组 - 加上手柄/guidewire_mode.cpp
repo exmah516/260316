@@ -1,19 +1,50 @@
 // 文件职责说明：
 // 1) 实现导丝模式独立/协同入模、退出与门限检查逻辑。
 // 2) 保持原切换时序与同步策略，不修改业务行为。
-// 3) 仅负责模式切换流程，不承载主循环状态机。
+// 3) 模式入口按轴5当前位置重建 axis6 窗口，不承载主循环状态机。
 #include "guidewire_mode.h"
 
 #include "motion_sync.h"
 #include "plc_io.h"
 
 #include <cmath>
+#include <iostream>
+
+namespace
+{
+	bool prepare_axis6_guidewire_handoff(AppContext& ctx)
+	{
+		// 模式切换前先撤销残留 Req；已经 Busy 的 MC 回退不能由改写 refer 安全接管。
+		if (!plc_io::clear_axis_return_request(ctx, AdsSymbol::axis6_return))
+		{
+			std::cout << "导丝模式切换失败：无法清除轴6计划回退请求。" << std::endl;
+			return false;
+		}
+
+		AxisReturnStatus status;
+		if (!plc_io::read_axis_return_status(ctx, AdsSymbol::axis6_return, status))
+		{
+			std::cout << "导丝模式切换失败：无法读取轴6计划回退状态。" << std::endl;
+			return false;
+		}
+		if (status.busy)
+		{
+			std::cout << "导丝模式切换已拒绝：轴6计划回退仍在执行，请等待 Busy 清除。" << std::endl;
+			return false;
+		}
+		return true;
+	}
+}
 
 namespace guidewire_mode_ctrl
 {
 	bool enter_independent_guidewire_mode(AppContext& ctx)
 	{
 		const double preserved_axis7_hold_rel = *ctx.axis7_hold_rel;
+		if (!prepare_axis6_guidewire_handoff(ctx))
+		{
+			return false;
+		}
 
 		if (!plc_io::read_plc_state(ctx))
 		{
@@ -35,19 +66,7 @@ namespace guidewire_mode_ctrl
 		ctx.axis6_crawl->base_rel = ctx.plc_act_pos[5];
 		ctx.axis6_crawl->rot_base_rel = *ctx.axis7_hold_rel;
 		*ctx.axis6_follow_cmd_abs = ctx.plc_act_pos[5] + ctx.plc_init_pos[5];
-		if (!*ctx.axis6_window_locked)
-		{
-			if (!motion_sync::set_axis6_independent_window(ctx, ctx.plc_act_pos[5] + ctx.plc_init_pos[5], true))
-			{
-				return false;
-			}
-			motion_sync::lock_axis6_window_from_current(ctx);
-		}
-		else
-		{
-			motion_sync::apply_locked_axis6_window(ctx);
-		}
-		if (!motion_sync::rebuild_axis6_window_if_covered(ctx, "enter_independent", true))
+		if (!motion_sync::rebuild_axis6_window_from_axis5(ctx, true))
 		{
 			return false;
 		}
@@ -80,7 +99,11 @@ namespace guidewire_mode_ctrl
 
 	bool enter_cooperative_guidewire_mode(AppContext& ctx)
 	{
-		return motion_sync::sync_axis6(ctx, 20, true, true, true);
+		if (!prepare_axis6_guidewire_handoff(ctx))
+		{
+			return false;
+		}
+		return motion_sync::sync_axis6(ctx, 20, true, true);
 	}
 
 	bool check_axis6_guidewire_entry_gate(AppContext& ctx, double& axis6_from_left_mm)

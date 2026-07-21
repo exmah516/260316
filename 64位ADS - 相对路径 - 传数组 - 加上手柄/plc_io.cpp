@@ -4,6 +4,8 @@
 // 3) 不承载控制状态机，只提供数据访问能力。
 #include "plc_io.h"
 
+#include <iostream>
+
 namespace AdsSymbol
 {
 	const char* refer = "G.refer";
@@ -39,55 +41,55 @@ namespace AdsSymbol
 	const char* app_name = "TwinCAT_SystemInfoVarList._AppInfo.AppName";
 
 	const AxisReturnAdsSymbols axis1_return = {
-		"G.axis1_return_cmd.Req",
-		"G.axis1_return_cmd.Busy",
-		"G.axis1_return_cmd.Done",
-		"G.axis1_return_cmd.Error",
-		"G.axis1_return_cmd.ErrorId",
-		"G.axis1_return_cmd.TargetAbs",
-		"G.axis1_return_cmd.Velocity",
-		"G.axis1_return_cmd.Acc",
-		"G.axis1_return_cmd.Dec",
-		"G.axis1_return_cmd.Jerk"
+		"G.return_cmd[1].Req",
+		"G.return_cmd[1].Busy",
+		"G.return_cmd[1].Done",
+		"G.return_cmd[1].Error",
+		"G.return_cmd[1].ErrorId",
+		"G.return_cmd[1].TargetAbs",
+		"G.return_cmd[1].Velocity",
+		"G.return_cmd[1].Acc",
+		"G.return_cmd[1].Dec",
+		"G.return_cmd[1].Jerk"
 	};
 
 	const AxisReturnAdsSymbols axis3_return = {
-		"G.axis3_return_cmd.Req",
-		"G.axis3_return_cmd.Busy",
-		"G.axis3_return_cmd.Done",
-		"G.axis3_return_cmd.Error",
-		"G.axis3_return_cmd.ErrorId",
-		"G.axis3_return_cmd.TargetAbs",
-		"G.axis3_return_cmd.Velocity",
-		"G.axis3_return_cmd.Acc",
-		"G.axis3_return_cmd.Dec",
-		"G.axis3_return_cmd.Jerk"
+		"G.return_cmd[3].Req",
+		"G.return_cmd[3].Busy",
+		"G.return_cmd[3].Done",
+		"G.return_cmd[3].Error",
+		"G.return_cmd[3].ErrorId",
+		"G.return_cmd[3].TargetAbs",
+		"G.return_cmd[3].Velocity",
+		"G.return_cmd[3].Acc",
+		"G.return_cmd[3].Dec",
+		"G.return_cmd[3].Jerk"
 	};
 
 	const AxisReturnAdsSymbols axis5_return = {
-		"G.axis5_return_cmd.Req",
-		"G.axis5_return_cmd.Busy",
-		"G.axis5_return_cmd.Done",
-		"G.axis5_return_cmd.Error",
-		"G.axis5_return_cmd.ErrorId",
-		"G.axis5_return_cmd.TargetAbs",
-		"G.axis5_return_cmd.Velocity",
-		"G.axis5_return_cmd.Acc",
-		"G.axis5_return_cmd.Dec",
-		"G.axis5_return_cmd.Jerk"
+		"G.return_cmd[5].Req",
+		"G.return_cmd[5].Busy",
+		"G.return_cmd[5].Done",
+		"G.return_cmd[5].Error",
+		"G.return_cmd[5].ErrorId",
+		"G.return_cmd[5].TargetAbs",
+		"G.return_cmd[5].Velocity",
+		"G.return_cmd[5].Acc",
+		"G.return_cmd[5].Dec",
+		"G.return_cmd[5].Jerk"
 	};
 
 	const AxisReturnAdsSymbols axis6_return = {
-		"G.axis6_return_cmd.Req",
-		"G.axis6_return_cmd.Busy",
-		"G.axis6_return_cmd.Done",
-		"G.axis6_return_cmd.Error",
-		"G.axis6_return_cmd.ErrorId",
-		"G.axis6_return_cmd.TargetAbs",
-		"G.axis6_return_cmd.Velocity",
-		"G.axis6_return_cmd.Acc",
-		"G.axis6_return_cmd.Dec",
-		"G.axis6_return_cmd.Jerk"
+		"G.return_cmd[6].Req",
+		"G.return_cmd[6].Busy",
+		"G.return_cmd[6].Done",
+		"G.return_cmd[6].Error",
+		"G.return_cmd[6].ErrorId",
+		"G.return_cmd[6].TargetAbs",
+		"G.return_cmd[6].Velocity",
+		"G.return_cmd[6].Acc",
+		"G.return_cmd[6].Dec",
+		"G.return_cmd[6].Jerk"
 	};
 }
 
@@ -178,19 +180,35 @@ namespace plc_io
 	bool read_axis_return_status(AppContext& ctx, const AxisReturnAdsSymbols& symbols, AxisReturnStatus& status)
 	{
 		// 轮询 PLC 计划回退命令状态位（Busy/Done/Error/ErrorId）。
-		bool ok = true;
-		ok = ctx.ads->ADSRead(symbols.busy, sizeof(status.busy), &status.busy) && ok;
-		ok = ctx.ads->ADSRead(symbols.done, sizeof(status.done), &status.done) && ok;
-		ok = ctx.ads->ADSRead(symbols.error, sizeof(status.error), &status.error) && ok;
-		ok = ctx.ads->ADSRead(symbols.error_id, sizeof(status.error_id), &status.error_id) && ok;
-		return ok;
+		status = AxisReturnStatus{};
+		auto read_required = [&](const char* symbol, unsigned long length, void* output) -> bool
+		{
+			if (ctx.ads->ADSRead(symbol, length, output))
+			{
+				return true;
+			}
+			std::cout << "计划回退 ADS 状态读取失败：" << symbol
+				<< "，错误：" << ctx.ads->GetLastError();
+			return false;
+		};
+
+		return read_required(symbols.busy, sizeof(status.busy), &status.busy) &&
+			read_required(symbols.done, sizeof(status.done), &status.done) &&
+			read_required(symbols.error, sizeof(status.error), &status.error) &&
+			read_required(symbols.error_id, sizeof(status.error_id), &status.error_id);
 	}
 
 	bool clear_axis_return_request(AppContext& ctx, const AxisReturnAdsSymbols& symbols)
 	{
 		// 清除单轴计划回退触发位 Req。
 		bool req = false;
-		return ctx.ads->ADSWrite(symbols.req, sizeof(req), &req);
+		if (ctx.ads->ADSWrite(symbols.req, sizeof(req), &req))
+		{
+			return true;
+		}
+		std::cout << "计划回退 ADS 请求清除失败：" << symbols.req
+			<< "，错误：" << ctx.ads->GetLastError();
+		return false;
 	}
 
 	bool request_axis_return(
@@ -202,17 +220,39 @@ namespace plc_io
 		double dec,
 		double jerk)
 	{
-		// 下发一次计划回退参数并置位 Req：
-		// target_abs(mm), velocity(mm/s), acc/dec(mm/s^2), jerk(mm/s^3)。
-		bool req = true;
-		bool ok = true;
-		ok = ctx.ads->ADSWrite(symbols.target_abs, sizeof(target_abs), &target_abs) && ok;
-		ok = ctx.ads->ADSWrite(symbols.velocity, sizeof(velocity), &velocity) && ok;
-		ok = ctx.ads->ADSWrite(symbols.acc, sizeof(acc), &acc) && ok;
-		ok = ctx.ads->ADSWrite(symbols.dec, sizeof(dec), &dec) && ok;
-		ok = ctx.ads->ADSWrite(symbols.jerk, sizeof(jerk), &jerk) && ok;
-		ok = ctx.ads->ADSWrite(symbols.req, sizeof(req), &req) && ok;
-		return ok;
+		// 先清 Req，再完整写入参数，最后置位 Req，避免 PLC 消费到半更新参数。
+		bool req = false;
+		auto write_required = [&](const char* symbol, unsigned long length, void* value) -> bool
+		{
+			if (ctx.ads->ADSWrite(symbol, length, value))
+			{
+				return true;
+			}
+			std::cout << "计划回退 ADS 写入失败：" << symbol
+				<< "，错误：" << ctx.ads->GetLastError();
+			return false;
+		};
+
+		if (!write_required(symbols.req, sizeof(req), &req) ||
+			!write_required(symbols.target_abs, sizeof(target_abs), &target_abs) ||
+			!write_required(symbols.velocity, sizeof(velocity), &velocity) ||
+			!write_required(symbols.acc, sizeof(acc), &acc) ||
+			!write_required(symbols.dec, sizeof(dec), &dec) ||
+			!write_required(symbols.jerk, sizeof(jerk), &jerk))
+		{
+			req = false;
+			ctx.ads->ADSWrite(symbols.req, sizeof(req), &req);
+			return false;
+		}
+
+		req = true;
+		if (!write_required(symbols.req, sizeof(req), &req))
+		{
+			req = false;
+			ctx.ads->ADSWrite(symbols.req, sizeof(req), &req);
+			return false;
+		}
+		return true;
 	}
 
 	bool clear_axis1_group_return_requests(AppContext& ctx)

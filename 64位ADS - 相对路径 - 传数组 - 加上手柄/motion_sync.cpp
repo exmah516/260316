@@ -33,31 +33,16 @@ namespace motion_sync
 		return from_left_to_abs(ctx, 0, ctx.cfg->axis1_window_right_from_left_mm);
 	}
 
-	bool set_axis6_independent_window(AppContext& ctx, double window_right_abs, bool log_clamp)
+	void calculate_axis6_window_from_axis5(
+		const AppContext& ctx,
+		double& window_start_abs,
+		double& window_end_abs)
 	{
-		const double shifted_window_right_abs = window_right_abs + ctx.cfg->axis6_window_shift_from_left_mm;
-		const double requested_left_abs = shifted_window_right_abs - ctx.cfg->axis6_independent_window_size_mm;
-		const double clamped_left_abs =
-			(requested_left_abs < ctx.plc_leftlimit[5]) ? ctx.plc_leftlimit[5] : requested_left_abs;
-
-		ctx.axis6_crawl->start_abs = clamped_left_abs;
-		ctx.axis6_crawl->end_abs = shifted_window_right_abs;
-
-		if ((ctx.axis6_crawl->end_abs - ctx.axis6_crawl->start_abs) < ctx.cfg->crawl_arrive_tol_mm)
-		{
-			if (log_clamp)
-			{
-				std::cout << "导丝模式切换已忽略：axis6 独立窗口距离左限位过近。" << std::endl;
-			}
-			return false;
-		}
-
-		if (log_clamp && clamped_left_abs > requested_left_abs)
-		{
-			std::cout << "axis6 独立窗口已按左限位进行夹紧修正。" << std::endl;
-		}
-
-		return true;
+		const double axis5_abs = ctx.plc_act_pos[4] + ctx.plc_init_pos[4];
+		const double axis5_from_left_mm = axis5_abs - ctx.plc_leftlimit[4];
+		window_start_abs = ctx.plc_leftlimit[5] + axis5_from_left_mm +
+			ctx.cfg->axis6_window_min_gap_from_axis5_mm;
+		window_end_abs = window_start_abs + ctx.cfg->axis6_window_size_mm;
 	}
 
 	void lock_axis6_window_from_current(AppContext& ctx)
@@ -73,28 +58,32 @@ namespace motion_sync
 		ctx.axis6_crawl->end_abs = *ctx.axis6_locked_window_end_abs;
 	}
 
-	bool rebuild_axis6_window_if_covered(AppContext& ctx, const char* reason, bool log_result)
+	bool rebuild_axis6_window_from_axis5(AppContext& ctx, bool log_result)
 	{
-		(void)reason;
-		(void)log_result;
-		const double axis6_start_from_left_mm = ctx.axis6_crawl->start_abs - ctx.plc_leftlimit[5];
-		const double axis6_end_from_left_mm = ctx.axis6_crawl->end_abs - ctx.plc_leftlimit[5];
-		const double axis6_far_from_left_mm =
-			(axis6_start_from_left_mm > axis6_end_from_left_mm)
-			? axis6_start_from_left_mm
-			: axis6_end_from_left_mm;
-		const double axis5_from_left_mm = (ctx.plc_act_pos[4] + ctx.plc_init_pos[4]) - ctx.plc_leftlimit[4];
-		const double delta_mm = axis6_far_from_left_mm - axis5_from_left_mm;
-
-		if (delta_mm < ctx.cfg->axis6_window_cover_threshold_mm)
+		double window_start_abs = 0.0;
+		double window_end_abs = 0.0;
+		calculate_axis6_window_from_axis5(ctx, window_start_abs, window_end_abs);
+		if ((window_end_abs - window_start_abs) < ctx.cfg->crawl_arrive_tol_mm)
 		{
-			const double rebuilt_window_left_abs = ctx.plc_leftlimit[5] + axis5_from_left_mm;
-			const double rebuilt_window_right_abs = rebuilt_window_left_abs + ctx.cfg->axis6_independent_window_size_mm;
-			if (!set_axis6_independent_window(ctx, rebuilt_window_right_abs, true))
+			if (log_result)
 			{
-				return false;
+				std::cout << "导丝模式切换已忽略：axis6 窗口宽度无效。" << std::endl;
 			}
-			lock_axis6_window_from_current(ctx);
+			return false;
+		}
+
+		ctx.axis6_crawl->start_abs = window_start_abs;
+		ctx.axis6_crawl->end_abs = window_end_abs;
+		lock_axis6_window_from_current(ctx);
+		if (log_result)
+		{
+			std::cout
+				<< "axis6 窗口已按 axis5 重建：["
+				<< (window_start_abs - ctx.plc_leftlimit[5])
+				<< ", "
+				<< (window_end_abs - ctx.plc_leftlimit[5])
+				<< "] mm（距各自左限位）。"
+				<< std::endl;
 		}
 		return true;
 	}
@@ -154,9 +143,8 @@ namespace motion_sync
 	bool sync_axis6(
 		AppContext& ctx,
 		int samples,
-		bool capture_window,
-		bool check_window_cover,
-		bool log_window_cover)
+		bool rebuild_window,
+		bool log_window_rebuild)
 	{
 		const double preserved_axis7_hold_rel = *ctx.axis7_hold_rel;
 		plc_io::clear_axis_return_request(ctx, AdsSymbol::axis6_return);
@@ -177,31 +165,16 @@ namespace motion_sync
 		ctx.axis6_crawl->base_rel = ctx.plc_act_pos[5];
 		ctx.axis6_crawl->rot_base_rel = preserved_axis7_hold_rel;
 		*ctx.axis6_follow_cmd_abs = ctx.plc_act_pos[5] + ctx.plc_init_pos[5];
-		if (capture_window || !ctx.axis6_crawl->enabled)
+		if (rebuild_window || !ctx.axis6_crawl->enabled)
 		{
-			if (!*ctx.axis6_window_locked)
+			if (!rebuild_axis6_window_from_axis5(ctx, log_window_rebuild))
 			{
-				if (!set_axis6_independent_window(ctx, ctx.plc_act_pos[5] + ctx.plc_init_pos[5], capture_window))
-				{
-					return false;
-				}
-				lock_axis6_window_from_current(ctx);
-			}
-			else
-			{
-				apply_locked_axis6_window(ctx);
+				return false;
 			}
 		}
 		else if (*ctx.axis6_window_locked)
 		{
 			apply_locked_axis6_window(ctx);
-		}
-		if (check_window_cover)
-		{
-			if (!rebuild_axis6_window_if_covered(ctx, "sync_axis6", log_window_cover))
-			{
-				return false;
-			}
 		}
 		ctx.axis6_crawl->target_abs = ctx.axis6_crawl->end_abs;
 		ctx.axis6_crawl->plc_move_requested = false;

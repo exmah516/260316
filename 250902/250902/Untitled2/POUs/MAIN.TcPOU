@@ -10,6 +10,7 @@ VAR
 	reset_		:		reset;
 	self_check_ :       SelfCheck;
 	arm_manual_ :       ArmManual;
+	axis6_enable_negative : BOOL := TRUE;
 	i:INT;
 END_VAR]]></Declaration>
     <Implementation>
@@ -40,6 +41,8 @@ END_IF
 	
 arm_manual_();
 
+// 轴6自检触发左限位后只关闭负向许可，保留正向脱离限位的能力。
+axis6_enable_negative := NOT ((G.gen_state = _self_check) AND G.axis[6].Status.DriveLimitActive);
 POWERED();
 SETPOSITIONGEN();
 RESETED();
@@ -1822,7 +1825,7 @@ END_CASE]]></ST>
                             </o>
                             <o>
                               <o n="Operand" t="Operand">
-                                <v n="Operand">"TRUE"</v>
+                                <v n="Operand">"axis6_enable_negative"</v>
                                 <v n="Type">"BOOL"</v>
                                 <v n="Comment">""</v>
                                 <v n="SymbolComment">""</v>

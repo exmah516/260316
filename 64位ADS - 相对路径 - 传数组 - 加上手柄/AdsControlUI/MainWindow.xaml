@@ -92,7 +92,7 @@
             </Grid.ColumnDefinitions>
 
             <!-- 左侧：轴位置 -->
-            <GroupBox Grid.Column="0" Header="轴位置 / 有效行程" Margin="0,0,8,0">
+            <GroupBox Grid.Column="0" Header="轴位置 / 已行进行程" Margin="0,0,8,0">
                 <ScrollViewer VerticalScrollBarVisibility="Auto">
                     <StackPanel Margin="2">
                         <!-- 轴1 -->
@@ -289,17 +289,17 @@
                                 <TextBlock Grid.Row="0" Grid.Column="0" Text="轴1 (5–95 mm)" Style="{StaticResource FieldLabelText}"/>
                                 <TextBox   Grid.Row="0" Grid.Column="1" x:Name="TbAxis1" Text="20"  Margin="8,3"/>
                                 <TextBlock Grid.Row="1" Grid.Column="0" Text="轴3 (10–650 mm)" Style="{StaticResource FieldLabelText}"/>
-                                <TextBox   Grid.Row="1" Grid.Column="1" x:Name="TbAxis3" Text="635" Margin="8,3"/>
+                                <TextBox   Grid.Row="1" Grid.Column="1" x:Name="TbAxis3" Text="650" Margin="8,3"/>
                                 <TextBlock Grid.Row="2" Grid.Column="0" Text="轴5 (10–670 mm)" Style="{StaticResource FieldLabelText}"/>
-                                <TextBox   Grid.Row="2" Grid.Column="1" x:Name="TbAxis5" Text="290" Margin="8,3"/>
+                                <TextBox   Grid.Row="2" Grid.Column="1" x:Name="TbAxis5" Text="660" Margin="8,3"/>
                                 <TextBlock Grid.Row="3" Grid.Column="0" Text="轴6 (10–670 mm)" Style="{StaticResource FieldLabelText}"/>
-                                <TextBox   Grid.Row="3" Grid.Column="1" x:Name="TbAxis6" Text="310" Margin="8,3"/>
+                                <TextBox   Grid.Row="3" Grid.Column="1" x:Name="TbAxis6" Text="666" Margin="8,3"/>
                                 <TextBlock Grid.Row="4" Grid.Column="0" Text="轴2 (−360~360°)" Style="{StaticResource FieldLabelText}"/>
                                 <TextBox   Grid.Row="4" Grid.Column="1" x:Name="TbAxis2" Text="0"   Margin="8,3"/>
                                 <TextBlock Grid.Row="5" Grid.Column="0" Text="轴7 (−360~360°)" Style="{StaticResource FieldLabelText}"/>
                                 <TextBox   Grid.Row="5" Grid.Column="1" x:Name="TbAxis7" Text="0"   Margin="8,3"/>
                                 <TextBlock Grid.Row="6" Grid.Column="0" Text="速度比例" Style="{StaticResource FieldLabelText}"/>
-                                <TextBox   Grid.Row="6" Grid.Column="1" x:Name="TbSpeed" Text="0.005" Margin="8,3"/>
+                                <TextBox   Grid.Row="6" Grid.Column="1" x:Name="TbSpeed" Text="0.03" Margin="8,3"/>
                             </Grid>
 
                             <TextBlock x:Name="StartupError" Style="{StaticResource ErrorText}" Margin="0,4,0,8"/>

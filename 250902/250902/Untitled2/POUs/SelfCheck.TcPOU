@@ -10,8 +10,9 @@ VAR
     fb_stop     : ARRAY[1..7] OF MC_Stop;
     fb_set_pos  : ARRAY[1..7] OF MC_SetPosition;
     // fb_set_blocked is a function, no instantiation needed
-    vel_scan : LREAL := 30.0;   // 寻参逼近速度，>0（单位随轴：mm/s 或 deg/s
-    vel_back : LREAL := 50.0;   // 回退速度，>0（单位随轴：mm/s 或 deg/s）
+    power_not_ready_errid : UDINT := 16#00004650;
+    vel_scan : LREAL := 40.0;   // 寻参逼近速度，>0（单位随轴：mm/s 或 deg/s
+    vel_back : LREAL := 40.0;   // 回退速度，>0（单位随轴：mm/s 或 deg/s）
 
     init_target_from_left : ARRAY[1..7] OF LREAL:= [96,0,280,0,430,580,0];  // 左限位寻参后回到的工作位（距左限位）
     target_axes : ARRAY[1..7] OF BOOL:= [TRUE,FALSE,TRUE,FALSE,TRUE,TRUE,FALSE];	// 目标轴（平移轴）
@@ -37,7 +38,8 @@ VAR
     mv_abs_exec : ARRAY[1..7] OF BOOL;
     mv_abs_pos : ARRAY[1..7] OF LREAL;
     mv_abs_vel  : ARRAY[1..7] OF LREAL;
-                                                	set_pos_exec : ARRAY[1..7] OF BOOL;
+    drive_limit_stop : ARRAY[1..7] OF BOOL; // TRUE=电子限位触发路径，等待停止及 Power 状态稳定
+    set_pos_exec : ARRAY[1..7] OF BOOL;
     
     // 延时计时器
     wait_timer : ARRAY[1..7] OF TON;
@@ -69,6 +71,7 @@ IF G.selfcheck_reset_req THEN
         mv_abs_exec[i] := FALSE;
         mv_abs_pos[i] := 0.0;
         mv_abs_vel[i] := 0.0;
+        drive_limit_stop[i] := FALSE;
         set_pos_exec[i] := FALSE;
         debug_limit_pos[i] := 0.0;
         debug_init_target_pos[i] := 0.0;
@@ -151,6 +154,7 @@ FOR i:=1 TO 7 DO
             IF scan_stagger_timer[i].Q OR scan_stagger_delay[i] = T#0ms THEN
                 scan_stagger_timer[i](IN:=FALSE);
                 scan_start_pos[i] := G.axis[i].NcToPlc.ActPos;
+                drive_limit_stop[i] := FALSE;
                 mv_vel_vel[i] := vel_scan;
                 mv_vel_exec[i] := TRUE;
                 stu[i] := 2;
@@ -160,7 +164,7 @@ FOR i:=1 TO 7 DO
             mv_vel_vel[i] := vel_scan;
             mv_vel_exec[i] := TRUE;
             
-            // 判据：Busy=TRUE 且 ActVelo≈0 持续 100ms，并结合 SetVelo/位移判断是否属于到限位/堵转
+            // 电子限位优先；100ms 堵转判据保留为开关或驱动状态失效时的后备保护。
             wait_timer[i](
                 IN:= (fb_move_vel[i].Busy
                       AND ABS(G.axis[i].NcToPlc.ActVelo) < 0.5
@@ -173,37 +177,76 @@ FOR i:=1 TO 7 DO
                       )),
                 PT:= T#100ms
             );
-            IF fb_move_vel[i].Error OR wait_timer[i].Q THEN
-               
+            IF G.axis[i].Status.DriveLimitActive THEN
                 // 记录左限位（绝对坐标）
                 G.leftlimit[i] := G.axis[i].NcToPlc.ActPos;
-                
-                // 停止逼近：先撤销 MoveVelocity，再发 MC_Stop 做平滑减速
+
+                // 立即撤销 MoveVelocity，并在轴状态完全失效前发送受控停止。
+                // 现场确认 16#4650 来自 MoveVelocity/MC_Power 就绪链路，而不是 MC_Stop。
                 mv_vel_exec[i] := FALSE;
+                drive_limit_stop[i] := TRUE;
+                wait_timer[i](IN:=FALSE);
+                fb_stop[i](
+                    Axis:=G.axis[i],
+                    Deceleration:=500,
+                    Jerk:=1000,
+                    Execute:=TRUE
+                );
+                stu[i] := 3;
+
+            ELSIF fb_move_vel[i].Error OR wait_timer[i].Q THEN
+                // 电子限位失效时的后备路径：记录堵转位置并由 MC_Stop 主动停止。
+                G.leftlimit[i] := G.axis[i].NcToPlc.ActPos;
+                mv_vel_exec[i] := FALSE;
+                drive_limit_stop[i] := FALSE;
                 fb_stop[i](
                     Axis:=G.axis[i], 
                     Deceleration:=500, 
                     Jerk:=1000, 
                     Execute:=TRUE
                 );
-                
                 stu[i] := 3;
             END_IF
             
         3: // 步骤3：等待停止完成（以 ActVelo 作为停稳判据）
-            wait_timer[i](IN:=FALSE);
             IF ABS(G.axis[i].NcToPlc.ActVelo) < 1.0 THEN
-                 fb_stop[i](Axis:=G.axis[i], Execute:=FALSE);
-                 IF G.axis[i].Status.Error THEN
-                    stu[i] := 4;
-                 ELSIF G.power_output[i].Done THEN
-                    stu[i] := 6;
-                 ELSE
-                    power_pulse_timer[i](IN:=FALSE);
-                    power_wait_timer[i](IN:=FALSE);
-                    stu[i] := 55;
-                 END_IF
-            // 保险：Stop 报错或中止时也允许进入后续清错/同步阶段
+                fb_stop[i](Axis:=G.axis[i], Execute:=FALSE);
+
+                IF drive_limit_stop[i] THEN
+                    // DriveLimitActive 后 Disabled/Power 状态存在延迟，等待其稳定后再决定恢复路径。
+                    wait_timer[i](IN:=TRUE, PT:=T#300ms);
+                    IF wait_timer[i].Q THEN
+                        wait_timer[i](IN:=FALSE);
+
+                        IF G.axis[i].Status.Error
+                           OR (G.power_output[i].Error AND (G.power_output[i].ErrorID <> power_not_ready_errid))
+                        THEN
+                            drive_limit_stop[i] := FALSE;
+                            stu[i] := 4;
+                        ELSIF G.power_output[i].Done AND NOT G.power_output[i].Error THEN
+                            drive_limit_stop[i] := FALSE;
+                            stu[i] := 6;
+                        ELSE
+                            // 电子限位导致的 16#4650/Power not ready 通过 MC_Power 下降沿重新初始化。
+                            power_pulse_timer[i](IN:=FALSE);
+                            power_wait_timer[i](IN:=FALSE);
+                            stu[i] := 55;
+                        END_IF
+                    END_IF
+                ELSE
+                    wait_timer[i](IN:=FALSE);
+                    IF G.axis[i].Status.Error THEN
+                        stu[i] := 4;
+                    ELSIF G.power_output[i].Done AND NOT G.power_output[i].Error THEN
+                        stu[i] := 6;
+                    ELSE
+                        power_pulse_timer[i](IN:=FALSE);
+                        power_wait_timer[i](IN:=FALSE);
+                        stu[i] := 55;
+                    END_IF
+                END_IF
+            ELSE
+                wait_timer[i](IN:=FALSE);
             END_IF
             
         4: // 步骤4：触发错误清除（通常为限位/跟随相关故障）
@@ -248,8 +291,9 @@ FOR i:=1 TO 7 DO
         56: // RepowerWait: 等待 MC_Power 重新就绪
             G.power_[i].Enable := TRUE;
             power_wait_timer[i](IN:=TRUE, PT:=T#3s);
-            IF G.power_output[i].Done THEN
+            IF G.power_output[i].Done AND NOT G.power_output[i].Error THEN
                 power_wait_timer[i](IN:=FALSE);
+                drive_limit_stop[i] := FALSE;
                 stu[i] := 6;
             ELSIF power_wait_timer[i].Q THEN
                 // 超时仍未就绪，重试
@@ -541,7 +585,11 @@ END_IF
       <LineId Id="403" Count="0" />
       <LineId Id="504" Count="17" />
       <LineId Id="404" Count="45" />
-      <LineId Id="522" Count="6" />
+      <LineId Id="522" Count="19" />
+      <LineId Id="470" Count="11" />
+      <LineId Id="542" Count="7" />
+      <LineId Id="490" Count="3" />
+      <LineId Id="550" Count="1" />
     </LineIds>
   </POU>
 </TcPlcObject>

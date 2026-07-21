@@ -102,15 +102,13 @@ struct ControlConfig
 	// 基于左限位参考的爬行窗口。
 	double axis1_window_left_from_left_mm = 3.0;
 	double axis1_window_right_from_left_mm = 18.0;
-	double axis6_independent_window_size_mm = 20.0;
-	// 轴6窗口整体平移：正值表示远离左限位方向平移（单位 mm）。
-	double axis6_window_shift_from_left_mm = 3.0;
+	double axis6_window_size_mm = 20.0;
+	// 轴6窗口以轴5当前位置为基准，左边界至少领先轴5该距离。
+	double axis6_window_min_gap_from_axis5_mm = 6.0;
 	double axis56_ready_gap_mm = 20.0;
 	double axis3_delivery_stop_from_left_mm = 20.0;
 	double axis3_delivery_release_hysteresis_mm = 2.0;
-	double guidewire_entry_axis6_from_left_max_mm = 665.0;
-	// 导丝入模时的窗口覆盖判定阈值：delta<18mm 时按轴5参考重建 axis6 窗口。
-	double axis6_window_cover_threshold_mm = 18.0;
+	double guidewire_entry_axis6_from_left_max_mm = 667.0;
 
 	// 爬行触发/到位阈值。
 	double crawl_trigger_deadband_mm = 0.3; // |delta| 小于此值视为无效输入（不触发 push/pull）
