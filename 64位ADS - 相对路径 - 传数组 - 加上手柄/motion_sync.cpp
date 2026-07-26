@@ -39,6 +39,15 @@ namespace motion_sync
 		double& window_end_abs)
 	{
 		const double axis5_abs = ctx.plc_act_pos[4] + ctx.plc_init_pos[4];
+		calculate_axis6_window_from_axis5_abs(ctx, axis5_abs, window_start_abs, window_end_abs);
+	}
+
+	void calculate_axis6_window_from_axis5_abs(
+		const AppContext& ctx,
+		double axis5_abs,
+		double& window_start_abs,
+		double& window_end_abs)
+	{
 		const double axis5_from_left_mm = axis5_abs - ctx.plc_leftlimit[4];
 		window_start_abs = ctx.plc_leftlimit[5] + axis5_from_left_mm +
 			ctx.cfg->axis6_window_min_gap_from_axis5_mm;
@@ -197,6 +206,26 @@ namespace motion_sync
 		*ctx.axis6_prev_abs_valid = true;
 
 		return plc_io::write_refer(ctx);
+	}
+
+	bool sync_cooperative_guidewire(
+		AppContext& ctx,
+		int samples,
+		bool log_window_rebuild)
+	{
+		// 协同模式需要同时重建两只手柄的差分基准。仅同步其中一轴会让
+		// 另一只手柄在回退结束后继续使用旧基准，造成下一拍目标跳变。
+		if (!sync_axis1(ctx, samples))
+		{
+			return false;
+		}
+		if (!sync_axis6(ctx, samples, true, log_window_rebuild))
+		{
+			return false;
+		}
+		// 协同递送的窗口每拍按 axis5 命令位置动态更新，不沿用独立导丝模式的锁定边界。
+		*ctx.axis6_window_locked = false;
+		return true;
 	}
 
 	bool sync_all(AppContext& ctx, int samples)

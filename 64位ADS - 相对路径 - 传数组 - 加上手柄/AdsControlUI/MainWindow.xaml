@@ -187,7 +187,7 @@
                 <StackPanel>
 
                     <!-- 电缸 -->
-                    <GroupBox Header="电缸控制">
+                    <GroupBox Header="电缸控制" IsEnabled="{Binding SpacingRecoveryInactive}">
                         <UniformGrid Columns="2" Margin="2">
                             <ToggleButton Content="电缸 1" IsChecked="{Binding Cyl1Open, Mode=OneWay}" Click="Cyl1_Click" Margin="3" MinHeight="40"/>
                             <ToggleButton Content="电缸 2" IsChecked="{Binding Cyl2Open, Mode=OneWay}" Click="Cyl2_Click" Margin="3" MinHeight="40"/>
@@ -198,16 +198,46 @@
 
                     <!-- 模式 -->
                     <GroupBox Header="模式切换">
-                        <UniformGrid Columns="2" Margin="2">
-                            <RadioButton Content="导管递送" GroupName="Mode" Style="{StaticResource ModeChipRadio}"
-                                         Click="ModeCathFwd_Click" IsChecked="{Binding ModeCathFwdSelected, Mode=OneWay}"/>
-                            <RadioButton Content="导管撤出" GroupName="Mode" Style="{StaticResource ModeChipRadio}"
-                                         Click="ModeCathRev_Click" IsChecked="{Binding ModeCathRevSelected, Mode=OneWay}"/>
-                            <RadioButton Content="导丝递送" GroupName="Mode" Style="{StaticResource ModeChipRadio}"
-                                         Click="ModeGuideFwd_Click" IsChecked="{Binding ModeGuideFwdSelected, Mode=OneWay}"/>
-                            <RadioButton Content="导丝撤出" GroupName="Mode" Style="{StaticResource ModeChipRadio}"
-                                         Click="ModeGuideRev_Click" IsChecked="{Binding ModeGuideRevSelected, Mode=OneWay}"/>
-                        </UniformGrid>
+                        <StackPanel>
+                            <UniformGrid Columns="2" Margin="2">
+                                <RadioButton Content="导管递送" GroupName="Mode" Style="{StaticResource ModeChipRadio}"
+                                             Click="ModeCathFwd_Click" IsChecked="{Binding ModeCathFwdSelected, Mode=OneWay}"
+                                             IsEnabled="{Binding ModeSwitchAllowed}"/>
+                                <RadioButton Content="导管撤出" GroupName="Mode" Style="{StaticResource ModeChipRadio}"
+                                             Click="ModeCathRev_Click" IsChecked="{Binding ModeCathRevSelected, Mode=OneWay}"
+                                             IsEnabled="{Binding ModeSwitchAllowed}"/>
+                                <RadioButton Content="导丝递送" GroupName="Mode" Style="{StaticResource ModeChipRadio}"
+                                             Click="ModeGuideFwd_Click" IsChecked="{Binding ModeGuideFwdSelected, Mode=OneWay}"
+                                             IsEnabled="{Binding ModeSwitchAllowed}"/>
+                                <RadioButton Content="导丝撤出" GroupName="Mode" Style="{StaticResource ModeChipRadio}"
+                                             Click="ModeGuideRev_Click" IsChecked="{Binding ModeGuideRevSelected, Mode=OneWay}"
+                                             IsEnabled="{Binding ModeSwitchAllowed}"/>
+                            </UniformGrid>
+                            <RadioButton Content="协同递送" GroupName="Mode" Style="{StaticResource ModeChipRadio}"
+                                         Click="ModeCooperative_Click" IsChecked="{Binding ModeCooperativeSelected, Mode=OneWay}"
+                                         IsEnabled="{Binding CooperativeModeEnabled}"
+                                         Margin="3" MinHeight="40"/>
+                            <TextBlock Text="{Binding CooperativeStatusText}"
+                                       Style="{StaticResource CaptionText}"
+                                       Margin="6,0,6,4"
+                                       TextWrapping="Wrap"/>
+                            <Grid Margin="3,6,3,3">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="*"/>
+                                </Grid.ColumnDefinitions>
+                                <ToggleButton Content="屈曲恢复"
+                                              IsChecked="{Binding SpacingRecoveryActive, Mode=OneWay}"
+                                              Click="SpacingRecovery_Click"
+                                              MinWidth="118" MinHeight="40"/>
+                                <TextBlock Grid.Column="1"
+                                           Text="{Binding SpacingRecoveryStatusText}"
+                                           Style="{StaticResource CaptionText}"
+                                           Margin="12,0,0,0"
+                                           VerticalAlignment="Center"
+                                           TextWrapping="Wrap"/>
+                            </Grid>
+                        </StackPanel>
                     </GroupBox>
 
                     <!-- 力反馈 -->

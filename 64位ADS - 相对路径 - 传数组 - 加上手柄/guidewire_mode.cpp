@@ -103,7 +103,7 @@ namespace guidewire_mode_ctrl
 		{
 			return false;
 		}
-		return motion_sync::sync_axis6(ctx, 20, true, true);
+		return motion_sync::sync_cooperative_guidewire(ctx, 20, true);
 	}
 
 	bool check_axis6_guidewire_entry_gate(AppContext& ctx, double& axis6_from_left_mm)

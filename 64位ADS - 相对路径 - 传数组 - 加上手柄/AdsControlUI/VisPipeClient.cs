@@ -9,6 +9,8 @@ namespace AdsControlUI
     public class VisPipeClient : IDisposable
     {
         private const string PipeName = "ADS_Control_Vis";
+        // 必须与 C++ VisState 的 static_assert 一致；新旧管道协议不可混用。
+        private const int VisStateWireSize = 281;
         private NamedPipeClientStream _pipe;
         private Thread _readThread;
         private volatile bool _stopRequested;
@@ -21,6 +23,8 @@ namespace AdsControlUI
 
         public void Start()
         {
+            if (Marshal.SizeOf<VisState>() != VisStateWireSize)
+                throw new InvalidOperationException("VisState 管道协议大小不匹配，请同时更新 C++ 与 WPF 程序。");
             _stopRequested = false;
             _readThread = new Thread(ReadLoop) { IsBackground = true, Name = "VisPipeReader" };
             _readThread.Start();

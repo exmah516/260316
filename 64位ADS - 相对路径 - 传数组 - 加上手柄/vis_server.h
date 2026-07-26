@@ -50,8 +50,16 @@ struct VisState
 	double ft_exp_axis1_target;
 	bool ft_exp_active;
 	bool ft_exp_aborted;
+	// 手动屈曲/间距恢复状态。末尾追加保持既有字段布局不变。
+	int spacing_recovery_phase;
+	double spacing_recovery_moved_mm;
+	double spacing_recovery_remaining_mm;
+	// 协同递送状态。仅由上位机内部状态发布，不增加 PLC ADS 契约。
+	bool dual_handle_ready;
+	int cooperative_return_owner;
 };
 #pragma pack(pop)
+static_assert(sizeof(VisState) == 281, "VisState 管道布局发生变化，请同步更新 WPF 协议结构。");
 
 enum class VisCommandType : int
 {
@@ -74,6 +82,8 @@ enum class VisCommandType : int
 	StopForceTransitionExperiment = 15,
 	SetFtExpParamA = 16, // param1=field_id, param2=int_val
 	SetFtExpParamB = 17, // param1=field_id, param2=fixed-point val (×1000)
+	SetSpacingRecovery = 18, // param1: 0=退出，1=进入
+	SetCooperativeDelivery = 19, // param1: 0=退出，1=进入
 };
 
 #pragma pack(push, 1)

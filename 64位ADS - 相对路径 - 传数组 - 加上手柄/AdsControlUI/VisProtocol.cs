@@ -48,6 +48,13 @@ namespace AdsControlUI
         public double ft_exp_axis1_target;
         [MarshalAs(UnmanagedType.I1)] public bool ft_exp_active;
         [MarshalAs(UnmanagedType.I1)] public bool ft_exp_aborted;
+        // 手动屈曲/间距恢复状态。
+        public int spacing_recovery_phase;
+        public double spacing_recovery_moved_mm;
+        public double spacing_recovery_remaining_mm;
+        // 协同递送状态。
+        [MarshalAs(UnmanagedType.I1)] public bool dual_handle_ready;
+        public int cooperative_return_owner;
     }
 
     public enum VisCommandType : int
@@ -71,6 +78,8 @@ namespace AdsControlUI
         StopForceTransitionExperiment = 15,
         SetFtExpParamA = 16,
         SetFtExpParamB = 17,
+        SetSpacingRecovery = 18,
+        SetCooperativeDelivery = 19,
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 1)]

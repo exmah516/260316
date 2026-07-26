@@ -17,6 +17,11 @@ namespace motion_sync
 		const AppContext& ctx,
 		double& window_start_abs,
 		double& window_end_abs);
+	void calculate_axis6_window_from_axis5_abs(
+		const AppContext& ctx,
+		double axis5_abs,
+		double& window_start_abs,
+		double& window_end_abs);
 	void lock_axis6_window_from_current(AppContext& ctx);
 	void apply_locked_axis6_window(AppContext& ctx);
 	bool rebuild_axis6_window_from_axis5(AppContext& ctx, bool log_result);
@@ -26,6 +31,10 @@ namespace motion_sync
 		AppContext& ctx,
 		int samples,
 		bool rebuild_window,
+		bool log_window_rebuild);
+	bool sync_cooperative_guidewire(
+		AppContext& ctx,
+		int samples,
 		bool log_window_rebuild);
 	bool sync_all(AppContext& ctx, int samples);
 

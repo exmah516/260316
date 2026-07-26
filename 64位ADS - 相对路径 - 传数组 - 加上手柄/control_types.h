@@ -110,6 +110,16 @@ struct ControlConfig
 	double axis3_delivery_release_hysteresis_mm = 2.0;
 	double guidewire_entry_axis6_from_left_max_mm = 667.0;
 
+	// 手动间距恢复：582 手柄仅驱动轴3/5/6向远离左限位方向等位移移动。
+	double spacing_recovery_speed_limit_mm_s = 20.0;
+	double spacing_recovery_axis3_max_from_left_mm = 650.0;
+	double spacing_recovery_axis5_max_from_left_mm = 670.0;
+	double spacing_recovery_axis6_max_from_left_mm = 670.0;
+	DWORD spacing_recovery_clamp_settle_ms = 150;
+	DWORD spacing_recovery_exit_settle_ms = 100;
+	DWORD spacing_recovery_exit_timeout_ms = 2000;
+	unsigned short spacing_recovery_cyl4_release = 100;
+
 	// 爬行触发/到位阈值。
 	double crawl_trigger_deadband_mm = 0.3; // |delta| 小于此值视为无效输入（不触发 push/pull）
 	double crawl_rearm_threshold_mm = 0.3; // 快退后允许再次触发前需要越过的同向阈值
@@ -195,6 +205,58 @@ enum class GuidewireMode
 	None,
 	Independent,
 	Cooperative
+};
+
+// 协同递送中正在执行计划回退的链路。非拥有链路必须保持当前位置，
+// 直到拥有链路完成夹爪恢复和双手柄重同步。
+enum class CooperativeReturnOwner
+{
+	None,
+	Axis1,
+	Axis6
+};
+
+enum class SpacingRecoveryPhase
+{
+	Idle,
+	ClampWait,
+	Active,
+	ExitSync
+};
+
+struct SpacingRecoveryState
+{
+	bool requested = false;
+	SpacingRecoveryPhase phase = SpacingRecoveryPhase::Idle;
+	DWORD phase_t0 = 0;
+	DWORD last_motion_tick = 0;
+	double axis1_hold_rel = 0.0;
+	double axis2_hold_rel = 0.0;
+	double axis3_cmd_rel = 0.0;
+	double axis5_cmd_rel = 0.0;
+	double axis6_cmd_rel = 0.0;
+	double axis7_hold_rel = 0.0;
+	double pending_delta_mm = 0.0;
+	double moved_mm = 0.0;
+	double remaining_mm = 0.0;
+	bool limit_logged = false;
+
+	bool active() const
+	{
+		return phase != SpacingRecoveryPhase::Idle;
+	}
+
+	void reset()
+	{
+		requested = false;
+		phase = SpacingRecoveryPhase::Idle;
+		phase_t0 = 0;
+		last_motion_tick = 0;
+		pending_delta_mm = 0.0;
+		moved_mm = 0.0;
+		remaining_mm = 0.0;
+		limit_logged = false;
+	}
 };
 
 // 启动准备是在自检后进入的显式上位机流程。

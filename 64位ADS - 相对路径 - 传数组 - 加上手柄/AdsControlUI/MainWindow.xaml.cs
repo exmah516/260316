@@ -41,6 +41,16 @@ namespace AdsControlUI
         private void ModeCathRev_Click(object sender, RoutedEventArgs e) => _vm.SetMode(0, 1);
         private void ModeGuideFwd_Click(object sender, RoutedEventArgs e) => _vm.SetMode(1, 0);
         private void ModeGuideRev_Click(object sender, RoutedEventArgs e) => _vm.SetMode(1, 1);
+        private void ModeCooperative_Click(object sender, RoutedEventArgs e)
+        {
+            if (sender is ToggleButton button)
+                _vm.SetCooperativeDelivery(button.IsChecked == true);
+        }
+        private void SpacingRecovery_Click(object sender, RoutedEventArgs e)
+        {
+            if (sender is ToggleButton button)
+                _vm.SetSpacingRecovery(button.IsChecked == true);
+        }
 
         private void Zero_Click(object sender, RoutedEventArgs e) => _vm.ZeroForceSensor();
         private void FfToggle_Click(object sender, RoutedEventArgs e) => _vm.ToggleForceFeedback();

@@ -63,6 +63,7 @@ namespace AdsControlUI
                 OnPropertyChanged(nameof(Axis1FromLeft));
                 OnPropertyChanged(nameof(Axis1EffectiveTravel));
                 OnPropertyChanged(nameof(Axis1StrokeText));
+                OnPropertyChanged(nameof(SpacingRecoveryStatusText));
             }
             if (AxisChanged(prev, state, 1))
             {
@@ -75,6 +76,7 @@ namespace AdsControlUI
                 OnPropertyChanged(nameof(Axis3FromLeft));
                 OnPropertyChanged(nameof(Axis3EffectiveTravel));
                 OnPropertyChanged(nameof(Axis3StrokeText));
+                OnPropertyChanged(nameof(SpacingRecoveryStatusText));
             }
             if (AxisChanged(prev, state, 3))
             {
@@ -117,21 +119,56 @@ namespace AdsControlUI
                 OnPropertyChanged(nameof(ModeCathRevSelected));
                 OnPropertyChanged(nameof(ModeGuideFwdSelected));
                 OnPropertyChanged(nameof(ModeGuideRevSelected));
+                OnPropertyChanged(nameof(ModeCooperativeSelected));
                 OnPropertyChanged(nameof(Axis1Reverse));
                 OnPropertyChanged(nameof(Axis6Reverse));
             }
 
-            if (prev.control_active != state.control_active) OnPropertyChanged(nameof(ControlActive));
-            if (prev.freeze_active != state.freeze_active) OnPropertyChanged(nameof(FreezeActive));
-            if (prev.estop_hold != state.estop_hold) OnPropertyChanged(nameof(EstopHold));
+            if (prev.control_active != state.control_active)
+            {
+                OnPropertyChanged(nameof(ControlActive));
+                OnPropertyChanged(nameof(CooperativeModeEnabled));
+            }
+            if (prev.freeze_active != state.freeze_active)
+            {
+                OnPropertyChanged(nameof(FreezeActive));
+                OnPropertyChanged(nameof(CooperativeModeEnabled));
+            }
+            if (prev.estop_hold != state.estop_hold)
+            {
+                OnPropertyChanged(nameof(EstopHold));
+                OnPropertyChanged(nameof(CooperativeModeEnabled));
+            }
             if (prev.ff_enabled != state.ff_enabled) OnPropertyChanged(nameof(FfEnabled));
             if (prev.cal_zeroed != state.cal_zeroed) OnPropertyChanged(nameof(CalZeroed));
             if (prev.gravity_comp_enabled != state.gravity_comp_enabled) OnPropertyChanged(nameof(GravityCompEnabled));
             if (prev.force_log_running != state.force_log_running) OnPropertyChanged(nameof(ForceLogRunning));
             if (prev.startup_waiting != state.startup_waiting) OnPropertyChanged(nameof(StartupWaiting));
-            if (prev.startup_completed != state.startup_completed) OnPropertyChanged(nameof(StartupCompleted));
+            if (prev.startup_completed != state.startup_completed)
+            {
+                OnPropertyChanged(nameof(StartupCompleted));
+                OnPropertyChanged(nameof(CooperativeModeEnabled));
+            }
             if (prev.startup_waiting != state.startup_waiting || prev.startup_completed != state.startup_completed)
                 OnPropertyChanged(nameof(PhaseText));
+
+            if (prev.dual_handle_ready != state.dual_handle_ready)
+            {
+                OnPropertyChanged(nameof(DualHandleReady));
+                OnPropertyChanged(nameof(CooperativeModeEnabled));
+                OnPropertyChanged(nameof(CooperativeStatusText));
+            }
+            if (prev.cooperative_return_owner != state.cooperative_return_owner)
+            {
+                OnPropertyChanged(nameof(CooperativeReturnOwner));
+                OnPropertyChanged(nameof(ModeSwitchAllowed));
+                OnPropertyChanged(nameof(CooperativeModeEnabled));
+                OnPropertyChanged(nameof(CooperativeStatusText));
+            }
+            if (prev.axis1_phase != state.axis1_phase || prev.axis6_phase != state.axis6_phase)
+            {
+                OnPropertyChanged(nameof(CooperativeModeEnabled));
+            }
 
             if (Changed(prev.force_582_f, state.force_582_f, ForceEpsilon)) OnPropertyChanged(nameof(Force582F));
             if (Changed(prev.force_582_n, state.force_582_n, ForceEpsilon)) OnPropertyChanged(nameof(Force582N));
@@ -148,8 +185,43 @@ namespace AdsControlUI
             if (prev.ft_exp_repeat_in_lvl != state.ft_exp_repeat_in_lvl) OnPropertyChanged(nameof(FtExpRepeatInLevel));
             if (Changed(prev.ft_exp_v_ratio_curr, state.ft_exp_v_ratio_curr, ForceEpsilon)) OnPropertyChanged(nameof(FtExpVRatioCurr));
             if (Changed(prev.ft_exp_axis1_target, state.ft_exp_axis1_target, PosEpsilon)) OnPropertyChanged(nameof(FtExpAxis1Target));
-            if (prev.ft_exp_active != state.ft_exp_active) OnPropertyChanged(nameof(FtExpActive));
+            if (prev.ft_exp_active != state.ft_exp_active)
+            {
+                OnPropertyChanged(nameof(FtExpActive));
+                OnPropertyChanged(nameof(CooperativeModeEnabled));
+            }
             if (prev.ft_exp_aborted != state.ft_exp_aborted) OnPropertyChanged(nameof(FtExpAborted));
+
+            if (prev.spacing_recovery_phase != state.spacing_recovery_phase)
+            {
+                OnPropertyChanged(nameof(SpacingRecoveryActive));
+                OnPropertyChanged(nameof(SpacingRecoveryInactive));
+                OnPropertyChanged(nameof(SpacingRecoveryStatusText));
+                OnPropertyChanged(nameof(ModeText));
+                OnPropertyChanged(nameof(ModeCathFwdSelected));
+                OnPropertyChanged(nameof(ModeCathRevSelected));
+                OnPropertyChanged(nameof(ModeGuideFwdSelected));
+                OnPropertyChanged(nameof(ModeGuideRevSelected));
+                OnPropertyChanged(nameof(ModeCooperativeSelected));
+                OnPropertyChanged(nameof(ModeSwitchAllowed));
+                OnPropertyChanged(nameof(CooperativeModeEnabled));
+                OnPropertyChanged(nameof(CooperativeStatusText));
+                OnPropertyChanged(nameof(PhaseText));
+            }
+            if (Changed(prev.spacing_recovery_moved_mm, state.spacing_recovery_moved_mm, PosEpsilon) ||
+                Changed(prev.spacing_recovery_remaining_mm, state.spacing_recovery_remaining_mm, PosEpsilon))
+            {
+                OnPropertyChanged(nameof(SpacingRecoveryStatusText));
+            }
+            // 即使后端拒绝进入且 phase 仍为 Idle，也要把 ToggleButton 校正回实际状态。
+            OnPropertyChanged(nameof(SpacingRecoveryActive));
+            OnPropertyChanged(nameof(SpacingRecoveryInactive));
+            // 协同入口被拒绝时，RadioButton 仍可能保留本地点击状态；按后端快照校正。
+            OnPropertyChanged(nameof(ModeCathFwdSelected));
+            OnPropertyChanged(nameof(ModeCathRevSelected));
+            OnPropertyChanged(nameof(ModeGuideFwdSelected));
+            OnPropertyChanged(nameof(ModeGuideRevSelected));
+            OnPropertyChanged(nameof(ModeCooperativeSelected));
 
             NotifyIfChanged(ref _prevConnected, connected, nameof(IsConnected));
             _prevState = state;
@@ -189,6 +261,12 @@ namespace AdsControlUI
             OnPropertyChanged(nameof(ModeCathRevSelected));
             OnPropertyChanged(nameof(ModeGuideFwdSelected));
             OnPropertyChanged(nameof(ModeGuideRevSelected));
+            OnPropertyChanged(nameof(ModeCooperativeSelected));
+            OnPropertyChanged(nameof(ModeSwitchAllowed));
+            OnPropertyChanged(nameof(CooperativeModeEnabled));
+            OnPropertyChanged(nameof(DualHandleReady));
+            OnPropertyChanged(nameof(CooperativeReturnOwner));
+            OnPropertyChanged(nameof(CooperativeStatusText));
             OnPropertyChanged(nameof(ControlActive));
             OnPropertyChanged(nameof(FreezeActive));
             OnPropertyChanged(nameof(EstopHold));
@@ -215,6 +293,9 @@ namespace AdsControlUI
             OnPropertyChanged(nameof(FtExpActive));
             OnPropertyChanged(nameof(FtExpAborted));
             OnPropertyChanged(nameof(FtExpPhaseText));
+            OnPropertyChanged(nameof(SpacingRecoveryActive));
+            OnPropertyChanged(nameof(SpacingRecoveryInactive));
+            OnPropertyChanged(nameof(SpacingRecoveryStatusText));
         }
 
         private static bool Changed(double a, double b, double eps) => Math.Abs(a - b) > eps;
@@ -289,6 +370,8 @@ namespace AdsControlUI
         {
             get
             {
+                if (SpacingRecoveryActive) return "屈曲恢复";
+                if (_state.guidewire_mode == 2) return "协同递送";
                 string mode = _state.guidewire_mode == 0 ? "导管" : "导丝";
                 bool rev = _state.guidewire_mode == 0 ? _state.axis1_reverse : _state.axis6_reverse;
                 return mode + (rev ? "撤出" : "递送");
@@ -297,10 +380,36 @@ namespace AdsControlUI
 
         public bool Axis1Reverse => _state.axis1_reverse;
         public bool Axis6Reverse => _state.axis6_reverse;
-        public bool ModeCathFwdSelected => _state.guidewire_mode == 0 && !_state.axis1_reverse;
-        public bool ModeCathRevSelected => _state.guidewire_mode == 0 && _state.axis1_reverse;
-        public bool ModeGuideFwdSelected => _state.guidewire_mode != 0 && !_state.axis6_reverse;
-        public bool ModeGuideRevSelected => _state.guidewire_mode != 0 && _state.axis6_reverse;
+        public bool ModeCathFwdSelected => SpacingRecoveryInactive && _state.guidewire_mode == 0 && !_state.axis1_reverse;
+        public bool ModeCathRevSelected => SpacingRecoveryInactive && _state.guidewire_mode == 0 && _state.axis1_reverse;
+        public bool ModeGuideFwdSelected => SpacingRecoveryInactive && _state.guidewire_mode == 1 && !_state.axis6_reverse;
+        public bool ModeGuideRevSelected => SpacingRecoveryInactive && _state.guidewire_mode == 1 && _state.axis6_reverse;
+        public bool ModeCooperativeSelected => SpacingRecoveryInactive && _state.guidewire_mode == 2;
+        public bool DualHandleReady => _state.dual_handle_ready;
+        public int CooperativeReturnOwner => _state.cooperative_return_owner;
+        public bool ModeSwitchAllowed => SpacingRecoveryInactive && CooperativeReturnOwner == 0;
+        public bool CooperativeModeEnabled =>
+            DualHandleReady &&
+            ModeSwitchAllowed &&
+            StartupCompleted &&
+            ControlActive &&
+            !FreezeActive &&
+            !EstopHold &&
+            !FtExpActive &&
+            _state.axis1_phase == 0 &&
+            _state.axis6_phase == 0;
+        public string CooperativeStatusText
+        {
+            get
+            {
+                if (!DualHandleReady) return "双手柄未就绪（需重启上位机）";
+                if (CooperativeReturnOwner == 1) return "导管回退中";
+                if (CooperativeReturnOwner == 2) return "导丝回退中";
+                return ModeCooperativeSelected
+                    ? "协同递送 / 双手柄就绪"
+                    : "双手柄就绪：587 导管，582 导丝";
+            }
+        }
         public bool ForceLogRunning => _state.force_log_running;
         public bool StartupWaiting => _state.startup_waiting;
         public bool StartupCompleted => _state.startup_completed;
@@ -309,6 +418,9 @@ namespace AdsControlUI
         {
             get
             {
+                if (_state.spacing_recovery_phase == 1) return "夹爪准备中";
+                if (_state.spacing_recovery_phase == 2) return "手动恢复中";
+                if (_state.spacing_recovery_phase == 3) return "停止并同步";
                 if (_state.startup_completed) return "已就绪";
                 if (_state.startup_waiting) return "等待启动选择...";
                 return "启动准备中...";
@@ -326,6 +438,26 @@ namespace AdsControlUI
         public double Force582TheoryN => _state.force_582_theory_n;
         public bool GravityCompEnabled => _state.gravity_comp_enabled;
         public VisState LatestState => _state;
+
+        public bool SpacingRecoveryActive => _state.spacing_recovery_phase != 0;
+        public bool SpacingRecoveryInactive => !SpacingRecoveryActive;
+        public string SpacingRecoveryStatusText
+        {
+            get
+            {
+                switch (_state.spacing_recovery_phase)
+                {
+                    case 1:
+                        return "夹爪准备中";
+                    case 2:
+                        return $"已恢复 {_state.spacing_recovery_moved_mm:F1} mm · 余量 {_state.spacing_recovery_remaining_mm:F1} mm";
+                    case 3:
+                        return "正在停止并同步";
+                    default:
+                        return $"轴1-轴3间距 {Axis3FromLeft - Axis1FromLeft:F1} mm";
+                }
+            }
+        }
 
         // 力过渡决定性预实验（论文 §6.1）状态镜像。
         public int FtExpPhase => _state.ft_exp_phase;
@@ -404,6 +536,12 @@ namespace AdsControlUI
 
         public void SetMode(int guidewireMode, int reverse) =>
             _client.SendCommand(VisCommandType.SetReverseMode, guidewireMode, reverse);
+
+        public void SetCooperativeDelivery(bool enabled) =>
+            _client.SendCommand(VisCommandType.SetCooperativeDelivery, enabled ? 1 : 0);
+
+        public void SetSpacingRecovery(bool enabled) =>
+            _client.SendCommand(VisCommandType.SetSpacingRecovery, enabled ? 1 : 0);
 
         public void ZeroForceSensor() =>
             _client.SendCommand(VisCommandType.ZeroForceSensor);
