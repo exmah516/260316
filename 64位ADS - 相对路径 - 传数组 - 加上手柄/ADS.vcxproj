@@ -161,6 +161,8 @@
     <ClCompile Include="force_feedback.cpp" />
     <ClCompile Include="force_transition_experiment.cpp" />
     <ClCompile Include="force_transition_logger.cpp" />
+    <ClCompile Include="delivery_tracking.cpp" />
+    <ClCompile Include="delivery_tracking_logger.cpp" />
     <ClCompile Include="startup_sequence.cpp" />
     <ClCompile Include="main.cpp">
       <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">false</ExcludedFromBuild>
@@ -188,6 +190,8 @@
     <ClInclude Include="force_feedback.h" />
     <ClInclude Include="force_transition_experiment.h" />
     <ClInclude Include="force_transition_logger.h" />
+    <ClInclude Include="delivery_tracking.h" />
+    <ClInclude Include="delivery_tracking_logger.h" />
     <ClInclude Include="startup_sequence.h" />
     <ClInclude Include="ADS\Include\ADSComm1.h" />
     <ClInclude Include="ADS\Include\TcAdsAPI.h" />

@@ -55,6 +55,14 @@ namespace AdsControlUI
         // 协同递送状态。
         [MarshalAs(UnmanagedType.I1)] public bool dual_handle_ready;
         public int cooperative_return_owner;
+        // 主从位移实验状态。必须与 C++ VisState 末尾字段完全一致。
+        [MarshalAs(UnmanagedType.I1)] public bool tracking_log_running;
+        [MarshalAs(UnmanagedType.I1)] public bool tracking_compensation_enabled;
+        public double axis1_tracking_error_mm;
+        public double axis6_tracking_error_mm;
+        public double axis1_compensation_gain;
+        public double axis6_compensation_gain;
+        public ulong tracking_log_dropped;
     }
 
     public enum VisCommandType : int
@@ -80,6 +88,9 @@ namespace AdsControlUI
         SetFtExpParamB = 17,
         SetSpacingRecovery = 18,
         SetCooperativeDelivery = 19,
+        SetTrackingLog = 20,
+        SetTrackingCompensation = 21,
+        SetTrackingCompensationParam = 22,
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 1)]

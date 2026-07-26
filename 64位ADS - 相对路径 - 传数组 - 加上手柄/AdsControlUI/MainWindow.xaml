@@ -302,6 +302,64 @@
                         </StackPanel>
                     </GroupBox>
 
+                    <!-- 主从位移实验 -->
+                    <GroupBox Header="主从位移实验">
+                        <StackPanel Margin="2">
+                            <WrapPanel Margin="0,0,0,6">
+                                <ToggleButton Content="记录主从位移"
+                                              IsChecked="{Binding TrackingLogRunning, Mode=OneWay}"
+                                              Click="TrackingLog_Click"
+                                              Margin="0,0,8,4" Padding="12,7"/>
+                                <ToggleButton Content="位移补偿"
+                                              IsChecked="{Binding TrackingCompensationEnabled, Mode=OneWay}"
+                                              IsEnabled="{Binding TrackingCompensationToggleEnabled}"
+                                              Click="TrackingCompensation_Click"
+                                              Margin="0,0,8,4" Padding="12,7"/>
+                            </WrapPanel>
+                            <TextBlock Text="{Binding TrackingStatusText}"
+                                       Style="{StaticResource CaptionText}"
+                                       Margin="0,0,0,8" TextWrapping="Wrap"/>
+
+                            <Grid IsEnabled="{Binding TrackingParametersEditable}" Margin="0,0,0,4">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="72"/>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="*"/>
+                                </Grid.ColumnDefinitions>
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="Auto"/>
+                                </Grid.RowDefinitions>
+                                <TextBlock Grid.Row="0" Grid.Column="0" Text="轴" Style="{StaticResource FieldLabelText}"/>
+                                <TextBlock Grid.Row="0" Grid.Column="1" Text="Kp" Style="{StaticResource FieldLabelText}" HorizontalAlignment="Center"/>
+                                <TextBlock Grid.Row="0" Grid.Column="2" Text="Ki" Style="{StaticResource FieldLabelText}" HorizontalAlignment="Center"/>
+                                <TextBlock Grid.Row="0" Grid.Column="3" Text="最大增益" Style="{StaticResource FieldLabelText}" HorizontalAlignment="Center"/>
+                                <TextBlock Grid.Row="0" Grid.Column="4" Text="最大误差 mm" Style="{StaticResource FieldLabelText}" HorizontalAlignment="Center"/>
+
+                                <TextBlock Grid.Row="1" Grid.Column="0" Text="轴1" Style="{StaticResource FieldLabelText}"/>
+                                <TextBox Grid.Row="1" Grid.Column="1" x:Name="TbTrackAxis1Kp" Text="0" Margin="3" MinWidth="54"/>
+                                <TextBox Grid.Row="1" Grid.Column="2" x:Name="TbTrackAxis1Ki" Text="0" Margin="3" MinWidth="54"/>
+                                <TextBox Grid.Row="1" Grid.Column="3" x:Name="TbTrackAxis1Gain" Text="1.10" Margin="3" MinWidth="54"/>
+                                <TextBox Grid.Row="1" Grid.Column="4" x:Name="TbTrackAxis1Error" Text="5.00" Margin="3" MinWidth="54"/>
+
+                                <TextBlock Grid.Row="2" Grid.Column="0" Text="轴6" Style="{StaticResource FieldLabelText}"/>
+                                <TextBox Grid.Row="2" Grid.Column="1" x:Name="TbTrackAxis6Kp" Text="0" Margin="3" MinWidth="54"/>
+                                <TextBox Grid.Row="2" Grid.Column="2" x:Name="TbTrackAxis6Ki" Text="0" Margin="3" MinWidth="54"/>
+                                <TextBox Grid.Row="2" Grid.Column="3" x:Name="TbTrackAxis6Gain" Text="1.10" Margin="3" MinWidth="54"/>
+                                <TextBox Grid.Row="2" Grid.Column="4" x:Name="TbTrackAxis6Error" Text="5.00" Margin="3" MinWidth="54"/>
+                            </Grid>
+                            <StackPanel Orientation="Horizontal" Margin="0,4,0,0">
+                                <Button Content="应用参数" Click="ApplyTrackingParams_Click"
+                                        IsEnabled="{Binding TrackingParametersEditable}" Padding="12,7" Margin="0,0,8,0"/>
+                                <TextBlock x:Name="TrackingError" Style="{StaticResource ErrorText}"
+                                           VerticalAlignment="Center" TextWrapping="Wrap"/>
+                            </StackPanel>
+                        </StackPanel>
+                    </GroupBox>
+
                     <!-- 启动准备 -->
                     <GroupBox Header="启动准备">
                         <StackPanel Margin="2">

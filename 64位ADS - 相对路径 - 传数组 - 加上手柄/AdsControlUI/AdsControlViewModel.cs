@@ -222,6 +222,17 @@ namespace AdsControlUI
             OnPropertyChanged(nameof(ModeGuideFwdSelected));
             OnPropertyChanged(nameof(ModeGuideRevSelected));
             OnPropertyChanged(nameof(ModeCooperativeSelected));
+			OnPropertyChanged(nameof(TrackingLogRunning));
+			OnPropertyChanged(nameof(TrackingCompensationEnabled));
+			OnPropertyChanged(nameof(Axis1TrackingError));
+			OnPropertyChanged(nameof(Axis6TrackingError));
+			OnPropertyChanged(nameof(Axis1CompensationGain));
+			OnPropertyChanged(nameof(Axis6CompensationGain));
+			OnPropertyChanged(nameof(TrackingLogDropped));
+			OnPropertyChanged(nameof(TrackingCompensationCanEnable));
+			OnPropertyChanged(nameof(TrackingCompensationToggleEnabled));
+			OnPropertyChanged(nameof(TrackingParametersEditable));
+			OnPropertyChanged(nameof(TrackingStatusText));
 
             NotifyIfChanged(ref _prevConnected, connected, nameof(IsConnected));
             _prevState = state;
@@ -296,6 +307,17 @@ namespace AdsControlUI
             OnPropertyChanged(nameof(SpacingRecoveryActive));
             OnPropertyChanged(nameof(SpacingRecoveryInactive));
             OnPropertyChanged(nameof(SpacingRecoveryStatusText));
+			OnPropertyChanged(nameof(TrackingLogRunning));
+			OnPropertyChanged(nameof(TrackingCompensationEnabled));
+			OnPropertyChanged(nameof(Axis1TrackingError));
+			OnPropertyChanged(nameof(Axis6TrackingError));
+			OnPropertyChanged(nameof(Axis1CompensationGain));
+			OnPropertyChanged(nameof(Axis6CompensationGain));
+			OnPropertyChanged(nameof(TrackingLogDropped));
+			OnPropertyChanged(nameof(TrackingCompensationCanEnable));
+			OnPropertyChanged(nameof(TrackingCompensationToggleEnabled));
+			OnPropertyChanged(nameof(TrackingParametersEditable));
+			OnPropertyChanged(nameof(TrackingStatusText));
         }
 
         private static bool Changed(double a, double b, double eps) => Math.Abs(a - b) > eps;
@@ -411,6 +433,37 @@ namespace AdsControlUI
             }
         }
         public bool ForceLogRunning => _state.force_log_running;
+		public bool TrackingLogRunning => _state.tracking_log_running;
+		public bool TrackingCompensationEnabled => _state.tracking_compensation_enabled;
+		public double Axis1TrackingError => _state.axis1_tracking_error_mm;
+		public double Axis6TrackingError => _state.axis6_tracking_error_mm;
+		public double Axis1CompensationGain => _state.axis1_compensation_gain;
+		public double Axis6CompensationGain => _state.axis6_compensation_gain;
+		public ulong TrackingLogDropped => _state.tracking_log_dropped;
+		public bool TrackingParametersEditable => !TrackingCompensationEnabled;
+		public bool TrackingCompensationCanEnable
+		{
+			get
+			{
+				bool forwardMode = (_state.guidewire_mode == 0 && !_state.axis1_reverse) ||
+					(_state.guidewire_mode == 1 && !_state.axis6_reverse);
+				return TrackingLogRunning && ControlActive && !FreezeActive && !EstopHold &&
+					!SpacingRecoveryActive && !FtExpActive && forwardMode &&
+					_state.axis1_phase == 0 && _state.axis6_phase == 0;
+			}
+		}
+		public bool TrackingCompensationToggleEnabled =>
+			TrackingCompensationEnabled || TrackingCompensationCanEnable;
+		public string TrackingStatusText
+		{
+			get
+			{
+				if (!TrackingLogRunning) return "记录未启动";
+				string compensation = TrackingCompensationEnabled ? "补偿已开启" : "补偿关闭";
+				string dropped = TrackingLogDropped > 0 ? $" · 丢弃 {TrackingLogDropped}" : "";
+				return $"20 Hz 记录 · {compensation} · 轴1误差 {Axis1TrackingError:F3} mm / 增益 {Axis1CompensationGain:F3} · 轴6误差 {Axis6TrackingError:F3} mm / 增益 {Axis6CompensationGain:F3}{dropped}";
+			}
+		}
         public bool StartupWaiting => _state.startup_waiting;
         public bool StartupCompleted => _state.startup_completed;
 
@@ -554,6 +607,32 @@ namespace AdsControlUI
 
         public void ToggleForceLog() =>
             _client.SendCommand(VisCommandType.ToggleForceLog);
+
+		public void SetTrackingLog(bool enabled) =>
+			_client.SendCommand(VisCommandType.SetTrackingLog, enabled ? 1 : 0);
+
+		public void SetTrackingCompensation(bool enabled) =>
+			_client.SendCommand(VisCommandType.SetTrackingCompensation, enabled ? 1 : 0);
+
+		public void SetTrackingCompensationParam(int fieldId, double value) =>
+			_client.SendCommand(
+				VisCommandType.SetTrackingCompensationParam,
+				fieldId,
+				(int)Math.Round(value * 1000.0));
+
+		public void SendTrackingCompensationParams(
+			double axis1Kp, double axis1Ki, double axis1MaxGain, double axis1MaxError,
+			double axis6Kp, double axis6Ki, double axis6MaxGain, double axis6MaxError)
+		{
+			SetTrackingCompensationParam(0, axis1Kp);
+			SetTrackingCompensationParam(1, axis1Ki);
+			SetTrackingCompensationParam(2, axis1MaxGain);
+			SetTrackingCompensationParam(3, axis1MaxError);
+			SetTrackingCompensationParam(4, axis6Kp);
+			SetTrackingCompensationParam(5, axis6Ki);
+			SetTrackingCompensationParam(6, axis6MaxGain);
+			SetTrackingCompensationParam(7, axis6MaxError);
+		}
 
         public void SelectDirectControl() =>
             _client.SendCommand(VisCommandType.SelectDirectControl);

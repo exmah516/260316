@@ -153,7 +153,8 @@ struct ControlConfig
 	double rotational_handle_alpha = 0.20;
 	bool cooperative_debug_log = false;
 	// 力反馈与 CSV 中 ft_1/fn_1 的采样来源：ADS(PLC变量) 或 TCP_DAQ(采集卡直连)。
-	ForceSampleSource force_sample_source = ForceSampleSource::TCP_DAQ;
+	// 轴1力/扭矩优先由 PLC 映射后的 ADS 原始 INT 提供；TCP 仅保留代码回退路径。
+	ForceSampleSource force_sample_source = ForceSampleSource::ADS;
 	// TCP 采集卡连接参数（仅 force_sample_source=TCP_DAQ 时生效）。
 	const char* tcp_force_daq_ip = "192.168.1.30";
 	unsigned short tcp_force_daq_port = 502;
@@ -457,7 +458,7 @@ struct AppContext
 	// 配置与预设。
 	const ControlConfig* cfg = nullptr;
 	const CylinderPreset* cyl = nullptr;
-	ForceSampleSource force_sample_source = ForceSampleSource::TCP_DAQ;
+	ForceSampleSource force_sample_source = ForceSampleSource::ADS;
 	TcpForceDaqClient* tcp_force_daq = nullptr;
 
 	// PLC 镜像缓存。

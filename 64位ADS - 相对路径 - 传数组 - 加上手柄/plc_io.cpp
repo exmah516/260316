@@ -149,6 +149,9 @@ namespace plc_io
 		sample.axis1_pos_rel = act_pos_snapshot[0];
 		// 轴2位置由倍福直接给出角度，力反馈重力补偿不再使用电机 counts 换算。
 		sample.axis2_pos_rel = act_pos_snapshot[1];
+		// PLC 原始输入约定 1000 counts = 1 V。所有后续标零、标定和日志统一使用伏特。
+		sample.ft_1_value_v = static_cast<double>(sample.ft_1_value) / 1000.0;
+		sample.fn_1_value_v = static_cast<double>(sample.fn_1_value) / 1000.0;
 		sample.valid = true;
 		sample.tick_ms = GetTickCount();
 		return true;

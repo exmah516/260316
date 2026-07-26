@@ -57,9 +57,17 @@ struct VisState
 	// 协同递送状态。仅由上位机内部状态发布，不增加 PLC ADS 契约。
 	bool dual_handle_ready;
 	int cooperative_return_owner;
+	// 主从位移实验状态。末尾追加，要求 C++ 与 WPF 使用同一版本重启。
+	bool tracking_log_running;
+	bool tracking_compensation_enabled;
+	double axis1_tracking_error_mm;
+	double axis6_tracking_error_mm;
+	double axis1_compensation_gain;
+	double axis6_compensation_gain;
+	std::uint64_t tracking_log_dropped;
 };
 #pragma pack(pop)
-static_assert(sizeof(VisState) == 281, "VisState 管道布局发生变化，请同步更新 WPF 协议结构。");
+static_assert(sizeof(VisState) == 323, "VisState 管道布局发生变化，请同步更新 WPF 协议结构。");
 
 enum class VisCommandType : int
 {
@@ -84,6 +92,9 @@ enum class VisCommandType : int
 	SetFtExpParamB = 17, // param1=field_id, param2=fixed-point val (×1000)
 	SetSpacingRecovery = 18, // param1: 0=退出，1=进入
 	SetCooperativeDelivery = 19, // param1: 0=退出，1=进入
+	SetTrackingLog = 20, // param1: 0=停止，1=开始
+	SetTrackingCompensation = 21, // param1: 0=关闭，1=开启
+	SetTrackingCompensationParam = 22, // param1=TrackingParameterField，param2=数值×1000
 };
 
 #pragma pack(push, 1)

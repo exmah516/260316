@@ -10,7 +10,7 @@ namespace AdsControlUI
     {
         private const string PipeName = "ADS_Control_Vis";
         // 必须与 C++ VisState 的 static_assert 一致；新旧管道协议不可混用。
-        private const int VisStateWireSize = 281;
+        private const int VisStateWireSize = 323;
         private NamedPipeClientStream _pipe;
         private Thread _readThread;
         private volatile bool _stopRequested;

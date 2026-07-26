@@ -56,6 +56,53 @@ namespace AdsControlUI
         private void FfToggle_Click(object sender, RoutedEventArgs e) => _vm.ToggleForceFeedback();
         private void GravityComp_Click(object sender, RoutedEventArgs e) => _vm.SetGravityCompensation(GravityCompCheckBox.IsChecked == true);
         private void ForceLog_Click(object sender, RoutedEventArgs e) => _vm.ToggleForceLog();
+        private void TrackingLog_Click(object sender, RoutedEventArgs e)
+        {
+            if (sender is ToggleButton button)
+                _vm.SetTrackingLog(button.IsChecked == true);
+        }
+
+        private void TrackingCompensation_Click(object sender, RoutedEventArgs e)
+        {
+            if (sender is ToggleButton button)
+                _vm.SetTrackingCompensation(button.IsChecked == true);
+        }
+
+        private void ApplyTrackingParams_Click(object sender, RoutedEventArgs e)
+        {
+            TrackingError.Text = "";
+            if (_vm.TrackingCompensationEnabled)
+            {
+                TrackingError.Text = "请先关闭位移补偿，再修改参数。";
+                return;
+            }
+
+            if (!double.TryParse(TbTrackAxis1Kp.Text, out double a1Kp) ||
+                !double.TryParse(TbTrackAxis1Ki.Text, out double a1Ki) ||
+                !double.TryParse(TbTrackAxis1Gain.Text, out double a1Gain) ||
+                !double.TryParse(TbTrackAxis1Error.Text, out double a1Error) ||
+                !double.TryParse(TbTrackAxis6Kp.Text, out double a6Kp) ||
+                !double.TryParse(TbTrackAxis6Ki.Text, out double a6Ki) ||
+                !double.TryParse(TbTrackAxis6Gain.Text, out double a6Gain) ||
+                !double.TryParse(TbTrackAxis6Error.Text, out double a6Error))
+            {
+                TrackingError.Text = "参数格式错误，请输入有效数字。";
+                return;
+            }
+
+            bool gainsValid = a1Gain > 1.0 && a1Gain <= 1.50 && a6Gain > 1.0 && a6Gain <= 1.50;
+            bool errorsValid = a1Error > 0.0 && a1Error <= 20.0 && a6Error > 0.0 && a6Error <= 20.0;
+            bool piValid = a1Kp >= 0.0 && a1Kp <= 1.0 && a1Ki >= 0.0 && a1Ki <= 1.0 &&
+                           a6Kp >= 0.0 && a6Kp <= 1.0 && a6Ki >= 0.0 && a6Ki <= 1.0;
+            if (!gainsValid || !errorsValid || !piValid)
+            {
+                TrackingError.Text = "Kp/Ki 范围为 0-1，最大增益为 (1, 1.50]，最大误差为 (0, 20] mm。";
+                return;
+            }
+
+            _vm.SendTrackingCompensationParams(a1Kp, a1Ki, a1Gain, a1Error, a6Kp, a6Ki, a6Gain, a6Error);
+            TrackingError.Text = "参数已发送；Kp=0 时补偿不会产生额外位移。";
+        }
         private void DirectControl_Click(object sender, RoutedEventArgs e) => _vm.SelectDirectControl();
 
         private void ShowForce_Click(object sender, RoutedEventArgs e)

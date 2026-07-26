@@ -3,7 +3,7 @@
 > 本文档梳理上位机与倍福 PLC 之间的 ADS 通讯实现：连接、符号表、读写封装、断线/重同步路径，以及与主循环的契约。
 > 修改 `plc_io.cpp/.h`、`ADSComm.cpp`、符号表、或新增 PLC 变量时，请同步在最末"变更日志"追加条目。
 
-更新时间：2026-07-06
+更新时间：2026-07-26
 适用工程：`64位ADS - 相对路径 - 传数组 - 加上手柄\ADS.sln`
 对应代码版本：2026-06-26 主分支（基于 `plc_io.cpp` / `ADSComm1.h` / `main.cpp` 当前状态校对）
 
@@ -11,7 +11,7 @@
 
 ## 1. 角色与拓扑
 
-上位机作为 ADS Client，倍福 PLC（TwinCAT 3，端口 851）作为 ADS Server。所有控制下发、状态回读、力采样备份都走 ADS。力反馈链路里的 ft_1/fn_1 主路径走 TCP（见 [力反馈说明.md §2.1](力反馈说明.md#21-tcp-采集层tcp_force_daqcpp)），ADS 提供备份采样源 + axis1/axis2 实际位置 + axis3/5/6 镜像跟随目标。
+上位机作为 ADS Client，倍福 PLC（TwinCAT 3，端口 851）作为 ADS Server。所有控制下发、状态回读和轴1力/扭矩首选采样都走 ADS。`G.fn_1_value` / `G.ft_1_value` 保持 PLC 原始 `INT` 契约，C++ 统一按 `raw / 1000.0 = V` 换算；TCP 采集卡代码仅保留为人工切换的回退路径。
 
 ```
 [上位机 ADS.exe]
@@ -53,16 +53,16 @@
 | `refer_from_left` | `G.refer_from_left` | double[7] | 读（降频 1/5） | refer 距左限位距离 |
 | `v_limit` | `G.v_limit` | double[7] | 读+写 | 各轴速度上限（启动准备阶段缩放/恢复用） |
 
-### 3.2 力采样（ADS 备份源）
+### 3.2 力采样（ADS 首选源）
 
 | 常量 | PLC 符号 | 类型 | 读写 | 含义 |
 |---|---|---|---|---|
-| `ft_1_value` | `G.ft_1_value` | short | 读 | 扭矩通道（ADS 备份源；TCP_DAQ 模式下不被使用） |
-| `fn_1_value` | `G.fn_1_value` | short | 读 | 轴向力通道（同上） |
+| `ft_1_value` | `G.ft_1_value` | short | 读 | 扭矩原始输入；有符号 `INT`，`raw / 1000.0 = V` |
+| `fn_1_value` | `G.fn_1_value` | short | 读 | 轴向力原始输入；有符号 `INT`，`raw / 1000.0 = V` |
 | `fn_2_value` | `G.fn_2_value` | short | 读 | 第二组轴向力（仅 ADS 链路使用） |
 | `ft_2_value` | `G.ft_2_value` | short | 读 | 第二组扭矩（同上） |
 
-> 力反馈链路真正消费的是 `force_sample.fn_1_value_v` / `ft_1_value_v`，TCP_DAQ 模式下这两路被 TCP 覆盖。ADS 读取仍用于拿到 axis1/axis2 实际位置（`read_force_sample` 内顺手返回 `act_pos` 快照），见 [力反馈说明.md §2.2](力反馈说明.md#22-主循环采样maincpp-主循环步骤-15力采样节拍段)。
+> 力反馈链路真正消费的是 `force_sample.fn_1_value_v` / `ft_1_value_v`。默认 ADS 分支在 `plc_io::read_force_sample` 内完成 `INT -> V` 换算；TCP_DAQ 模式才会覆盖这两路。ADS 读取同时返回 axis1/axis2 实际位置（`act_pos` 快照），见 [力反馈说明.md §2.2](力反馈说明.md#22-主循环采样maincpp-主循环步骤-15力采样节拍段)。
 
 ### 3.3 气缸/电磁阀
 
@@ -161,7 +161,7 @@ if (ads.OpenComm_inside()) {
 | 函数 | 调用频率 | 行为 |
 |---|---|---|
 | `read_plc_state` | 每控制拍 | `ADSReadSum` 一次性读 `act_pos / init_pos / leftlimit` 三个 double[7]。 |
-| `read_force_sample` | 按 `force_log.period_ms` | `ADSReadSum` 读 `ft_1 / fn_1 / fn_2 / ft_2 / act_pos`。 |
+| `read_force_sample` | 力反馈/旧高频记录按原节拍；仅主从实验记录时 50ms | `ADSReadSum` 读 `ft_1 / fn_1 / fn_2 / ft_2 / act_pos`，并把 axis1 两路原始 `INT` 统一换算为伏特。 |
 | `write_refer` | 每控制拍 | `ADSWrite` 写 `G.refer`（double[7]）。 |
 | `read_v_limit` / `write_v_limit` | 启动准备 | 读 / 写 `G.v_limit`。 |
 
@@ -231,10 +231,9 @@ clear_axis_return_request(symbols)
 `CADSComm` 内部没有断线探测。如果 TCP 中断（拔网线）或 PLC 重启，ADS API 调用会持续返回错误码，但 `OpenComm` 不会被重新调用。
 **TODO**：建议在 `read_plc_state` 连续失败 N 次后调用 `ads.CloseComm()` + `ads.OpenComm_inside()` / `OpenComm()` 重新建链。当前的"冻结 + 等待人工介入"策略对手术机器人是安全的，但限制了远程恢复能力。
 
-### 8.2 力采样 ADS 备份源未真正启用
+### 8.2 ADS 力输入映射需要现场确认
 
-`force_sample_source == ADS` 分支虽然存在，但当前默认 `TCP_DAQ`，且 `zero_force_sensor` 在 TCP_DAQ 模式下**不会回退到 ADS**。如果 TCP 卡掉，ADS 这一路力采样也不会自动接管，力反馈会直接置零。
-**TODO**：如果希望 ADS 作为 TCP 失联时的备份采样源，需要：1) `zero_force_sensor` 在 TCP 无帧时回退到 ADS；2) 验证 PLC 那边的 ft_1/fn_1 是否同步自同一个放大器（否则单位/零点会不一致）。
+当前默认 `force_sample_source == ADS`。`zero_force_sensor` 会同步读取一帧 ADS 样本后采零，不依赖 TCP worker 或力反馈开关。现场必须确认 `G.fn_1_value`（轴向力）和 `G.ft_1_value`（扭矩）均为有符号 `INT`，且同一放大器量纲满足 `1000 counts = 1 V`；符号或量程不一致会影响零点、标定与力反馈方向。
 
 ### 8.3 `app_name` 诊断只在启动时打印一次
 
@@ -274,5 +273,11 @@ clear_axis_return_request(symbols)
 - 涉及文件：`../CatheterRobotUI/src/SharedState.h`、`ControlEngine.h/.cpp`、`MainWindow.h/.cpp`。
 - 行为变化：新增 `G.arm_*` ADS 符号绑定，Qt UI 提供定位臂 5 轴单轴上电、复位、Jog+、Jog-、点动参数编辑和状态显示。
 - 通讯策略：命令按变化写入，状态约 50ms 降频读取；原 7 轴 `G.refer/Act_pos/init_pos/return_cmd` 高频链路不扩展、不改语义。
+
+### 2026-07-26 — 主从位移实验与 ADS 力采样首选迁移
+- 作者：AI（Codex）。
+- 涉及文件：`plc_io.cpp`、`control_types.h`、`main.cpp`、`delivery_tracking.*`、`delivery_tracking_logger.*`、可视化管道与 WPF。
+- 行为变化：默认力源改为 ADS；`G.fn_1_value/G.ft_1_value` 在 C++ 中按 `raw/1000.0` 转换为伏特，ADS 模式下 UI 零点采集同步读取一帧 ADS 数据。TCP 保留为显式代码回退，不自动切换。
+- 采样节拍：主从位移 CSV 会话运行而力反馈关闭时，ADS 力采样至少按 20 Hz 更新；不改变 `G.refer[1..7]`、计划回退或定位臂 ADS 契约。
 
 ### （此处持续追加）
