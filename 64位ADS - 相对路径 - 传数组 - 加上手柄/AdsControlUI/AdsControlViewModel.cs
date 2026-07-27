@@ -458,10 +458,10 @@ namespace AdsControlUI
 		{
 			get
 			{
-				if (!TrackingLogRunning) return "记录未启动";
+				if (!TrackingLogRunning) return "自动记录启动失败";
 				string compensation = TrackingCompensationEnabled ? "补偿已开启" : "补偿关闭";
 				string dropped = TrackingLogDropped > 0 ? $" · 丢弃 {TrackingLogDropped}" : "";
-				return $"20 Hz 记录 · {compensation} · 轴1误差 {Axis1TrackingError:F3} mm / 增益 {Axis1CompensationGain:F3} · 轴6误差 {Axis6TrackingError:F3} mm / 增益 {Axis6CompensationGain:F3}{dropped}";
+				return $"自动 20 Hz 记录 · {compensation} · 轴1换手待补 {Axis1TrackingError:F3} mm / 增益 {Axis1CompensationGain:F3} · 轴6换手待补 {Axis6TrackingError:F3} mm / 增益 {Axis6CompensationGain:F3}{dropped}";
 			}
 		}
         public bool StartupWaiting => _state.startup_waiting;
@@ -607,9 +607,6 @@ namespace AdsControlUI
 
         public void ToggleForceLog() =>
             _client.SendCommand(VisCommandType.ToggleForceLog);
-
-		public void SetTrackingLog(bool enabled) =>
-			_client.SendCommand(VisCommandType.SetTrackingLog, enabled ? 1 : 0);
 
 		public void SetTrackingCompensation(bool enabled) =>
 			_client.SendCommand(VisCommandType.SetTrackingCompensation, enabled ? 1 : 0);

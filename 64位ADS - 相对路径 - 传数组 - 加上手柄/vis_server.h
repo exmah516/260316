@@ -92,7 +92,7 @@ enum class VisCommandType : int
 	SetFtExpParamB = 17, // param1=field_id, param2=fixed-point val (×1000)
 	SetSpacingRecovery = 18, // param1: 0=退出，1=进入
 	SetCooperativeDelivery = 19, // param1: 0=退出，1=进入
-	SetTrackingLog = 20, // param1: 0=停止，1=开始
+	SetTrackingLog = 20, // 保留兼容；记录会话由进程启动/退出自动管理，当前忽略 param1
 	SetTrackingCompensation = 21, // param1: 0=关闭，1=开启
 	SetTrackingCompensationParam = 22, // param1=TrackingParameterField，param2=数值×1000
 };

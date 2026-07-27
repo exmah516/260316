@@ -39,14 +39,18 @@ namespace startup_sequence
 			copy_positions(ctx.plc_v_limit, ctx.startup->v_limit_backup, 7);
 			double scaled_v_limit[7] = { 0 };
 			copy_positions(ctx.plc_v_limit, scaled_v_limit, 7);
-			// 轴5/6在启动准备中同向靠近，使用共同的较低基准速度，避免轴6追上并推动轴5。
+			// 轴1/3/5/6统一使用四轴原始上限中的最小值，确保启动准备时实际限速一致。
+			const double axis13_common_v_limit =
+				(ctx.plc_v_limit[0] < ctx.plc_v_limit[2]) ? ctx.plc_v_limit[0] : ctx.plc_v_limit[2];
 			const double axis56_common_v_limit =
 				(ctx.plc_v_limit[4] < ctx.plc_v_limit[5]) ? ctx.plc_v_limit[4] : ctx.plc_v_limit[5];
-			scaled_v_limit[0] *= ctx.cfg->startup_motion_speed_scale;
+			const double axis1356_common_v_limit =
+				(axis13_common_v_limit < axis56_common_v_limit) ? axis13_common_v_limit : axis56_common_v_limit;
+			scaled_v_limit[0] = axis1356_common_v_limit * ctx.cfg->startup_motion_speed_scale;
 			scaled_v_limit[1] *= ctx.cfg->startup_motion_speed_scale;
-			scaled_v_limit[2] *= ctx.cfg->startup_motion_speed_scale;
-			scaled_v_limit[4] = axis56_common_v_limit * ctx.cfg->startup_motion_speed_scale;
-			scaled_v_limit[5] = axis56_common_v_limit * ctx.cfg->startup_motion_speed_scale;
+			scaled_v_limit[2] = axis1356_common_v_limit * ctx.cfg->startup_motion_speed_scale;
+			scaled_v_limit[4] = axis1356_common_v_limit * ctx.cfg->startup_motion_speed_scale;
+			scaled_v_limit[5] = axis1356_common_v_limit * ctx.cfg->startup_motion_speed_scale;
 			scaled_v_limit[6] *= ctx.cfg->startup_motion_speed_scale;
 			if (!plc_io::write_v_limit(ctx, scaled_v_limit))
 			{

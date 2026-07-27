@@ -56,12 +56,6 @@ namespace AdsControlUI
         private void FfToggle_Click(object sender, RoutedEventArgs e) => _vm.ToggleForceFeedback();
         private void GravityComp_Click(object sender, RoutedEventArgs e) => _vm.SetGravityCompensation(GravityCompCheckBox.IsChecked == true);
         private void ForceLog_Click(object sender, RoutedEventArgs e) => _vm.ToggleForceLog();
-        private void TrackingLog_Click(object sender, RoutedEventArgs e)
-        {
-            if (sender is ToggleButton button)
-                _vm.SetTrackingLog(button.IsChecked == true);
-        }
-
         private void TrackingCompensation_Click(object sender, RoutedEventArgs e)
         {
             if (sender is ToggleButton button)
@@ -96,7 +90,7 @@ namespace AdsControlUI
                            a6Kp >= 0.0 && a6Kp <= 1.0 && a6Ki >= 0.0 && a6Ki <= 1.0;
             if (!gainsValid || !errorsValid || !piValid)
             {
-                TrackingError.Text = "Kp/Ki 范围为 0-1，最大增益为 (1, 1.50]，最大误差为 (0, 20] mm。";
+                TrackingError.Text = "Kp/Ki 范围为 0-1，最大增益为 (1, 1.50]，换手欠账上界为 (0, 20] mm。";
                 return;
             }
 

@@ -653,6 +653,20 @@ int main(int argc, char* argv[])
 		force_log_started = true;
 	};
 
+	// 主从位移研究记录从上位机进程启动即创建会话，不再依赖 UI 先点击“开始记录”。
+	// 记录器仅异步写 CSV，不会阻塞运动控制循环；程序退出时统一 flush 并关闭。
+	if (tracking_logger.start_session("."))
+	{
+		tracking_controller.start_session();
+		tracking_log_last_sample_ms = 0;
+		force_sample_last_sample_ms = 0;
+		std::cout << "主从位移实验记录已自动启动（20 Hz，CSV 位于工作目录）。" << std::endl;
+	}
+	else
+	{
+		std::cout << "主从位移实验记录自动启动失败：CSV 文件打开失败；位移补偿不可用。" << std::endl;
+	}
+
 	auto zero_force_sensor = [&](const char* source) -> bool
 	{
 		if (ctx.force_sample_source == ForceSampleSource::TCP_DAQ)
@@ -1558,13 +1572,53 @@ int main(int argc, char* argv[])
 				axis6_linear_filtered,
 				axis6_linear_increment_raw_mm,
 				plc_act_pos[5]);
+			const bool axis1_forward_tracking_mode =
+				guidewire_mode == GuidewireMode::None && !axis1_reverse_pressed;
+			const bool axis6_forward_tracking_mode =
+				guidewire_mode == GuidewireMode::Independent && !axis6_effective_reverse_pressed;
+			const bool axis1_handover_active = axis1_forward_tracking_mode &&
+				(axis1_crawl.phase != CrawlState::Phase::Follow ||
+					axis1_crawl.plc_move_requested || axis6_coupled_active);
+			const bool axis6_handover_active = axis6_forward_tracking_mode &&
+				(axis6_crawl.phase != CrawlState::Phase::Follow || axis6_crawl.plc_move_requested);
+			if (axis1_handover_active)
+			{
+				// 正向递送坐标朝左为负；换手时只把持续前推转换成正欠账，回拉复位不计入。
+				tracking_controller.record_handover_forward_increment(
+					DeliveryTrackingAxis::Axis1,
+					(std::max)(0.0, -axis1_linear_increment_mm));
+			}
+			if (axis6_handover_active)
+			{
+				tracking_controller.record_handover_forward_increment(
+					DeliveryTrackingAxis::Axis6,
+					(std::max)(0.0, -axis6_linear_increment_mm));
+			}
 			const bool tracking_segment_active =
 				tracking_controller.snapshot(DeliveryTrackingAxis::Axis1).segment_active ||
 				tracking_controller.snapshot(DeliveryTrackingAxis::Axis6).segment_active;
-			if (tracking_controller.compensation_enabled() && !tracking_segment_active)
+			const DeliveryTrackingAxisSnapshot axis1_tracking_gate_snapshot =
+				tracking_controller.snapshot(DeliveryTrackingAxis::Axis1);
+			const DeliveryTrackingAxisSnapshot axis6_tracking_gate_snapshot =
+				tracking_controller.snapshot(DeliveryTrackingAxis::Axis6);
+			const bool tracking_handover_or_regrip =
+				axis1_tracking_reason == TrackingInvalidReason::CrawlReturnActive ||
+				axis6_tracking_reason == TrackingInvalidReason::CrawlReturnActive ||
+				axis1_tracking_reason == TrackingInvalidReason::GripSettling ||
+				axis6_tracking_reason == TrackingInvalidReason::GripSettling ||
+				axis1_tracking_gate_snapshot.invalid_reason ==
+					static_cast<int>(TrackingInvalidReason::CrawlReturnActive) ||
+				axis6_tracking_gate_snapshot.invalid_reason ==
+					static_cast<int>(TrackingInvalidReason::CrawlReturnActive) ||
+				axis1_tracking_gate_snapshot.invalid_reason ==
+					static_cast<int>(TrackingInvalidReason::GripSettling) ||
+				axis6_tracking_gate_snapshot.invalid_reason ==
+					static_cast<int>(TrackingInvalidReason::GripSettling);
+			if (tracking_controller.compensation_enabled() && !tracking_segment_active &&
+				!tracking_handover_or_regrip)
 			{
 				tracking_controller.disable_compensation();
-				std::cout << "主从位移补偿已关闭：已离开有效递送 Follow 段。" << std::endl;
+				std::cout << "主从位移补偿已关闭：已离开正向递送/换手恢复范围。" << std::endl;
 			}
 			const bool force_is_catheter_mode = (guidewire_mode == GuidewireMode::None);
 			const double active_linear_increment_mm =
@@ -2863,13 +2917,9 @@ int main(int argc, char* argv[])
 				axis6_coupled_active;
 			if (tracking_return_started_this_cycle)
 			{
-				// 本拍触发 SwitchWait/回退时立即结束实验段，防止下一拍前残留 PI 积分。
+				// 本拍触发 SwitchWait/回退时立即结束实验段并冻结 PI；
+				// 换手前向欠账保留，待恢复正向 Follow 后继续由受限映射逐步补偿。
 				tracking_controller.invalidate_all(TrackingInvalidReason::CrawlReturnActive);
-				if (tracking_controller.compensation_enabled())
-				{
-					tracking_controller.disable_compensation();
-					std::cout << "主从位移补偿已关闭：本拍已进入夹爪切换或计划回退。" << std::endl;
-				}
 			}
 			else
 			{
@@ -3465,29 +3515,8 @@ int main(int argc, char* argv[])
 					}
 					break;
 				case VisCommandType::SetTrackingLog:
-					if (vcmd.param1 != 0)
-					{
-						if (!tracking_logger.is_running())
-						{
-							if (tracking_logger.start_session("."))
-							{
-								tracking_controller.start_session();
-								tracking_log_last_sample_ms = 0;
-								force_sample_last_sample_ms = 0;
-								std::cout << "主从位移实验记录已启动（20 Hz，CSV 位于工作目录）。" << std::endl;
-							}
-							else
-							{
-								std::cout << "主从位移实验记录启动失败：CSV 文件打开失败。" << std::endl;
-							}
-						}
-					}
-					else if (tracking_logger.is_running())
-					{
-						tracking_controller.stop_session();
-						tracking_logger.stop_session();
-						std::cout << "主从位移实验记录已停止，CSV 已落盘。" << std::endl;
-					}
+					// 记录会话由进程启动和退出统一管理，避免换手研究数据被 UI 误停。
+					std::cout << "主从位移实验记录已由程序自动管理，忽略手动开始/停止请求。" << std::endl;
 					break;
 				case VisCommandType::SetTrackingCompensation:
 					if (vcmd.param1 == 0)
@@ -3514,7 +3543,7 @@ int main(int argc, char* argv[])
 						}
 						if (!tracking_logger.is_running())
 						{
-							std::cout << "主从位移补偿开启被拒绝：请先启动主从位移记录。" << std::endl;
+							std::cout << "主从位移补偿开启被拒绝：自动记录会话未运行，请检查 CSV 文件创建权限。" << std::endl;
 						}
 						else if (!forward_tracking_mode || !force_sample.valid)
 						{

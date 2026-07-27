@@ -92,7 +92,18 @@ bool DeliveryTrackingController::set_parameter(TrackingParameterField field, dou
 	case ParameterPart::Kp: params.kp = value; break;
 	case ParameterPart::Ki: params.ki = value; break;
 	case ParameterPart::MaxGain: params.max_gain = value; break;
-	case ParameterPart::MaxError: params.max_error_mm = value; break;
+	case ParameterPart::MaxError:
+		params.max_error_mm = value;
+		{
+			AxisRuntime& state = runtime(axis);
+			if (state.pending_handover_error_mm > value)
+			{
+				state.pending_handover_error_mm = value;
+				state.pending_handover_error_limited = true;
+			}
+			refresh_error(state);
+		}
+		break;
 	}
 	return true;
 }
@@ -208,8 +219,33 @@ void DeliveryTrackingController::begin_cycle(
 	state.snapshot.nominal_forward_increment_mm = 0.0;
 	state.snapshot.compensated_requested_forward_increment_mm = 0.0;
 	state.snapshot.effective_forward_increment_mm = 0.0;
+	state.snapshot.handover_forward_increment_mm = 0.0;
 	state.snapshot.compensation_gain = 1.0;
 	state.snapshot.actual_rel_mm = actual_rel_mm;
+}
+
+void DeliveryTrackingController::record_handover_forward_increment(
+	DeliveryTrackingAxis axis,
+	double forward_increment_mm)
+{
+	AxisRuntime& state = runtime(axis);
+	if (!session_active_ || forward_increment_mm <= kIncrementEpsilonMm)
+	{
+		return;
+	}
+
+	const double forward_increment = std::max(0.0, forward_increment_mm);
+	state.snapshot.handover_forward_increment_mm = forward_increment;
+	state.snapshot.session_handover_forward_mm += forward_increment;
+	// 会话总主端位移保留完整原始前推量；补偿队列只保留安全上界以内的欠账。
+	state.snapshot.session_master_forward_mm += forward_increment;
+
+	const double error_limit_mm = parameters(axis).max_error_mm;
+	const double candidate_error_mm = state.pending_handover_error_mm + forward_increment;
+	state.pending_handover_error_mm = std::min(candidate_error_mm, error_limit_mm);
+	state.pending_handover_error_limited =
+		candidate_error_mm > (error_limit_mm + kIncrementEpsilonMm);
+	refresh_error(state);
 }
 
 double DeliveryTrackingController::request_compensated_forward_increment(
@@ -230,9 +266,12 @@ double DeliveryTrackingController::request_compensated_forward_increment(
 	refresh_error(state);
 	const DeliveryTrackingParameters& params = parameters(axis);
 	state.integral_before_last_update_mm_s = state.integral_mm_s;
-	if (state.snapshot.tracking_error_mm <= 0.0)
+	const double available_handover_error_mm = std::max(
+		0.0,
+		state.pending_handover_error_mm - state.compensation_forward_outstanding_mm);
+	if (available_handover_error_mm <= kIncrementEpsilonMm)
 	{
-		// 从端领先时只泄放积分，不生成反向或补偿性自主运动。
+		// 已发出的补偿尚未由实际位置确认，或欠账已清零：只泄放积分，不重复下发补偿。
 		state.integral_mm_s *= 0.75;
 		state.snapshot.p_term = 0.0;
 		state.snapshot.i_term = params.ki * state.integral_mm_s;
@@ -248,7 +287,7 @@ double DeliveryTrackingController::request_compensated_forward_increment(
 	}
 	state.last_pi_tick_ms = now_ms;
 
-	const double bounded_error_mm = std::min(state.snapshot.tracking_error_mm, params.max_error_mm);
+	const double bounded_error_mm = std::min(available_handover_error_mm, params.max_error_mm);
 	state.integral_mm_s += bounded_error_mm * dt_s;
 	const double integral_before_clamp = state.integral_mm_s;
 	state.integral_mm_s = clamp_double(state.integral_mm_s, 0.0, kMaxIntegralMmS);
@@ -261,8 +300,8 @@ double DeliveryTrackingController::request_compensated_forward_increment(
 		0.0,
 		params.max_gain - 1.0);
 	const double requested_extra_mm = std::min(
-		nominal_forward_increment_mm * extra_gain,
-		kMaxCompensationStepMm);
+		std::min(nominal_forward_increment_mm * extra_gain, kMaxCompensationStepMm),
+		available_handover_error_mm);
 	const double requested_forward_mm = nominal_forward_increment_mm + requested_extra_mm;
 	state.snapshot.compensated_requested_forward_increment_mm = requested_forward_mm;
 	state.snapshot.compensation_gain = requested_forward_mm / nominal_forward_increment_mm;
@@ -296,6 +335,7 @@ void DeliveryTrackingController::commit_command(
 	{
 		state.snapshot.segment_master_forward_mm += nominal;
 		state.snapshot.session_master_forward_mm += nominal;
+		state.nominal_forward_outstanding_mm += nominal;
 	}
 	if (output_clamped || (requested > kIncrementEpsilonMm && effective + kIncrementEpsilonMm < requested))
 	{
@@ -304,6 +344,17 @@ void DeliveryTrackingController::commit_command(
 		state.snapshot.i_term = parameters(axis).ki * state.integral_mm_s;
 		state.snapshot.integral_limited = false;
 		state.last_pi_tick_ms = 0;
+	}
+
+	if (state.active)
+	{
+		const double effective_extra_mm = std::max(0.0, effective - nominal);
+		const double available_handover_error_mm = std::max(
+			0.0,
+			state.pending_handover_error_mm - state.compensation_forward_outstanding_mm);
+		state.compensation_forward_outstanding_mm += std::min(
+			effective_extra_mm,
+			available_handover_error_mm);
 	}
 	refresh_error(state);
 }
@@ -342,6 +393,20 @@ void DeliveryTrackingController::reset_pi(AxisRuntime& state)
 	state.snapshot.integral_limited = false;
 }
 
+void DeliveryTrackingController::reset_handover_error(AxisRuntime& state)
+{
+	state.pending_handover_error_mm = 0.0;
+	state.pending_handover_error_limited = false;
+	state.snapshot.tracking_error_mm = 0.0;
+	state.snapshot.tracking_error_limited = false;
+}
+
+void DeliveryTrackingController::clear_outstanding_motion(AxisRuntime& state)
+{
+	state.nominal_forward_outstanding_mm = 0.0;
+	state.compensation_forward_outstanding_mm = 0.0;
+}
+
 void DeliveryTrackingController::end_segment(
 	AxisRuntime& state,
 	TrackingInvalidReason reason,
@@ -353,13 +418,22 @@ void DeliveryTrackingController::end_segment(
 		state.grip_command_since_ms = 0;
 	}
 	reset_pi(state);
+	clear_outstanding_motion(state);
+	if (!should_preserve_handover_error(reason))
+	{
+		reset_handover_error(state);
+	}
 	state.snapshot.segment_active = false;
 	state.snapshot.grip_assumed = false;
 	state.snapshot.invalid_reason = static_cast<int>(reason);
 	state.snapshot.actual_forward_delta_mm = 0.0;
 	state.snapshot.segment_master_forward_mm = 0.0;
 	state.snapshot.segment_actual_forward_mm = 0.0;
-	state.snapshot.tracking_error_mm = 0.0;
+	if (reason != TrackingInvalidReason::CrawlReturnActive)
+	{
+		state.snapshot.handover_forward_increment_mm = 0.0;
+	}
+	refresh_error(state);
 }
 
 void DeliveryTrackingController::begin_segment(AxisRuntime& state, std::uint32_t now_ms, double actual_abs_mm)
@@ -374,27 +448,54 @@ void DeliveryTrackingController::begin_segment(AxisRuntime& state, std::uint32_t
 	state.snapshot.actual_forward_delta_mm = 0.0;
 	state.snapshot.segment_master_forward_mm = 0.0;
 	state.snapshot.segment_actual_forward_mm = 0.0;
-	state.snapshot.tracking_error_mm = 0.0;
 	state.snapshot.p_term = 0.0;
 	state.snapshot.i_term = 0.0;
 	state.snapshot.integral_limited = false;
 	state.snapshot.compensation_gain = 1.0;
+	clear_outstanding_motion(state);
+	refresh_error(state);
 }
 
 void DeliveryTrackingController::update_actual_progress(AxisRuntime& state, double actual_abs_mm)
 {
-	const double delta_forward_mm = state.last_actual_abs_mm - actual_abs_mm;
+	const double delta_forward_mm = std::max(0.0, state.last_actual_abs_mm - actual_abs_mm);
 	state.last_actual_abs_mm = actual_abs_mm;
 	state.snapshot.actual_forward_delta_mm = delta_forward_mm;
 	state.snapshot.segment_actual_forward_mm += delta_forward_mm;
 	state.snapshot.session_actual_forward_mm += delta_forward_mm;
+
+	// 实际位移先满足普通手柄映射，再把超出的部分视为已确认的补偿位移。
+	// 这样普通 Follow 的正常前进不会错误地冲销换手欠账。
+	double remaining_forward_mm = delta_forward_mm;
+	const double nominal_settled_mm = std::min(
+		remaining_forward_mm,
+		state.nominal_forward_outstanding_mm);
+	state.nominal_forward_outstanding_mm -= nominal_settled_mm;
+	remaining_forward_mm -= nominal_settled_mm;
+	const double compensation_settled_mm = std::min(
+		remaining_forward_mm,
+		state.compensation_forward_outstanding_mm);
+	state.compensation_forward_outstanding_mm -= compensation_settled_mm;
+	state.pending_handover_error_mm = std::max(
+		0.0,
+		state.pending_handover_error_mm - compensation_settled_mm);
+	if (compensation_settled_mm > kIncrementEpsilonMm)
+	{
+		state.pending_handover_error_limited = false;
+	}
 	refresh_error(state);
 }
 
 void DeliveryTrackingController::refresh_error(AxisRuntime& state)
 {
-	state.snapshot.tracking_error_mm =
-		state.snapshot.segment_master_forward_mm - state.snapshot.segment_actual_forward_mm;
+	state.snapshot.tracking_error_mm = state.pending_handover_error_mm;
+	state.snapshot.tracking_error_limited = state.pending_handover_error_limited;
+}
+
+bool DeliveryTrackingController::should_preserve_handover_error(TrackingInvalidReason reason)
+{
+	return reason == TrackingInvalidReason::CrawlReturnActive ||
+		reason == TrackingInvalidReason::GripSettling;
 }
 
 bool DeliveryTrackingController::is_finite(double value)

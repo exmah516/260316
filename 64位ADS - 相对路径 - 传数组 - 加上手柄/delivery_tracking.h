@@ -47,7 +47,8 @@ struct DeliveryTrackingParameters
 	double kp = 0.0;
 	double ki = 0.0;
 	double max_gain = 1.10;
-	double max_error_mm = 5.0;
+	// 换手前向欠账的硬上界。超过上界的原始手柄位移仍记日志，但不会再进入补偿队列。
+	double max_error_mm = 20.0;
 };
 
 // 每拍状态快照，同时供 UI 和 20 Hz CSV 记录使用。
@@ -66,6 +67,9 @@ struct DeliveryTrackingAxisSnapshot
 	double nominal_forward_increment_mm = 0.0;
 	double compensated_requested_forward_increment_mm = 0.0;
 	double effective_forward_increment_mm = 0.0;
+	// 仅在 SwitchWait/FastMove/RestoreWait 期间记录。回拉手柄时保持为 0。
+	double handover_forward_increment_mm = 0.0;
+	double session_handover_forward_mm = 0.0;
 
 	double compensation_gain = 1.0;
 	double p_term = 0.0;
@@ -79,7 +83,9 @@ struct DeliveryTrackingAxisSnapshot
 	double segment_actual_forward_mm = 0.0;
 	double session_master_forward_mm = 0.0;
 	double session_actual_forward_mm = 0.0;
+	// 当前尚未由实际补偿运动消除的换手前向欠账，始终位于 [0, max_error_mm]。
 	double tracking_error_mm = 0.0;
+	bool tracking_error_limited = false;
 };
 
 class DeliveryTrackingController
@@ -110,7 +116,8 @@ public:
 		double actual_abs_mm,
 		TrackingInvalidReason invalid_reason);
 
-	// 未能读取 PLC 状态或主控制分支未执行时立即结束当前段，避免恢复时补发积分量。
+	// 未能读取 PLC 状态或主控制分支未执行时立即结束当前段。
+	// 普通换手仅冻结 PI 而保留前向欠账；暂停、模式退出等安全状态会清除欠账。
 	void invalidate_all(TrackingInvalidReason reason);
 
 	// 写入本拍原始手柄数据，清空上一拍的命令增量显示。
@@ -121,13 +128,22 @@ public:
 		double raw_mapping_increment_axis_mm,
 		double actual_rel_mm);
 
-	// 输入和输出均使用“正向递送为正”的归一化 mm。松手后返回 0，不会补发历史欠账。
+	// 只在正向递送的换手阶段调用：记录医生持续前推、但当前机构不跟随的映射位移。
+	// 回拉手柄的归一化增量应由调用方传 0，因此不会形成负欠账。
+	void record_handover_forward_increment(
+		DeliveryTrackingAxis axis,
+		double forward_increment_mm);
+
+	// 输入和输出均使用“正向递送为正”的归一化 mm。
+	// 换手欠账跨阶段保留，并在后续正向 Follow 输入中按受限映射增益逐步补偿；
+	// 松手或回拉时返回 0，不产生自主追赶。
 	double request_compensated_forward_increment(
 		DeliveryTrackingAxis axis,
 		double nominal_forward_increment_mm,
 		std::uint32_t now_ms);
 
-	// 约束后的实际命令回写。被窗口或停止条件夹紧时冻结积分，防止 wind-up。
+	// 约束后的实际命令回写。被窗口或停止条件夹紧时冻结积分，防止 wind-up；
+	// 实际补偿增量会作为待确认量，只有轴实际前进后才从换手欠账中扣除。
 	void commit_command(
 		DeliveryTrackingAxis axis,
 		double nominal_forward_increment_mm,
@@ -147,6 +163,10 @@ private:
 		double last_actual_abs_mm = 0.0;
 		double integral_mm_s = 0.0;
 		double integral_before_last_update_mm_s = 0.0;
+		double pending_handover_error_mm = 0.0;
+		double nominal_forward_outstanding_mm = 0.0;
+		double compensation_forward_outstanding_mm = 0.0;
+		bool pending_handover_error_limited = false;
 		DeliveryTrackingAxisSnapshot snapshot;
 	};
 
@@ -160,10 +180,13 @@ private:
 	AxisRuntime& runtime(DeliveryTrackingAxis axis);
 	const AxisRuntime& runtime(DeliveryTrackingAxis axis) const;
 	void reset_pi(AxisRuntime& state);
+	void reset_handover_error(AxisRuntime& state);
+	void clear_outstanding_motion(AxisRuntime& state);
 	void end_segment(AxisRuntime& state, TrackingInvalidReason reason, bool keep_grip_timer);
 	void begin_segment(AxisRuntime& state, std::uint32_t now_ms, double actual_abs_mm);
 	void update_actual_progress(AxisRuntime& state, double actual_abs_mm);
 	void refresh_error(AxisRuntime& state);
+	static bool should_preserve_handover_error(TrackingInvalidReason reason);
 	static bool is_finite(double value);
 
 	AxisRuntime axis_[2];

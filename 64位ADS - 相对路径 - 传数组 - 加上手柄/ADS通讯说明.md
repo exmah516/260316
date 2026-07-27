@@ -278,6 +278,6 @@ clear_axis_return_request(symbols)
 - 作者：AI（Codex）。
 - 涉及文件：`plc_io.cpp`、`control_types.h`、`main.cpp`、`delivery_tracking.*`、`delivery_tracking_logger.*`、可视化管道与 WPF。
 - 行为变化：默认力源改为 ADS；`G.fn_1_value/G.ft_1_value` 在 C++ 中按 `raw/1000.0` 转换为伏特，ADS 模式下 UI 零点采集同步读取一帧 ADS 数据。TCP 保留为显式代码回退，不自动切换。
-- 采样节拍：主从位移 CSV 会话运行而力反馈关闭时，ADS 力采样至少按 20 Hz 更新；不改变 `G.refer[1..7]`、计划回退或定位臂 ADS 契约。
+- 采样节拍：主从位移 CSV 会话由上位机进程启动自动建立；即使力反馈关闭，ADS 力采样仍至少按 20 Hz 更新。不改变 `G.refer[1..7]`、计划回退或定位臂 ADS 契约。
 
 ### （此处持续追加）

@@ -17,9 +17,9 @@ namespace
 	{
 		std::fprintf(fp,
 			",%d,%d,%d,%llu,"
-			"%.8f,%.8f,%.8f,%.8f,%.8f,%.8f,"
+			"%.8f,%.8f,%.8f,%.8f,%.8f,%.8f,%.8f,%.8f,"
 			"%.8f,%.8f,%.8f,%d,"
-			"%.8f,%.8f,%.8f,%.8f,%.8f,%.8f,%.8f,%.8f",
+			"%.8f,%.8f,%.8f,%.8f,%.8f,%.8f,%.8f,%.8f,%d",
 			axis.segment_active ? 1 : 0,
 			axis.grip_assumed ? 1 : 0,
 			axis.invalid_reason,
@@ -30,6 +30,8 @@ namespace
 			axis.nominal_forward_increment_mm,
 			axis.compensated_requested_forward_increment_mm,
 			axis.effective_forward_increment_mm,
+			axis.handover_forward_increment_mm,
+			axis.session_handover_forward_mm,
 			axis.compensation_gain,
 			axis.p_term,
 			axis.i_term,
@@ -41,7 +43,8 @@ namespace
 			axis.segment_actual_forward_mm,
 			axis.session_master_forward_mm,
 			axis.session_actual_forward_mm,
-			axis.tracking_error_mm);
+			axis.tracking_error_mm,
+			axis.tracking_error_limited ? 1 : 0);
 	}
 }
 
@@ -174,18 +177,20 @@ void DeliveryTrackingLogger::write_header()
 		"axis1_segment_active,axis1_grip_assumed,axis1_invalid_reason,axis1_segment_id,"
 		"axis1_handle_raw,axis1_handle_filtered,axis1_raw_mapping_increment_axis_mm,"
 		"axis1_nominal_forward_increment_mm,axis1_compensated_requested_forward_increment_mm,axis1_effective_forward_increment_mm,"
+		"axis1_handover_forward_increment_mm,axis1_session_handover_forward_mm,"
 		"axis1_compensation_gain,axis1_p_term,axis1_i_term,axis1_integral_limited,"
 		"axis1_refer_rel_mm,axis1_actual_rel_mm,axis1_actual_forward_delta_mm,"
 		"axis1_segment_master_forward_mm,axis1_segment_actual_forward_mm,"
-		"axis1_session_master_forward_mm,axis1_session_actual_forward_mm,axis1_tracking_error_mm";
+		"axis1_session_master_forward_mm,axis1_session_actual_forward_mm,axis1_tracking_error_mm,axis1_tracking_error_limited";
 	const char* axis6_columns =
 		"axis6_segment_active,axis6_grip_assumed,axis6_invalid_reason,axis6_segment_id,"
 		"axis6_handle_raw,axis6_handle_filtered,axis6_raw_mapping_increment_axis_mm,"
 		"axis6_nominal_forward_increment_mm,axis6_compensated_requested_forward_increment_mm,axis6_effective_forward_increment_mm,"
+		"axis6_handover_forward_increment_mm,axis6_session_handover_forward_mm,"
 		"axis6_compensation_gain,axis6_p_term,axis6_i_term,axis6_integral_limited,"
 		"axis6_refer_rel_mm,axis6_actual_rel_mm,axis6_actual_forward_delta_mm,"
 		"axis6_segment_master_forward_mm,axis6_segment_actual_forward_mm,"
-		"axis6_session_master_forward_mm,axis6_session_actual_forward_mm,axis6_tracking_error_mm";
+		"axis6_session_master_forward_mm,axis6_session_actual_forward_mm,axis6_tracking_error_mm,axis6_tracking_error_limited";
 	if (!fp_)
 	{
 		return;
