@@ -112,14 +112,17 @@ namespace AdsControlUI
             // 模式与方向
             if (prev.guidewire_mode != state.guidewire_mode ||
                 prev.axis1_reverse != state.axis1_reverse ||
-                prev.axis6_reverse != state.axis6_reverse)
+                prev.axis6_reverse != state.axis6_reverse ||
+                prev.cooperative_direction != state.cooperative_direction)
             {
                 OnPropertyChanged(nameof(ModeText));
                 OnPropertyChanged(nameof(ModeCathFwdSelected));
                 OnPropertyChanged(nameof(ModeCathRevSelected));
                 OnPropertyChanged(nameof(ModeGuideFwdSelected));
                 OnPropertyChanged(nameof(ModeGuideRevSelected));
-                OnPropertyChanged(nameof(ModeCooperativeSelected));
+                OnPropertyChanged(nameof(ModeCooperativeDeliverySelected));
+                OnPropertyChanged(nameof(ModeCooperativeRetractionSelected));
+                OnPropertyChanged(nameof(CooperativeStatusText));
                 OnPropertyChanged(nameof(Axis1Reverse));
                 OnPropertyChanged(nameof(Axis6Reverse));
             }
@@ -165,6 +168,12 @@ namespace AdsControlUI
                 OnPropertyChanged(nameof(CooperativeModeEnabled));
                 OnPropertyChanged(nameof(CooperativeStatusText));
             }
+            if (prev.axis6_soft_limit_hold != state.axis6_soft_limit_hold)
+            {
+                OnPropertyChanged(nameof(Axis6SoftLimitHold));
+                OnPropertyChanged(nameof(Axis6SoftLimitText));
+                OnPropertyChanged(nameof(CooperativeModeEnabled));
+            }
             if (prev.axis1_phase != state.axis1_phase || prev.axis6_phase != state.axis6_phase)
             {
                 OnPropertyChanged(nameof(CooperativeModeEnabled));
@@ -202,7 +211,8 @@ namespace AdsControlUI
                 OnPropertyChanged(nameof(ModeCathRevSelected));
                 OnPropertyChanged(nameof(ModeGuideFwdSelected));
                 OnPropertyChanged(nameof(ModeGuideRevSelected));
-                OnPropertyChanged(nameof(ModeCooperativeSelected));
+                OnPropertyChanged(nameof(ModeCooperativeDeliverySelected));
+                OnPropertyChanged(nameof(ModeCooperativeRetractionSelected));
                 OnPropertyChanged(nameof(ModeSwitchAllowed));
                 OnPropertyChanged(nameof(CooperativeModeEnabled));
                 OnPropertyChanged(nameof(CooperativeStatusText));
@@ -221,7 +231,8 @@ namespace AdsControlUI
             OnPropertyChanged(nameof(ModeCathRevSelected));
             OnPropertyChanged(nameof(ModeGuideFwdSelected));
             OnPropertyChanged(nameof(ModeGuideRevSelected));
-            OnPropertyChanged(nameof(ModeCooperativeSelected));
+            OnPropertyChanged(nameof(ModeCooperativeDeliverySelected));
+            OnPropertyChanged(nameof(ModeCooperativeRetractionSelected));
 			OnPropertyChanged(nameof(TrackingLogRunning));
 			OnPropertyChanged(nameof(TrackingCompensationEnabled));
 			OnPropertyChanged(nameof(Axis1TrackingError));
@@ -272,12 +283,15 @@ namespace AdsControlUI
             OnPropertyChanged(nameof(ModeCathRevSelected));
             OnPropertyChanged(nameof(ModeGuideFwdSelected));
             OnPropertyChanged(nameof(ModeGuideRevSelected));
-            OnPropertyChanged(nameof(ModeCooperativeSelected));
+            OnPropertyChanged(nameof(ModeCooperativeDeliverySelected));
+            OnPropertyChanged(nameof(ModeCooperativeRetractionSelected));
             OnPropertyChanged(nameof(ModeSwitchAllowed));
             OnPropertyChanged(nameof(CooperativeModeEnabled));
             OnPropertyChanged(nameof(DualHandleReady));
             OnPropertyChanged(nameof(CooperativeReturnOwner));
             OnPropertyChanged(nameof(CooperativeStatusText));
+            OnPropertyChanged(nameof(Axis6SoftLimitHold));
+            OnPropertyChanged(nameof(Axis6SoftLimitText));
             OnPropertyChanged(nameof(ControlActive));
             OnPropertyChanged(nameof(FreezeActive));
             OnPropertyChanged(nameof(EstopHold));
@@ -393,7 +407,8 @@ namespace AdsControlUI
             get
             {
                 if (SpacingRecoveryActive) return "屈曲恢复";
-                if (_state.guidewire_mode == 2) return "协同递送";
+                if (_state.guidewire_mode == 2)
+                    return _state.cooperative_direction == 2 ? "协同撤出" : "协同递送";
                 string mode = _state.guidewire_mode == 0 ? "导管" : "导丝";
                 bool rev = _state.guidewire_mode == 0 ? _state.axis1_reverse : _state.axis6_reverse;
                 return mode + (rev ? "撤出" : "递送");
@@ -406,10 +421,21 @@ namespace AdsControlUI
         public bool ModeCathRevSelected => SpacingRecoveryInactive && _state.guidewire_mode == 0 && _state.axis1_reverse;
         public bool ModeGuideFwdSelected => SpacingRecoveryInactive && _state.guidewire_mode == 1 && !_state.axis6_reverse;
         public bool ModeGuideRevSelected => SpacingRecoveryInactive && _state.guidewire_mode == 1 && _state.axis6_reverse;
-        public bool ModeCooperativeSelected => SpacingRecoveryInactive && _state.guidewire_mode == 2;
+        public bool ModeCooperativeDeliverySelected =>
+            SpacingRecoveryInactive &&
+            _state.guidewire_mode == 2 &&
+            _state.cooperative_direction == 1;
+        public bool ModeCooperativeRetractionSelected =>
+            SpacingRecoveryInactive &&
+            _state.guidewire_mode == 2 &&
+            _state.cooperative_direction == 2;
         public bool DualHandleReady => _state.dual_handle_ready;
         public int CooperativeReturnOwner => _state.cooperative_return_owner;
         public bool ModeSwitchAllowed => SpacingRecoveryInactive && CooperativeReturnOwner == 0;
+        public bool Axis6SoftLimitHold => _state.axis6_soft_limit_hold;
+        public string Axis6SoftLimitText => Axis6SoftLimitHold
+            ? "轴6软件限位：已锁止，需安全处理后重新启动控制。"
+            : "轴6软件限位：正常（<= 670 mm）。";
         public bool CooperativeModeEnabled =>
             DualHandleReady &&
             ModeSwitchAllowed &&
@@ -418,6 +444,7 @@ namespace AdsControlUI
             !FreezeActive &&
             !EstopHold &&
             !FtExpActive &&
+            !Axis6SoftLimitHold &&
             _state.axis1_phase == 0 &&
             _state.axis6_phase == 0;
         public string CooperativeStatusText
@@ -425,11 +452,11 @@ namespace AdsControlUI
             get
             {
                 if (!DualHandleReady) return "双手柄未就绪（需重启上位机）";
-                if (CooperativeReturnOwner == 1) return "导管回退中";
-                if (CooperativeReturnOwner == 2) return "导丝回退中";
-                return ModeCooperativeSelected
-                    ? "协同递送 / 双手柄就绪"
-                    : "双手柄就绪：587 导管，582 导丝";
+                if (CooperativeReturnOwner == 1) return "导管换手中";
+                if (CooperativeReturnOwner == 2) return "导丝换手中";
+                if (ModeCooperativeDeliverySelected) return "协同递送 / 双手柄就绪";
+                if (ModeCooperativeRetractionSelected) return "协同撤出 / 双手柄就绪";
+                return "双手柄就绪：587 导管，582 导丝";
             }
         }
         public bool ForceLogRunning => _state.force_log_running;
@@ -592,6 +619,14 @@ namespace AdsControlUI
 
         public void SetCooperativeDelivery(bool enabled) =>
             _client.SendCommand(VisCommandType.SetCooperativeDelivery, enabled ? 1 : 0);
+
+        public void SetCooperativeRetraction(bool enabled) =>
+            _client.SendCommand(VisCommandType.SetCooperativeRetraction, enabled ? 1 : 0);
+
+        public void SetAxis1PostReturnLead(double leadMm) =>
+            _client.SendCommand(
+                VisCommandType.SetAxis1PostReturnLead,
+                (int)Math.Round(leadMm * 1000.0));
 
         public void SetSpacingRecovery(bool enabled) =>
             _client.SendCommand(VisCommandType.SetSpacingRecovery, enabled ? 1 : 0);

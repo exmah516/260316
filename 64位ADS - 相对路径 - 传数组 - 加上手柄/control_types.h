@@ -109,6 +109,13 @@ struct ControlConfig
 	double axis3_delivery_stop_from_left_mm = 20.0;
 	double axis3_delivery_release_hysteresis_mm = 2.0;
 	double guidewire_entry_axis6_from_left_max_mm = 667.0;
+	// 普通导管正向递送中，axis1 每次计划回退后首次有效前推前的单独先行量。
+	// 正值表示递送方向（axis1 绝对坐标减小），负值表示反向；UI 与内部均限制在 [-10, 10] mm。
+	double axis1_post_return_lead_mm = 1.0;
+	double axis1_post_return_lead_limit_mm = 10.0;
+	// axis6 距自身左限位的上位机内部软限位。达到预测越限条件后仅锁止上位机链路，
+	// 不改变 PLC/NC 内已有的硬限位与安全逻辑。
+	double axis6_soft_limit_from_left_mm = 670.0;
 
 	// 手动间距恢复：582 手柄仅驱动轴3/5/6向远离左限位方向等位移移动。
 	double spacing_recovery_speed_limit_mm_s = 20.0;
@@ -208,7 +215,16 @@ enum class GuidewireMode
 	Cooperative
 };
 
-// 协同递送中正在执行计划回退的链路。非拥有链路必须保持当前位置，
+// 协同模式的固定运动方向。GuidewireMode::Cooperative 只表示双手柄协同已接管，
+// 具体是递送还是撤出由该枚举决定，避免改变原有 GuidewireMode 的数值契约。
+enum class CooperativeDirection
+{
+	None,
+	Delivery,
+	Retraction
+};
+
+// 协同模式中正在执行计划回退的链路。非拥有链路必须保持当前位置，
 // 直到拥有链路完成夹爪恢复和双手柄重同步。
 enum class CooperativeReturnOwner
 {

@@ -41,10 +41,15 @@ namespace AdsControlUI
         private void ModeCathRev_Click(object sender, RoutedEventArgs e) => _vm.SetMode(0, 1);
         private void ModeGuideFwd_Click(object sender, RoutedEventArgs e) => _vm.SetMode(1, 0);
         private void ModeGuideRev_Click(object sender, RoutedEventArgs e) => _vm.SetMode(1, 1);
-        private void ModeCooperative_Click(object sender, RoutedEventArgs e)
+        private void ModeCooperativeDelivery_Click(object sender, RoutedEventArgs e)
         {
             if (sender is ToggleButton button)
                 _vm.SetCooperativeDelivery(button.IsChecked == true);
+        }
+        private void ModeCooperativeRetraction_Click(object sender, RoutedEventArgs e)
+        {
+            if (sender is ToggleButton button)
+                _vm.SetCooperativeRetraction(button.IsChecked == true);
         }
         private void SpacingRecovery_Click(object sender, RoutedEventArgs e)
         {
@@ -97,6 +102,26 @@ namespace AdsControlUI
             _vm.SendTrackingCompensationParams(a1Kp, a1Ki, a1Gain, a1Error, a6Kp, a6Ki, a6Gain, a6Error);
             TrackingError.Text = "参数已发送；Kp=0 时补偿不会产生额外位移。";
         }
+
+        private void ApplyAxis1PostReturnLead_Click(object sender, RoutedEventArgs e)
+        {
+            Axis1LeadError.Text = "";
+            if (!double.TryParse(TbAxis1PostReturnLead.Text, out double leadMm))
+            {
+                Axis1LeadError.Text = "输入格式错误，请输入有效数字。";
+                return;
+            }
+
+            if (leadMm < -10.0 || leadMm > 10.0)
+            {
+                Axis1LeadError.Text = "轴1回退后先行量必须在 -10 到 10 mm 之间。";
+                return;
+            }
+
+            _vm.SetAxis1PostReturnLead(leadMm);
+            Axis1LeadError.Text = "先行量已发送；正值沿递送方向，负值反向。";
+        }
+
         private void DirectControl_Click(object sender, RoutedEventArgs e) => _vm.SelectDirectControl();
 
         private void ShowForce_Click(object sender, RoutedEventArgs e)

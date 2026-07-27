@@ -63,6 +63,10 @@ namespace AdsControlUI
         public double axis1_compensation_gain;
         public double axis6_compensation_gain;
         public ulong tracking_log_dropped;
+        // 协同方向：0=None，1=Delivery，2=Retraction。必须与 C++ VisState 末尾字段一致。
+        public int cooperative_direction;
+        // axis6 内部软限位保护锁止状态。必须与 C++ VisState 末尾字段一致。
+        [MarshalAs(UnmanagedType.I1)] public bool axis6_soft_limit_hold;
     }
 
     public enum VisCommandType : int
@@ -91,6 +95,8 @@ namespace AdsControlUI
         SetTrackingLog = 20,
         SetTrackingCompensation = 21,
         SetTrackingCompensationParam = 22,
+        SetCooperativeRetraction = 23,
+        SetAxis1PostReturnLead = 24,
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 1)]

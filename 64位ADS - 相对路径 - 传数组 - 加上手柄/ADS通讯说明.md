@@ -3,7 +3,7 @@
 > 本文档梳理上位机与倍福 PLC 之间的 ADS 通讯实现：连接、符号表、读写封装、断线/重同步路径，以及与主循环的契约。
 > 修改 `plc_io.cpp/.h`、`ADSComm.cpp`、符号表、或新增 PLC 变量时，请同步在最末"变更日志"追加条目。
 
-更新时间：2026-07-26
+更新时间：2026-07-27
 适用工程：`64位ADS - 相对路径 - 传数组 - 加上手柄\ADS.sln`
 对应代码版本：2026-06-26 主分支（基于 `plc_io.cpp` / `ADSComm1.h` / `main.cpp` 当前状态校对）
 
@@ -279,5 +279,17 @@ clear_axis_return_request(symbols)
 - 涉及文件：`plc_io.cpp`、`control_types.h`、`main.cpp`、`delivery_tracking.*`、`delivery_tracking_logger.*`、可视化管道与 WPF。
 - 行为变化：默认力源改为 ADS；`G.fn_1_value/G.ft_1_value` 在 C++ 中按 `raw/1000.0` 转换为伏特，ADS 模式下 UI 零点采集同步读取一帧 ADS 数据。TCP 保留为显式代码回退，不自动切换。
 - 采样节拍：主从位移 CSV 会话由上位机进程启动自动建立；即使力反馈关闭，ADS 力采样仍至少按 20 Hz 更新。不改变 `G.refer[1..7]`、计划回退或定位臂 ADS 契约。
+
+### 2026-07-27 — 协同撤出可视化协议扩展（无 PLC ADS 符号变更）
+- 作者：AI（Codex）。
+- 涉及文件：`main.cpp`、`vis_server.h`、`AdsControlUI/VisProtocol.cs`、`AdsControlUI/VisPipeClient.cs`、WPF 模式区。
+- 行为变化：新增 UI 命令 `SetCooperativeRetraction=23`；`VisState` 末尾追加 `int cooperative_direction`，编码为 `0=None`、`1=Delivery`、`2=Retraction`，用于显示实际激活的协同方向。
+- 协议约束：C++ 与 C# 都按 Pack=1 的 327 字节布局编译，新旧上位机/WPF 不能混用，更新后必须一起重启。本次没有新增 PLC ADS 符号，也没有修改 `G.refer[1..7]`、计划回退或定位臂通道。
+
+### 2026-07-27 — axis6 软件限位状态与 axis1 回退后先行（无 PLC ADS 符号变更）
+- 作者：AI（Codex）。
+- 涉及文件：`main.cpp`、`control_types.h`、`vis_server.h`、`AdsControlUI/VisProtocol.cs`、`AdsControlUI/VisPipeClient.cs`、WPF 参数输入区。
+- 行为变化：axis6 的 `670 mm from-left` 保护完全在上位机控制层计算，未增加 ADS 读写符号。预测到 axis6 手柄/计划回退/axis1 联动回退的最终目标越限时，不写对应 PLC `return_cmd`；现有 PLC 与 NC 的硬限位、`G.refer[1..7]` 及定位臂通道均不改变。axis1 回退后先行量仅经本地命名管道写入 C++ 配置，不通过 ADS 下传到 PLC。
+- 协议变化：新增 `SetAxis1PostReturnLead=24`，`param1 = mm * 1000`，范围 `[-10,10]`；`VisState` 末尾追加 `bool axis6_soft_limit_hold`。Pack=1 布局由 327 字节扩展为 **328 字节**，C++ 与 WPF 必须同时更新并重启，禁止与 327 字节版本混用。
 
 ### （此处持续追加）

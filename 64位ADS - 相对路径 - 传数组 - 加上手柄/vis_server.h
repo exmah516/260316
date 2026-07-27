@@ -65,9 +65,13 @@ struct VisState
 	double axis1_compensation_gain;
 	double axis6_compensation_gain;
 	std::uint64_t tracking_log_dropped;
+	// 协同方向：0=None，1=Delivery，2=Retraction。末尾追加要求 C++ 与 WPF 同步更新。
+	int cooperative_direction;
+	// axis6 内部软限位保护锁止状态。仅来自上位机，不增加 PLC ADS 契约。
+	bool axis6_soft_limit_hold;
 };
 #pragma pack(pop)
-static_assert(sizeof(VisState) == 323, "VisState 管道布局发生变化，请同步更新 WPF 协议结构。");
+static_assert(sizeof(VisState) == 328, "VisState 管道布局发生变化，请同步更新 WPF 协议结构。");
 
 enum class VisCommandType : int
 {
@@ -95,6 +99,8 @@ enum class VisCommandType : int
 	SetTrackingLog = 20, // 保留兼容；记录会话由进程启动/退出自动管理，当前忽略 param1
 	SetTrackingCompensation = 21, // param1: 0=关闭，1=开启
 	SetTrackingCompensationParam = 22, // param1=TrackingParameterField，param2=数值×1000
+	SetCooperativeRetraction = 23, // param1: 0=退出，1=进入
+	SetAxis1PostReturnLead = 24, // param1=轴1回退后先行量，单位 mm×1000，范围 [-10, 10]
 };
 
 #pragma pack(push, 1)

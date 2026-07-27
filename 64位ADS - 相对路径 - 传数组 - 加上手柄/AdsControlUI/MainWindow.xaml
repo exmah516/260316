@@ -214,7 +214,11 @@
                                              IsEnabled="{Binding ModeSwitchAllowed}"/>
                             </UniformGrid>
                             <RadioButton Content="协同递送" GroupName="Mode" Style="{StaticResource ModeChipRadio}"
-                                         Click="ModeCooperative_Click" IsChecked="{Binding ModeCooperativeSelected, Mode=OneWay}"
+                                         Click="ModeCooperativeDelivery_Click" IsChecked="{Binding ModeCooperativeDeliverySelected, Mode=OneWay}"
+                                         IsEnabled="{Binding CooperativeModeEnabled}"
+                                         Margin="3" MinHeight="40"/>
+                            <RadioButton Content="协同撤出" GroupName="Mode" Style="{StaticResource ModeChipRadio}"
+                                         Click="ModeCooperativeRetraction_Click" IsChecked="{Binding ModeCooperativeRetractionSelected, Mode=OneWay}"
                                          IsEnabled="{Binding CooperativeModeEnabled}"
                                          Margin="3" MinHeight="40"/>
                             <TextBlock Text="{Binding CooperativeStatusText}"
@@ -237,6 +241,24 @@
                                            VerticalAlignment="Center"
                                            TextWrapping="Wrap"/>
                             </Grid>
+                        </StackPanel>
+                    </GroupBox>
+
+                    <!-- 导管回退后先行 -->
+                    <GroupBox Header="导管回退后轴1先行">
+                        <StackPanel Margin="2">
+                            <Grid Margin="0,0,0,4">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="180"/>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Grid.Column="0" Text="轴1回退后先行 (-10~10 mm)" Style="{StaticResource FieldLabelText}"/>
+                                <TextBox Grid.Column="1" x:Name="TbAxis1PostReturnLead" Text="1.00" Margin="8,3" MinWidth="72"/>
+                                <Button Grid.Column="2" Content="应用" Click="ApplyAxis1PostReturnLead_Click" Padding="12,7" Margin="8,0,0,0"/>
+                            </Grid>
+                            <TextBlock x:Name="Axis1LeadError" Style="{StaticResource ErrorText}" Margin="0,0,0,4"/>
+                            <TextBlock Text="{Binding Axis6SoftLimitText}" Style="{StaticResource CaptionText}" TextWrapping="Wrap"/>
                         </StackPanel>
                     </GroupBox>
 

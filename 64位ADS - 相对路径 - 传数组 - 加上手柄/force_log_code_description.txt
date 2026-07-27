@@ -25,7 +25,9 @@
 2) mode_code（当前模式编码）
 --------------------------------------------------------------------
 - 0：导管模式（guidewire_mode == None）
-- 1：导丝模式（guidewire_mode != None）
+- 1：独立导丝模式（guidewire_mode == Independent）
+- 2：协同递送（guidewire_mode == Cooperative 且 cooperative_direction == Delivery）
+- 3：协同撤出（guidewire_mode == Cooperative 且 cooperative_direction == Retraction）
 
 --------------------------------------------------------------------
 3) reverse_code（当前模式下的正反向状态）
