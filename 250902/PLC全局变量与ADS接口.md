@@ -4,9 +4,9 @@
 >
 > 新增/删除/修改 GVL 变量，或改变读写方向/语义，请同步更新本文档、`PLC项目说明.md §5`，以及上位机 `ADS通讯说明.md §3`。
 
-更新时间：2026-07-06
+更新时间：2026-07-28
 适用工程：`250902\Untitled2`（`GVLs\G.TcGVL`）
-对应代码版本：2026-07-06 主分支
+对应代码版本：2026-07-28 主分支
 
 ***
 
@@ -85,6 +85,7 @@
 | 变量 | 类型 | 说明 |
 |---|---|---|
 | `G.self_check_done` | `BOOL` | SelfCheck 完成标志。上位机轮询（50 拍一次）。`init` 每次进入时清零 |
+| `G.startup_loading_ready` | `BOOL` | SelfCheck 完成且机构位于标准器械装卸等待姿态时置 TRUE；`init` 或 SelfCheck 重置时清零，上位机开始启动准备/直接控制前消费为 FALSE |
 | `G.selfcheck_reset_req` | `BOOL` | `init` 拉起，请求 SelfCheck 重置内部状态机 |
 | `G.selfcheck_stu[1..7]` | `ARRAY[1..7] OF INT` | SelfCheck 各轴当前子状态（上位机可读用于诊断） |
 | `G.selfcheck_all_reach_limit` | `BOOL` | 所有目标轴已到限位（stu ≥ 6）的聚合标志 |
@@ -95,6 +96,7 @@
 |---|---|---|---|---|
 | `G.handle_reinit_req` | `BOOL` | PLC（SelfCheck/handle/clear_err） | 上位机（50 拍一次），读后置 FALSE | PLC 请求上位机重同步 |
 | `G.handle_reinit_done` | `BOOL` | PLC（handle 重初始化完成时） | PLC 内部（诊断） | handle 已完成 SetPointGen 使能 |
+| `G.startup_loading_ready` | `BOOL` | PLC（SelfCheck；init/reset 清零） | 上位机（启动入口读，开始控制前写 FALSE） | 标准装卸启动的一次性资格位；实际位置仍由上位机二次校验 |
 | `G.estop_hold_req` | `BOOL` | PLC（handle/err/clear_err/init） | 上位机（10 拍一次） | 急停/保持激活；上位机应停写 refer |
 | `G.startup_smoothing_bypass` | `BOOL` | **上位机写** | PLC（handle） | 启动准备阶段临时旁路二阶滤波，用传统滑动平均路径 |
 
@@ -207,6 +209,7 @@ END_STRUCT
 | `G.axis1_fast_return` | `BOOL` | 同名 | 每控制拍 |
 | `G.axis6_fast_retract` | `BOOL` | 同名 | 每控制拍 |
 | `G.startup_smoothing_bypass` | `BOOL` | 同名 | 每控制拍 |
+| `G.startup_loading_ready` | `BOOL` | 同名 | 启动准备或直接控制入口消费时写 FALSE |
 | `G.axis4_fwd_req` / `G.axis4_rev_req` | `BOOL` | 同名 | 每 20 拍轮询写 |
 | `G.axisN_return_cmd.Req` + `TargetAbs/Vel/Acc/Dec/Jerk` | `BOOL` + `LREAL×5` | `G.return_cmd[N]` | 触发时写，完成后清 Req |
 | `G.handle_reinit_req` | `BOOL` | 同名 | 读后清零（写 FALSE） |
@@ -226,6 +229,7 @@ END_STRUCT
 | `G.act_pos_from_left` | `double[7]` | `G.act_pos_from_left[1..7]` | 每 5 拍 |
 | `G.refer_from_left` | `double[7]` | `G.refer_from_left[1..7]` | 每 5 拍 |
 | `G.self_check_done` | `BOOL` | 同名 | 每 50 拍 |
+| `G.startup_loading_ready` | `BOOL` | 同名 | 上位机进程启动时探测符号；每次启动准备入口读取 |
 | `G.handle_reinit_req` | `BOOL` | 同名 | 每 50 拍 |
 | `G.estop_hold_req` | `BOOL` | 同名 | 每 10 拍 |
 | `G.axisN_return_cmd.Busy/Done/Error/ErrorId` | `BOOL×3 + UDINT` | `G.return_cmd[N]` | 主循环 FastMove 阶段每拍读 |
@@ -247,6 +251,7 @@ END_STRUCT
 4. **`G.return_cmd[i].Req` 上位机写 TRUE 后，必须等到 Done/Error 其中之一置位，再写 FALSE**。不允许在 Busy 期间重写 TRUE（见 §3）。
 5. **`G.cylinder5_value` 上位机不应直接写**；通过 `G.cylinder5_press_req` 写布尔量，由 PLC 每周期映射。直接写 `cylinder5_value` 会在下一周期被 PLC 覆盖。
 6. **定位臂变量不参与原 `G.gen_state` 状态机**；`G.arm_manual_enable=FALSE` 或对应轴未上电时，`G.arm_jog_*` 请求不会产生运动。正反向同时为 TRUE 时 `G.arm_cmd_conflict[i]=TRUE`，PLC 停止该轴并拒绝启动新运动。
+7. **`G.startup_loading_ready` 不是位置反馈**：PLC 仅在本轮 SelfCheck 全部完成后置 TRUE。上位机还会核对 axis1/3/5/6 距左限位是否分别处于 `[96,280,430,580] ±2 mm`；任一条件不满足时改走中断恢复启动。旧 PLC 没有该符号时仅按实际位置兼容判定。
 
 ### 4.3 ADS 连接参数
 
@@ -283,6 +288,12 @@ PLC 侧无 ADS 配置文件，由 TwinCAT XAR 路由表管理。
 6. 在本文档"§7 变更日志"追加条目，注明：日期 / 变更人 / 变量名 / 改动类型 / 是否需要上位机同步修改。
 
 ## 7. 变更日志
+
+### 2026-07-28 — 新增器械装卸启动资格握手位
+- 作者：AI（Codex）。
+- 变量：新增 `G.startup_loading_ready : BOOL`；SelfCheck 重置和 `init` 入口清零，自检完成并回到标准装卸等待姿态时置 TRUE，上位机开始启动准备或直接控制前写 FALSE 消费。
+- 行为：该标志与 axis1/3/5/6 的 `[96,280,430,580] ±2 mm` 实际位置共同决定标准启动；不满足时上位机执行中断恢复启动。旧 PLC 无符号时保留位置兼容路径。
+- 接口影响：上位机 `plc_io` 同步新增读写符号；不修改 `G.refer[1..7]`、`G.Act_pos[1..7]`、计划回退、定位臂或命名管道结构。
 
 ### 2026-07-06 — 新增定位臂 5 轴 ADS 符号
 - 作者：AI（Codex，应用户计划实施）。

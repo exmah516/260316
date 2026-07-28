@@ -114,7 +114,9 @@ namespace guidewire_mode_ctrl
 		}
 		const double axis6_abs = ctx.plc_act_pos[5] + ctx.plc_init_pos[5];
 		axis6_from_left_mm = std::abs(axis6_abs - ctx.plc_leftlimit[5]);
-		return axis6_from_left_mm < ctx.cfg->guidewire_entry_axis6_from_left_max_mm;
+		// 返回值只表示 ADS 实际位置读取成功；入口距离门限由调用方统一判定，
+		// 这样超过 667 mm 时可以输出准确的拒绝原因，而不会误报成读取失败。
+		return true;
 	}
 
 	bool exit_guidewire_mode_to_normal(AppContext& ctx)

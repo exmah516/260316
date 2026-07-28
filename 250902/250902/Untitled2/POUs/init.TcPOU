@@ -34,6 +34,7 @@ CASE step OF
 		G.power_[i].Enable := TRUE;
 	END_FOR
 	G.self_check_done := FALSE;
+	G.startup_loading_ready := FALSE;
 	G.selfcheck_reset_req := TRUE;
 
 	init_watchdog(IN:=TRUE, PT:=T#5S);

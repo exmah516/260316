@@ -65,7 +65,7 @@ namespace AdsControlUI
         public ulong tracking_log_dropped;
         // 协同方向：0=None，1=Delivery，2=Retraction。必须与 C++ VisState 末尾字段一致。
         public int cooperative_direction;
-        // axis6 内部软限位保护锁止状态。必须与 C++ VisState 末尾字段一致。
+        // axis6 当前软限位阻断状态。必须与 C++ VisState 末尾字段一致。
         [MarshalAs(UnmanagedType.I1)] public bool axis6_soft_limit_hold;
     }
 

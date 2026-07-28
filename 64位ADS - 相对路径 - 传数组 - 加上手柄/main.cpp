@@ -426,10 +426,13 @@ int main(int argc, char* argv[])
 	CrawlState axis6_crawl;
 	SpacingRecoveryState spacing_recovery;
 	axis1_crawl.enabled = true;
-	startup.final_axis1_from_left_mm = cfg.startup_axis1_ready_from_left_mm;
-	startup.final_axis3_from_left_mm = cfg.startup_axis3_ready_from_left_mm;
-	startup.final_axis5_from_left_mm = cfg.startup_axis5_ready_from_left_mm;
-	startup.final_axis6_from_left_mm = cfg.startup_axis5_ready_from_left_mm + cfg.axis56_ready_gap_mm;
+	// 最终启动默认姿态与标准启动的中间夹持位置分开设置。
+	// 649/649/650 可保持缩短后的 0 mm、1 mm 相对差，同时让完整
+	// axis6 运行窗口 [axis5+1, axis5+21] 不超过 670 mm 软上限。
+	startup.final_axis1_from_left_mm = cfg.startup_final_axis1_default_from_left_mm;
+	startup.final_axis3_from_left_mm = cfg.startup_final_axis3_default_from_left_mm;
+	startup.final_axis5_from_left_mm = cfg.startup_final_axis5_default_from_left_mm;
+	startup.final_axis6_from_left_mm = cfg.startup_final_axis6_default_from_left_mm;
 
 	// 绑定上下文中的长生命周期状态，替代大段 lambda capture。
 	ctx.guidewire_mode = &guidewire_mode;
@@ -524,8 +527,19 @@ int main(int argc, char* argv[])
 		return guidewire_mode_ctrl::exit_guidewire_mode_to_normal(ctx);
 	};
 	auto start_startup_sequence = [&]() -> bool { return startup_sequence::start_startup_sequence(ctx); };
+	auto consume_startup_loading_ready = [&]() -> bool { return startup_sequence::consume_startup_loading_ready(ctx); };
 	auto restore_startup_v_limit = [&]() -> bool { return startup_sequence::restore_startup_v_limit(ctx); };
 	auto prompt_startup_mode = [&]() { startup_sequence::prompt_startup_mode(ctx); };
+	// 递送只接受手柄“推”产生的负轴向增量，撤出只接受“拉”产生的正轴向增量。
+	// 被拒绝的增量仍会在循环末尾刷新采样基准，因此不会积压到后续控制拍。
+	auto gate_linear_increment_for_mode = [](double increment_mm, bool reverse_mode) -> double
+	{
+		if ((!reverse_mode && increment_mm < 0.0) || (reverse_mode && increment_mm > 0.0))
+		{
+			return increment_mm;
+		}
+		return 0.0;
+	};
 
 	// 在交互循环开始前，用初始 PLC 快照初始化各保持位姿。
 	if (!read_plc_state())
@@ -553,6 +567,12 @@ int main(int argc, char* argv[])
 
 	bool self_check_done = true;
 	bool has_self_check_flag = ads.ADSRead(AdsSymbol::self_check_done, sizeof(self_check_done), &self_check_done);
+	startup.loading_ready_symbol_available =
+		plc_io::read_startup_loading_ready(ctx, startup.loading_ready_plc);
+	if (!startup.loading_ready_symbol_available)
+	{
+		std::cout << "未找到 G.startup_loading_ready，将按 96/280/430/580 mm 装卸姿态位置兼容判定。" << std::endl;
+	}
 
 	bool control_active = !has_self_check_flag || self_check_done;
 	bool last_self_check_done = self_check_done;
@@ -576,8 +596,19 @@ int main(int argc, char* argv[])
 	bool axis1_post_return_lead_armed = false;
 	bool axis1_post_return_lead_active = false;
 	double axis1_post_return_lead_target_abs = 0.0;
-	// axis6 内部软限位为保护锁存：预测目标越过上限后，不再允许相关手柄链路继续运动。
+	// axis6 软限位只在当前危险动作或实际越限时阻断，不把一次被拒绝的换手永久锁死。
+	enum class Axis6SoftLimitReason : unsigned char
+	{
+		None,
+		ActualPosition,
+		HandleTarget,
+		PlannedReturn,
+		Axis1CoupledReturn
+	};
 	bool axis6_soft_limit_hold = false;
+	Axis6SoftLimitReason axis6_soft_limit_reason = Axis6SoftLimitReason::None;
+	bool axis6_soft_limit_warning_active = false;
+	Axis6SoftLimitReason axis6_soft_limit_warning_reason = Axis6SoftLimitReason::None;
 	double axis6_soft_limit_blocked_target_from_left_mm = 0.0;
 	AxisReturnStatus axis1_return_status;
 	AxisReturnStatus axis6_return_status;
@@ -623,19 +654,32 @@ int main(int argc, char* argv[])
 		return axis6_from_left_mm(target_abs) >
 			(cfg.axis6_soft_limit_from_left_mm + 1e-6);
 	};
-	auto engage_axis6_soft_limit_hold = [&](double target_abs, const char* source)
+	auto engage_axis6_soft_limit_hold = [&](double target_abs,
+		Axis6SoftLimitReason reason,
+		const char* source)
 	{
-		if (axis6_soft_limit_hold)
+		// 实际位置越限的冻结优先级高于任何预测原因，避免同一拍的
+		// axis1 联动检查覆盖 ActualPosition，下一拍误把真实越限解锁。
+		if (axis6_soft_limit_reason == Axis6SoftLimitReason::ActualPosition &&
+			reason != Axis6SoftLimitReason::ActualPosition)
 		{
+			axis6_soft_limit_hold = true;
 			return;
 		}
-
 		axis6_soft_limit_hold = true;
+		axis6_soft_limit_reason = reason;
 		axis6_soft_limit_blocked_target_from_left_mm = axis6_from_left_mm(target_abs);
-		reset_axis1_post_return_lead();
-		// 预测越限时撤销尚未完成的上位机回退请求，避免 PLC 继续接受超限目标。
-		(void)clear_axis1_group_return_requests();
-		(void)clear_axis_return_request(AdsSymbol::axis6_return);
+		const bool new_warning = !axis6_soft_limit_warning_active ||
+			axis6_soft_limit_warning_reason != reason;
+		if (new_warning)
+		{
+			axis6_soft_limit_warning_active = true;
+			axis6_soft_limit_warning_reason = reason;
+			reset_axis1_post_return_lead();
+			// 预测越限时撤销尚未完成的上位机回退请求，避免 PLC 继续接受超限目标。
+			(void)clear_axis1_group_return_requests();
+			(void)clear_axis_return_request(AdsSymbol::axis6_return);
+		}
 		axis1_crawl.phase = CrawlState::Phase::Follow;
 		axis1_crawl.plc_move_requested = false;
 		axis6_crawl.phase = CrawlState::Phase::Follow;
@@ -649,10 +693,13 @@ int main(int argc, char* argv[])
 		axis1_fast_return = false;
 		axis6_fast_retract = false;
 		clear_force_output();
-		std::cout << "警告：axis6 软件限位锁止（" << source
-			<< " 预测目标距左限位 " << axis6_soft_limit_blocked_target_from_left_mm
-			<< " mm > " << cfg.axis6_soft_limit_from_left_mm
-			<< " mm）。未下发越限回退，相关手柄链路已冻结。" << std::endl;
+		if (new_warning)
+		{
+			std::cout << "警告：axis6 软件限位阻断（" << source
+				<< "，目标距左限位 " << axis6_soft_limit_blocked_target_from_left_mm
+				<< " mm > " << cfg.axis6_soft_limit_from_left_mm
+				<< " mm）。本拍不下发越限运动；松手、改变模式或回到安全窗口后重新评估。" << std::endl;
+		}
 	};
 	auto cooperative_direction_text = [](CooperativeDirection direction) -> const char*
 	{
@@ -909,19 +956,41 @@ int main(int argc, char* argv[])
 		CylinderManualMode::Automatic,
 		CylinderManualMode::Automatic
 	};
+	// 手动电缸只用于调试。自动运动开始接管时必须撤销全部覆盖，避免末尾写入压住换手状态机命令。
+	auto clear_cylinder_manual_overrides = [&](const char* source)
+	{
+		bool cleared = false;
+		for (int cylinder_index = 0; cylinder_index < 4; ++cylinder_index)
+		{
+			if (cylinder_manual_mode[cylinder_index] != CylinderManualMode::Automatic)
+			{
+				cylinder_manual_mode[cylinder_index] = CylinderManualMode::Automatic;
+				cleared = true;
+			}
+		}
+		if (cleared)
+		{
+			std::cout << source << "：自动流程开始接管，已解除电缸1~4的手动覆盖。" << std::endl;
+		}
+	};
 	bool vis_reverse_override_active = false;
 	bool vis_reverse_override_value = false;
 	int vis_reverse_override_target = 0;
 
 	struct PendingStartupParams {
-		double axis1_from_left_mm = 20.0;
-		double axis3_from_left_mm = 635.0;
-		double axis5_from_left_mm = 290.0;
-		double axis6_from_left_mm = 310.0;
+		double axis1_from_left_mm = 0.0;
+		double axis3_from_left_mm = 0.0;
+		double axis5_from_left_mm = 0.0;
+		double axis6_from_left_mm = 0.0;
 		double axis2_deg = 0.0;
 		double axis7_deg = 0.0;
-		double speed_scale = 0.005;
+		double speed_scale = 0.0;
 	} pending_startup;
+	pending_startup.axis1_from_left_mm = startup.final_axis1_from_left_mm;
+	pending_startup.axis3_from_left_mm = startup.final_axis3_from_left_mm;
+	pending_startup.axis5_from_left_mm = startup.final_axis5_from_left_mm;
+	pending_startup.axis6_from_left_mm = startup.final_axis6_from_left_mm;
+	pending_startup.speed_scale = cfg.startup_motion_speed_scale;
 	bool tracking_manual_cylinder_override = false;
 
 	while (true)
@@ -950,6 +1019,14 @@ int main(int argc, char* argv[])
 		++loop_count;
 		axis1_fast_return = false; // 每周期先清零，仅在快退状态机阶段置 TRUE
 		axis6_fast_retract = false; // 每周期先清零，仅在快退状态机阶段置 TRUE
+		// 预测目标造成的阻断只覆盖当前危险动作；下一拍重新读取位置和手柄输入。
+		// 实际已经越过 670 mm 时保留冻结，直到实际位置回到安全侧。
+		if (axis6_soft_limit_hold &&
+			axis6_soft_limit_reason != Axis6SoftLimitReason::ActualPosition)
+		{
+			axis6_soft_limit_hold = false;
+			axis6_soft_limit_reason = Axis6SoftLimitReason::None;
+		}
 		if (return_ads_fault_hold)
 		{
 			control_active = false;
@@ -1234,8 +1311,14 @@ int main(int argc, char* argv[])
 					{
 						std::cout << "直接控制启动失败：无法恢复启动期速度限制参数。" << std::endl;
 					}
+					else if (!consume_startup_loading_ready())
+					{
+						std::cout << "直接控制启动失败：无法清除 PLC 装卸位就绪标志。" << std::endl;
+					}
 					else if (sync_all(20))
 					{
+						clear_cylinder_manual_overrides("直接控制");
+						startup.recovery_mode = false;
 						startup.phase = StartupPhase::Done;
 						startup.completed = true;
 						startup.prompted = false;
@@ -1267,6 +1350,7 @@ int main(int argc, char* argv[])
 					}
 					else if (start_startup_sequence())
 					{
+						clear_cylinder_manual_overrides("启动准备");
 						control_active = false;
 						ensure_force_log_started();
 						std::cout << "启动准备流程已开始。" << std::endl;
@@ -1378,6 +1462,14 @@ int main(int argc, char* argv[])
 						cooperative_return_owner = CooperativeReturnOwner::None;
 					}
 				}
+				// 从协同模式退出后，本拍立即采用普通导管最终方向。
+				// 退出同步已经消费当前手柄采样；下一拍仍会按方向变化建立触发保护。
+				cooperative_mode_active = false;
+				cooperative_retraction_active = false;
+				axis1_reverse_pressed =
+					(vis_reverse_override_active && vis_reverse_override_target == 0)
+					? vis_reverse_override_value
+					: axis1_reverse_button_pressed;
 			}
 			else if (freeze_active)
 			{
@@ -1439,6 +1531,7 @@ int main(int argc, char* argv[])
 						mode_ok = enter_independent_guidewire_mode();
 						if (mode_ok)
 						{
+							clear_cylinder_manual_overrides("独立导丝模式");
 							guidewire_mode = GuidewireMode::Independent;
 							cooperative_direction = CooperativeDirection::None;
 							cooperative_return_owner = CooperativeReturnOwner::None;
@@ -1450,6 +1543,7 @@ int main(int argc, char* argv[])
 						mode_ok = enter_cooperative_guidewire_mode();
 						if (mode_ok)
 						{
+							clear_cylinder_manual_overrides("协同模式");
 							guidewire_mode = GuidewireMode::Cooperative;
 							// 本拍在切换前已经采样过 b0；成功进入后立即覆盖为
 							// 固定协同方向，避免首次控制带入旧模式方向。
@@ -1679,7 +1773,10 @@ int main(int argc, char* argv[])
 				(std::abs(axis1_linear_increment_raw_mm) >= cfg.linear_increment_noise_deadband_mm)
 				? axis1_linear_increment_raw_mm
 				: 0.0;
-			const bool axis1_linear_increment_active = std::abs(axis1_linear_increment_mm) > 0.0;
+			const double axis1_directional_increment_mm =
+				gate_linear_increment_for_mode(axis1_linear_increment_mm, axis1_reverse_pressed);
+			const bool axis1_directional_increment_active =
+				std::abs(axis1_directional_increment_mm) > 0.0;
 			const double axis1_window_left_abs_now = axis1_crawl.start_abs;
 			const double axis1_window_right_abs_now = axis1_crawl.end_abs;
 			const double axis1_min_abs = axis1_crawl.min_abs();
@@ -1689,9 +1786,19 @@ int main(int argc, char* argv[])
 				axis3_from_left_mm <= (cfg.axis3_delivery_stop_from_left_mm + cfg.crawl_arrive_tol_mm);
 
 			const double axis6_abs = plc_act_pos[5] + plc_init_pos[5]; // 轴6绝对位置(mm)
-			if (!axis6_soft_limit_hold && axis6_target_exceeds_soft_limit(axis6_abs))
+			if (axis6_soft_limit_reason == Axis6SoftLimitReason::ActualPosition &&
+				!axis6_target_exceeds_soft_limit(axis6_abs))
 			{
-				engage_axis6_soft_limit_hold(axis6_abs, "axis6 实际位置");
+				// 实际位置已经回到限制内，允许后续正常状态机重新接管。
+				axis6_soft_limit_hold = false;
+				axis6_soft_limit_reason = Axis6SoftLimitReason::None;
+			}
+			if (axis6_target_exceeds_soft_limit(axis6_abs))
+			{
+				engage_axis6_soft_limit_hold(
+					axis6_abs,
+					Axis6SoftLimitReason::ActualPosition,
+					"axis6 实际位置");
 			}
 			const double axis6_linear_increment_raw_mm =
 				(axis6_linear_filtered - axis6_prev_linear_filtered) * cfg.k_handle_to_mm * cfg.axis_push_sign;
@@ -1699,7 +1806,10 @@ int main(int argc, char* argv[])
 				(std::abs(axis6_linear_increment_raw_mm) >= cfg.linear_increment_noise_deadband_mm)
 				? axis6_linear_increment_raw_mm
 				: 0.0;
-			const bool axis6_linear_increment_active = std::abs(axis6_linear_increment_mm) > 0.0;
+			const double axis6_directional_increment_mm =
+				gate_linear_increment_for_mode(axis6_linear_increment_mm, axis6_effective_reverse_pressed);
+			const bool axis6_directional_increment_active =
+				std::abs(axis6_directional_increment_mm) > 0.0;
 
 			// 主从位移实验门控：只认可普通导管递送 axis1 与独立导丝递送 axis6。
 			// 夹持成立仅是命令保持 150 ms 的实验假设，并不替代物理到位传感器。
@@ -1957,7 +2067,10 @@ int main(int argc, char* argv[])
 						axis6_cmd_abs = clamp_double(axis6_raw_cmd_abs, axis6_window_left_abs_now, axis6_window_right_abs_now);
 						if (axis6_target_exceeds_soft_limit(axis6_cmd_abs))
 						{
-							engage_axis6_soft_limit_hold(axis6_cmd_abs, "axis6 手柄目标");
+							engage_axis6_soft_limit_hold(
+								axis6_cmd_abs,
+								Axis6SoftLimitReason::HandleTarget,
+								"axis6 手柄目标");
 							hold_axis6_related_axes();
 							return;
 						}
@@ -1990,27 +2103,45 @@ int main(int argc, char* argv[])
 							(axis6_abs >= (axis6_trigger_edge_abs - cfg.crawl_arrive_tol_mm)))
 						: ((axis6_prev_abs > (axis6_trigger_edge_abs + cfg.crawl_arrive_tol_mm)) &&
 							(axis6_abs <= (axis6_trigger_edge_abs + cfg.crawl_arrive_tol_mm)));
+					const bool axis6_at_or_past_trigger_edge = axis6_reverse_mode
+						? (axis6_abs >= (axis6_trigger_edge_abs - cfg.crawl_arrive_tol_mm))
+						: (axis6_abs <= (axis6_trigger_edge_abs + cfg.crawl_arrive_tol_mm));
+					// 重启、重同步或跟踪误差可能让上一采样基准停在触发边上或
+					// 略微越过边界；继续给出有效同向输入时仍允许进入换手判定。
+					const bool axis6_retrigger_from_edge =
+						axis6_at_or_past_trigger_edge &&
+						axis6_toward_trigger &&
+						axis6_trigger_user_ok &&
+						axis6_increment_active;
 					const bool axis6_ready_to_trigger =
 						axis6_trigger_user_ok &&
 						axis6_increment_active &&
 						axis6_toward_trigger &&
-						axis6_enter_trigger_edge &&
-						!axis6_switch_guard_blocked;
+						(axis6_enter_trigger_edge || axis6_retrigger_from_edge) &&
+						(!axis6_switch_guard_blocked || axis6_retrigger_from_edge);
 					if (axis6_ready_to_trigger &&
 						(!cooperative_axis6_mode ||
 							cooperative_return_owner == CooperativeReturnOwner::None))
 					{
+						if (axis6_retrigger_from_edge)
+						{
+							std::cout << "axis6 已到达或越过换手边界，收到有效同向输入，重新触发换手。" << std::endl;
+						}
 						const double axis6_return_target_abs = axis6_reverse_mode
 							? axis6_window_left_abs_now
 							: axis6_window_right_abs_now;
 						if (axis6_target_exceeds_soft_limit(axis6_return_target_abs))
 						{
-							engage_axis6_soft_limit_hold(axis6_return_target_abs, "axis6 计划回退");
+							engage_axis6_soft_limit_hold(
+								axis6_return_target_abs,
+								Axis6SoftLimitReason::PlannedReturn,
+								"axis6 计划回退");
 							hold_axis6_related_axes();
 							return;
 						}
 						axis6_crawl.target_abs = axis6_return_target_abs;
 						axis6_return_entry_rel = plc_act_pos[5];
+						clear_cylinder_manual_overrides("axis6 自动换手");
 						axis6_crawl.phase = CrawlState::Phase::SwitchWait;
 						if (cooperative_axis6_mode)
 						{
@@ -2224,8 +2355,9 @@ int main(int argc, char* argv[])
 				}
 			}
 
-			if (axis6_soft_limit_hold)
+			if (axis6_soft_limit_hold && !motion_startup_active)
 			{
+				// 实际越限时继续冻结；启动准备的安全目标允许把 axis6 拉回限制内。
 				hold_axis6_related_axes();
 			}
 			else if (spacing_recovery.active())
@@ -2298,13 +2430,13 @@ int main(int argc, char* argv[])
 			}
 			else if (motion_startup_active)
 			{
-				// 启动序列默认固定 axis2/7；axis1 在阶段2会先走到左限位参考准备点。
+				// 标准启动中 axis2/7 从第一拍执行目标；中断恢复由恢复阶段覆盖 axis1/6 等目标。
 				pos[0] = startup.axis1_hold_rel;
-				pos[1] = startup.axis2_hold_rel;
+				pos[1] = startup.final_axis2_deg;
 				pos[2] = startup.axis3_hold_rel;
 				pos[4] = startup.axis5_hold_rel;
 				pos[5] = startup.axis6_hold_rel;
-				pos[6] = startup.axis7_hold_rel;
+				pos[6] = startup.final_axis7_deg;
 
 				const double startup_axis1_ready_abs = from_left_to_abs(0, cfg.startup_axis1_ready_from_left_mm);
 				const double startup_axis5_ready_abs = from_left_to_abs(4, cfg.startup_axis5_ready_from_left_mm);
@@ -2338,8 +2470,68 @@ int main(int argc, char* argv[])
 						(std::abs(axis2_rel - startup.final_axis2_deg) <= cfg.startup_rot_arrive_tol_deg) &&
 						(std::abs(axis7_rel - startup.final_axis7_deg) <= cfg.startup_rot_arrive_tol_deg);
 				};
+				auto complete_startup_sequence = [&]()
+				{
+					if (!restore_startup_v_limit())
+					{
+						std::cout << "警告：启动准备完成后恢复启动期速度限制参数失败。" << std::endl;
+					}
+					startup.phase = StartupPhase::Done;
+					startup.completed = true;
+					if (sync_all(30))
+					{
+						control_active = true;
+						std::cout << (startup.recovery_mode ? "中断恢复启动已完成。" : "启动准备流程已完成。") << std::endl;
+					}
+					else
+					{
+						control_active = false;
+						std::cout << (startup.recovery_mode
+							? "中断恢复启动已完成，但重同步失败。"
+							: "启动准备流程已完成，但重同步失败。") << std::endl;
+					}
+				};
 
-				if (startup.phase == StartupPhase::ReleaseClamps)
+				if (startup.recovery_mode)
+				{
+					// 上位机中断恢复：全程保持正常抓持组合，不再执行标准装卸夹爪阶段。
+					cylinder1_cmd = cyl.cyl1_open;
+					cylinder2_cmd = cyl.cyl2_clamp;
+					cylinder3_cmd = cyl.cyl3_open;
+					cylinder4_cmd = cyl.cyl4_clamp;
+					pos[0] = from_left_to_rel(0, startup.final_axis1_from_left_mm);
+					pos[5] = from_left_to_rel(5, startup.final_axis6_from_left_mm);
+
+					if (startup.phase == StartupPhase::RecoveryMoveAxis1267)
+					{
+						if ((now_ms - startup.phase_t0) >= cfg.startup_recovery_stage_delay_ms)
+						{
+							startup.phase = StartupPhase::RecoveryMoveAxis5;
+							startup.phase_t0 = now_ms;
+							std::cout << "中断恢复启动：axis1/2/6/7 已启动 2 秒，开始移动 axis5。" << std::endl;
+						}
+					}
+					else if (startup.phase == StartupPhase::RecoveryMoveAxis5)
+					{
+						pos[4] = from_left_to_rel(4, startup.final_axis5_from_left_mm);
+						if ((now_ms - startup.phase_t0) >= cfg.startup_recovery_stage_delay_ms)
+						{
+							startup.phase = StartupPhase::RecoveryMoveAxis3;
+							startup.phase_t0 = now_ms;
+							std::cout << "中断恢复启动：axis5 已启动 2 秒，开始移动 axis3。" << std::endl;
+						}
+					}
+					else if (startup.phase == StartupPhase::RecoveryMoveAxis3)
+					{
+						pos[4] = from_left_to_rel(4, startup.final_axis5_from_left_mm);
+						pos[2] = from_left_to_rel(2, startup.final_axis3_from_left_mm);
+						if (startup_final_targets_reached())
+						{
+							complete_startup_sequence();
+						}
+					}
+				}
+				else if (startup.phase == StartupPhase::ReleaseClamps)
 				{
 					// 阶段 1：打开全部夹爪并等待机构稳定。
 					cylinder1_cmd = cyl.cyl1_open;
@@ -2386,12 +2578,12 @@ int main(int argc, char* argv[])
 						startup.axis5_move_base_rel = plc_act_pos[4];
 						startup.axis6_move_base_rel = plc_act_pos[5];
 						startup.phase = StartupPhase::MoveAxis356BackToReady;
-						std::cout << "启动准备：阶段4按 UI 最终目标移动 1/2/3/5/6/7 轴。" << std::endl;
+						std::cout << "启动准备：阶段4按 UI 最终目标移动 1/3/5/6 轴，axis2/7 继续保持启动目标。" << std::endl;
 					}
 				}
 				else if (startup.phase == StartupPhase::MoveAxis356BackToReady)
 				{
-					// 阶段 4：所有 UI 最终目标在此阶段生效，前置阶段仍保持固定准备位。
+					// 阶段 4：直线轴 UI 最终目标在此阶段生效；旋转轴目标已从阶段1开始执行。
 					cylinder1_cmd = cyl.cyl1_open;
 					cylinder2_cmd = cyl.cyl2_open;
 					cylinder3_cmd = cfg.startup_cyl3_clamp;
@@ -2413,22 +2605,7 @@ int main(int argc, char* argv[])
 					if ((now_ms - startup.phase_t0) >= cfg.startup_clamp_settle_delay_ms &&
 						startup_final_targets_reached())
 					{
-						if (!restore_startup_v_limit())
-						{
-							std::cout << "警告：启动准备完成后恢复启动期速度限制参数失败。" << std::endl;
-						}
-						startup.phase = StartupPhase::Done;
-						startup.completed = true;
-						if (sync_all(30))
-						{
-							control_active = true;
-							std::cout << "启动准备流程已完成。" << std::endl;
-						}
-						else
-						{
-							control_active = false;
-							std::cout << "启动准备流程已完成，但重同步失败。" << std::endl;
-						}
+						complete_startup_sequence();
 					}
 				}
 			}
@@ -2444,10 +2621,10 @@ int main(int argc, char* argv[])
 				axis6_coop_ff_inited = false;
 				const double axis6_follow_start_abs = axis6_follow_cmd_abs;
 				double axis6_nominal_cmd_abs = axis6_follow_start_abs;
-				if (axis6_crawl.phase == CrawlState::Phase::Follow && axis6_linear_increment_active)
+				if (axis6_crawl.phase == CrawlState::Phase::Follow && axis6_directional_increment_active)
 				{
 					axis6_nominal_cmd_abs = clamp_double(
-						axis6_follow_start_abs + axis6_linear_increment_mm,
+						axis6_follow_start_abs + axis6_directional_increment_mm,
 						axis6_crawl.min_abs(),
 						axis6_crawl.max_abs());
 				}
@@ -2456,8 +2633,8 @@ int main(int argc, char* argv[])
 					(!axis6_effective_reverse_pressed && axis6_nominal_delta_axis_mm < 0.0)
 					? -axis6_nominal_delta_axis_mm : 0.0;
 				double axis6_requested_forward_mm = axis6_nominal_forward_mm;
-				double axis6_raw_cmd_abs = axis6_follow_start_abs + axis6_linear_increment_mm;
-				double axis6_increment_for_state_mm = axis6_linear_increment_mm;
+				double axis6_raw_cmd_abs = axis6_follow_start_abs + axis6_directional_increment_mm;
+				double axis6_increment_for_state_mm = axis6_directional_increment_mm;
 				if (axis6_nominal_forward_mm > 0.0)
 				{
 					axis6_requested_forward_mm = tracking_controller.request_compensated_forward_increment(
@@ -2471,7 +2648,7 @@ int main(int argc, char* argv[])
 					axis6_raw_cmd_abs,
 					axis6_increment_for_state_mm,
 					axis6_effective_reverse_pressed,
-					axis6_linear_increment_active,
+					axis6_directional_increment_active,
 					false);
 				const double axis6_effective_delta_axis_mm = axis6_follow_cmd_abs - axis6_follow_start_abs;
 				const double axis6_effective_forward_mm =
@@ -2572,7 +2749,7 @@ int main(int argc, char* argv[])
 							// 先行不得绕过原有轴3投送停止位；零先行量等价于取消本次武装。
 							reset_axis1_post_return_lead();
 						}
-						else if (axis1_linear_increment_mm < -cfg.linear_increment_noise_deadband_mm)
+						else if (axis1_directional_increment_mm < -cfg.linear_increment_noise_deadband_mm)
 						{
 							const double lead_target_abs = clamp_double(
 								axis1_follow_cmd_abs - configured_lead_mm,
@@ -2625,7 +2802,7 @@ int main(int argc, char* argv[])
 				}
 				else if (axis1_crawl.phase == CrawlState::Phase::Follow)
 				{
-					const double axis1_raw_cmd_abs = axis1_follow_cmd_abs + axis1_linear_increment_mm;
+					const double axis1_raw_cmd_abs = axis1_follow_cmd_abs + axis1_directional_increment_mm;
 					const bool axis1_follow_enabled = axis1_reverse_pressed || (!axis1_push_rearm_after_hold && !axis1_delivery_stop_latched);
 					if (axis3_from_left_mm >
 						(cfg.axis3_delivery_stop_from_left_mm + cfg.axis3_delivery_release_hysteresis_mm))
@@ -2639,7 +2816,7 @@ int main(int argc, char* argv[])
 						capture_axis1_follow_baseline();
 						std::cout << "PLC 保持解除后，轴1推送已重接管。" << std::endl;
 					}
-					if (axis1_delivery_stop_latched && axis1_reverse_pressed && axis1_linear_increment_active)
+					if (axis1_delivery_stop_latched && axis1_reverse_pressed && axis1_directional_increment_active)
 					{
 						axis1_delivery_stop_latched = false;
 						axis1_delivery_stop_prompted = false;
@@ -2649,7 +2826,7 @@ int main(int argc, char* argv[])
 					auto constrain_axis1_follow_cmd_abs = [&](double candidate_abs) -> double
 					{
 						double command_abs = axis1_follow_start_abs;
-						if (axis1_linear_increment_active && axis1_follow_enabled)
+						if (axis1_directional_increment_active && axis1_follow_enabled)
 						{
 							command_abs = axis1_crawl.window_active
 								? clamp_double(candidate_abs, axis1_window_left_abs_now, axis1_window_right_abs_now)
@@ -2736,7 +2913,7 @@ int main(int argc, char* argv[])
 							axis1_reverse_switch_guard_active &&
 							(std::abs(axis1_abs - axis1_trigger_edge_abs) <= cfg.reverse_switch_trigger_guard_mm);
 						const bool axis1_toward_trigger =
-							axis1_reverse_pressed ? (axis1_linear_increment_mm > 0.0) : (axis1_linear_increment_mm < 0.0);
+							axis1_reverse_pressed ? (axis1_directional_increment_mm > 0.0) : (axis1_directional_increment_mm < 0.0);
 						const double axis1_prev_abs = axis1_prev_abs_valid ? axis1_prev_abs_for_trigger : axis1_abs;
 						// 按运动方向判断是否到达或跨过触发边，避免高速时越过 ±tol 后漏掉回退。
 						const bool axis1_enter_trigger_edge = axis1_reverse_pressed
@@ -2744,14 +2921,27 @@ int main(int argc, char* argv[])
 								(axis1_abs >= (axis1_trigger_edge_abs - cfg.crawl_arrive_tol_mm)))
 							: ((axis1_prev_abs > (axis1_trigger_edge_abs + cfg.crawl_arrive_tol_mm)) &&
 								(axis1_abs <= (axis1_trigger_edge_abs + cfg.crawl_arrive_tol_mm)));
+						const bool axis1_at_or_past_trigger_edge = axis1_reverse_pressed
+							? (axis1_abs >= (axis1_trigger_edge_abs - cfg.crawl_arrive_tol_mm))
+							: (axis1_abs <= (axis1_trigger_edge_abs + cfg.crawl_arrive_tol_mm));
+						// 上位机重启、重同步或跟踪误差可能让轴停在边界上或略微
+						// 越过边界；有效同向输入仍作为重新武装信号。
+						const bool axis1_retrigger_from_edge =
+							axis1_at_or_past_trigger_edge &&
+							axis1_toward_trigger &&
+							axis1_directional_increment_active;
 						const bool axis1_ready_to_trigger =
-							axis1_linear_increment_active &&
+							axis1_directional_increment_active &&
 							axis1_toward_trigger &&
 							axis1_follow_enabled &&
-							axis1_enter_trigger_edge &&
-							!axis1_switch_guard_blocked;
+							(axis1_enter_trigger_edge || axis1_retrigger_from_edge) &&
+							(!axis1_switch_guard_blocked || axis1_retrigger_from_edge);
 						if (axis1_ready_to_trigger)
 						{
+							if (axis1_retrigger_from_edge)
+							{
+								std::cout << "axis1 已到达或越过换手边界，收到有效同向输入，重新触发换手。" << std::endl;
+							}
 							if (!axis1_reverse_pressed && axis3_delivery_stop_active)
 							{
 								axis1_delivery_stop_latched = true;
@@ -2783,6 +2973,7 @@ int main(int argc, char* argv[])
 									{
 										engage_axis6_soft_limit_hold(
 											candidate_axis6_coupled_target_abs,
+											Axis6SoftLimitReason::Axis1CoupledReturn,
 											"axis1 回退时 axis6 联动目标");
 										hold_axis6_related_axes();
 										axis6_coupled_target_safe = false;
@@ -2835,6 +3026,7 @@ int main(int argc, char* argv[])
 									axis6_coupled_error = false;
 									axis6_coupled_error_id = 0;
 								}
+								clear_cylinder_manual_overrides("axis1 自动换手");
 								axis1_crawl.phase = CrawlState::Phase::SwitchWait;
 								axis1_crawl.phase_t0 = now_ms;
 								axis1_crawl.cyl_seq_stage = 1;
@@ -3240,7 +3432,8 @@ int main(int argc, char* argv[])
 							}
 							const double axis1_increment_mm =
 								axis1_cmd_abs_for_ff - axis6_coop_prev_axis1_cmd_abs;
-							const double axis6_combined_increment_mm = axis6_linear_increment_mm + axis1_increment_mm;
+							const double axis6_combined_increment_mm =
+								axis6_directional_increment_mm + axis1_increment_mm;
 							axis6_coop_prev_axis1_cmd_abs = axis1_cmd_abs_for_ff;
 							const double axis6_raw_cmd_abs = axis6_follow_cmd_abs + axis6_combined_increment_mm;
 
@@ -3248,7 +3441,7 @@ int main(int argc, char* argv[])
 								axis6_raw_cmd_abs,
 								axis6_combined_increment_mm,
 								cooperative_retraction_active,
-								axis6_linear_increment_active,
+								axis6_directional_increment_active,
 								true);
 						}
 						else
@@ -3264,6 +3457,15 @@ int main(int argc, char* argv[])
 						}
 					}
 				}
+			}
+
+			if (!axis6_soft_limit_hold && axis6_soft_limit_warning_active)
+			{
+				std::cout << "axis6 软件限位阻断已解除：当前动作未再请求越过 "
+					<< cfg.axis6_soft_limit_from_left_mm
+					<< " mm，控制链路重新按实际位置接管。" << std::endl;
+				axis6_soft_limit_warning_active = false;
+				axis6_soft_limit_warning_reason = Axis6SoftLimitReason::None;
 			}
 
 			const bool tracking_return_started_this_cycle =
@@ -3402,7 +3604,7 @@ int main(int argc, char* argv[])
 		bool cylinder5_req = formal_control_stage ? pause_pressed : false;
 		if (!freeze_active && (control_active || motion_startup_active))
 		{
-			if (!spacing_recovery.active())
+			if (!spacing_recovery.active() && !axis6_soft_limit_hold)
 			{
 				auto apply_cylinder_manual_mode = [](CylinderManualMode mode, unsigned short& command,
 					unsigned short open_value, unsigned short closed_value)
@@ -3799,15 +4001,32 @@ int main(int argc, char* argv[])
 				switch (vcmd.type)
 				{
 				case VisCommandType::SetCylinderManualOpen:
-					if (!spacing_recovery.active() && !spacing_recovery.requested &&
-						vcmd.param1 >= 0 && vcmd.param1 < 4)
-						cylinder_manual_mode[vcmd.param1] = CylinderManualMode::Open;
-					break;
 				case VisCommandType::SetCylinderManualClosed:
+				{
+					const bool valid_cylinder_index = vcmd.param1 >= 0 && vcmd.param1 < 4;
+					const bool automatic_cylinder_sequence_active =
+						motion_startup_active ||
+						axis6_soft_limit_hold ||
+						axis1_crawl.phase != CrawlState::Phase::Follow ||
+						axis6_crawl.phase != CrawlState::Phase::Follow ||
+						axis1_crawl.plc_move_requested ||
+						axis6_crawl.plc_move_requested ||
+						axis6_coupled_active ||
+						cooperative_return_owner != CooperativeReturnOwner::None;
 					if (!spacing_recovery.active() && !spacing_recovery.requested &&
-						vcmd.param1 >= 0 && vcmd.param1 < 4)
-						cylinder_manual_mode[vcmd.param1] = CylinderManualMode::Closed;
+						valid_cylinder_index && !automatic_cylinder_sequence_active)
+					{
+						cylinder_manual_mode[vcmd.param1] =
+							vcmd.type == VisCommandType::SetCylinderManualOpen
+							? CylinderManualMode::Open
+							: CylinderManualMode::Closed;
+					}
+					else if (valid_cylinder_index && automatic_cylinder_sequence_active)
+					{
+						std::cout << "UI：自动换手、启动准备或 axis6 软限位正在接管，已忽略电缸手动覆盖请求。" << std::endl;
+					}
 					break;
+				}
 				case VisCommandType::RequestModeSwitch:
 					if (single_handle_mode)
 						single_handle_requested_mode = static_cast<GuidewireMode>(vcmd.param1);
@@ -3842,6 +4061,7 @@ int main(int argc, char* argv[])
 						single_handle_requested_mode = target_mode;
 					// 任何普通模式选择均明确退出协同方向请求。
 					cooperative_direction_requested = CooperativeDirection::None;
+					clear_cylinder_manual_overrides("UI 模式切换");
 					vis_reverse_override_active = true;
 					vis_reverse_override_target = vcmd.param1;
 					vis_reverse_override_value = (vcmd.param2 != 0);
@@ -3973,11 +4193,18 @@ int main(int argc, char* argv[])
 					if (pending_startup.axis3_from_left_mm < 10.0 || pending_startup.axis3_from_left_mm > 650.0) valid = false;
 					if (pending_startup.axis5_from_left_mm < 10.0 || pending_startup.axis5_from_left_mm > 670.0) valid = false;
 					if (pending_startup.axis6_from_left_mm < 10.0 || pending_startup.axis6_from_left_mm > 670.0) valid = false;
+					if (pending_startup.axis2_deg < -360.0 || pending_startup.axis2_deg > 360.0) valid = false;
+					if (pending_startup.axis7_deg < -360.0 || pending_startup.axis7_deg > 360.0) valid = false;
 					if (pending_startup.axis6_from_left_mm < pending_startup.axis5_from_left_mm) valid = false;
 					if (pending_startup.axis5_from_left_mm < pending_startup.axis3_from_left_mm) valid = false;
 					if (pending_startup.axis3_from_left_mm < pending_startup.axis1_from_left_mm) valid = false;
 					if (pending_startup.speed_scale < 0.00001 || pending_startup.speed_scale > 0.5) valid = false;
-					if (valid && !startup.completed && startup.phase == StartupPhase::WaitForEnter &&
+					if (!valid)
+					{
+						std::cout << "UI：启动准备参数已拒绝，请检查直线轴范围、axis2/7 的 [-360, 360] deg 范围及速度比例。" << std::endl;
+						break;
+					}
+					if (!startup.completed && startup.phase == StartupPhase::WaitForEnter &&
 						!freeze_active && !estop_hold_active)
 					{
 						startup.final_axis1_from_left_mm = pending_startup.axis1_from_left_mm;
@@ -3989,6 +4216,7 @@ int main(int argc, char* argv[])
 						cfg.startup_motion_speed_scale = pending_startup.speed_scale;
 						if (start_startup_sequence())
 						{
+							clear_cylinder_manual_overrides("启动准备");
 							control_active = false;
 							ensure_force_log_started();
 							std::cout << "启动准备流程已开始（UI 参数）。" << std::endl;
@@ -4004,8 +4232,12 @@ int main(int argc, char* argv[])
 						!estop_hold_active &&
 						(!has_self_check_flag || self_check_done))
 					{
-						if (restore_startup_v_limit() && sync_all(20))
+						if (restore_startup_v_limit() &&
+							consume_startup_loading_ready() &&
+							sync_all(20))
 						{
+							clear_cylinder_manual_overrides("直接控制");
+							startup.recovery_mode = false;
 							startup.phase = StartupPhase::Done;
 							startup.completed = true;
 							startup.prompted = false;

@@ -4,9 +4,9 @@
 >
 > 修改 POU 内部逻辑、状态跳转条件、或 `state.TcDUT` 枚举，请同步在最末"变更日志"追加条目。
 
-更新时间：2026-07-06
+更新时间：2026-07-28
 适用工程：`250902\Untitled2`
-对应代码版本：2026-07-06 主分支（基于 `MAIN.TcPOU` / `ArmManual.TcPOU` / `init.TcPOU` / `SelfCheck.TcPOU` / `handle.TcPOU` / `err.TcPOU` / `reset.TcPOU` / `clear_err.TcPOU` 当前状态校对）
+对应代码版本：2026-07-28 主分支（基于 `MAIN.TcPOU` / `ArmManual.TcPOU` / `init.TcPOU` / `SelfCheck.TcPOU` / `handle.TcPOU` / `err.TcPOU` / `reset.TcPOU` / `clear_err.TcPOU` 当前状态校对）
 
 ***
 
@@ -113,6 +113,7 @@ step = 0: 进入初始化
   - 清 SetPointGenEnable/Disable/axis_Reset 的 Execute
   - G.power_[i].Enable := TRUE
   - G.self_check_done := FALSE
+  - G.startup_loading_ready := FALSE
   - G.selfcheck_reset_req := TRUE
   - 启动看门狗 (5s)
   - step := 1
@@ -146,7 +147,7 @@ step = 1: 等待上电完成
 
 1. 对目标平移轴（1/3/5/6）：低速逼近左限位 → 记录 `G.leftlimit[i]` → 停止 → 清错 → `MC_SetPosition(ActPos → SetPos)` → 回退到工作位。
 2. 对非目标轴（2/4/7）：直接 `MC_MoveAbsolute` 到绝对位置 0。
-3. 全部完成后置 `G.self_check_done := TRUE`、`G.handle_reinit_req := TRUE`，用 ActPos 刷新 `Act_pos / refer / ref_slow / act_h / act_hf`，跳 `_handle`。
+3. 全部完成后置 `G.self_check_done := TRUE`、`G.startup_loading_ready := TRUE`、`G.handle_reinit_req := TRUE`，用 ActPos 刷新 `Act_pos / refer / ref_slow / act_h / act_hf`，跳 `_handle`。
 
 ### 3.2 每轴子状态（`stu[i]`）
 
@@ -184,6 +185,8 @@ step = 1: 等待上电完成
 - 其他目标轴（1/3/5）在 `stagger_timer.ET >= stagger_delay[i]` 后放行；
 - 因此按时间顺序：**轴6（0s）→ 轴5（1s）→ 轴3（2s）→ 轴1（3s）**。
 
+其中 axis1/3/5/6 的 `[96,280,430,580] mm` 也是上位机定义的**标准器械装卸等待姿态**。SelfCheck 全部完成时 PLC 才置 `G.startup_loading_ready=TRUE`；该位不能代替实际位置校验。
+
 ### 3.4 到限位判据（stu=2）
 
 ```
@@ -205,6 +208,7 @@ Busy = TRUE AND ABS(ActVelo) < 0.5 AND (
 ### 3.6 重初始化
 
 如果 `G.selfcheck_reset_req = TRUE`（由 `init` 拉起），本 POU 首行会：
+- 清 `G.startup_loading_ready`，撤销上一轮标准装卸启动资格；
 - 清空所有 `stu[]`、动作变量、计时器、FB Execute；
 - 清 `return_cmd[]`、`axis4_manual_*`；
 - 清 `G.selfcheck_reset_req`。
@@ -215,6 +219,7 @@ Busy = TRUE AND ABS(ActVelo) < 0.5 AND (
 IF all_done THEN
     cylinder1..4 写固定组合;
     G.self_check_done := TRUE;
+    G.startup_loading_ready := TRUE;
     G.handle_reinit_req := TRUE;
     FOR i:=1 TO 7 DO
         G.Act_pos[i] := ActPos - G.init_pos[i];
@@ -229,7 +234,7 @@ IF all_done THEN
 END_IF
 ```
 
-**注意**：这里没有覆盖 `G.init_pos[i]`——`stu=10` 内已经写过 `G.init_pos[i] := ActPos`。切 `_handle` 时，`G.Act_pos = 0` 就是"当前工作位"。
+**注意**：这里没有覆盖 `G.init_pos[i]`——`stu=10` 内已经写过 `G.init_pos[i] := ActPos`。切 `_handle` 时，`G.Act_pos = 0` 就是"当前工作位"。`G.startup_loading_ready` 是一次性资格位：上位机启动准备/直接控制入口会写 FALSE；若 PLC 未重启而机构已由上一轮上位机移离装卸位，下次启动将改走中断恢复路径。
 
 ## 4. `handle.TcPOU` — 正常跟随控制
 
@@ -705,6 +710,12 @@ END_FOR
 7. 若改了错误恢复策略（`err` / `clear_err`），更新 §5 / §6 + 说明是否影响上位机的重同步路径（`sync_all` / `sync_axis1` / `sync_axis6`）。
 
 ## 12. 变更日志
+
+### 2026-07-28 — SelfCheck 输出标准装卸启动资格
+- 作者：AI（Codex）。
+- 涉及文件：`G.TcGVL`、`init.TcPOU`、`SelfCheck.TcPOU`。
+- 行为变化：`init` 与 SelfCheck 重置时清 `G.startup_loading_ready`；SelfCheck 全轴完成并回到 `[96,280,430,580] mm` 标准装卸等待姿态后置 TRUE。上位机开始控制前消费该位，并结合实际位置选择标准启动或中断恢复启动。
+- 契约影响：新增一个 BOOL ADS 握手位；不改变 PLC 顶层状态枚举、7 轴运动数组、计划回退或定位臂链路。
 
 ### 2026-07-06 — 新增定位臂独立点动流程
 - 作者：AI（Codex，应用户计划实施）。

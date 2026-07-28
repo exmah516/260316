@@ -67,7 +67,7 @@ struct VisState
 	std::uint64_t tracking_log_dropped;
 	// 协同方向：0=None，1=Delivery，2=Retraction。末尾追加要求 C++ 与 WPF 同步更新。
 	int cooperative_direction;
-	// axis6 内部软限位保护锁止状态。仅来自上位机，不增加 PLC ADS 契约。
+	// axis6 当前软限位阻断状态。仅来自上位机，不增加 PLC ADS 契约。
 	bool axis6_soft_limit_hold;
 };
 #pragma pack(pop)

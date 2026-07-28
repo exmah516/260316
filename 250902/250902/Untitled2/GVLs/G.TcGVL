@@ -26,6 +26,7 @@ VAR_GLOBAL
 	act_pos_from_left	: ARRAY[1..7] OF LREAL;
 	refer_from_left		: ARRAY[1..7] OF LREAL;
     self_check_done     : BOOL := FALSE;
+	startup_loading_ready : BOOL := FALSE; // TRUE=自检刚完成且仍允许按标准器械装卸姿态启动；上位机开始控制前消费为 FALSE
 	handle_reinit_req	: BOOL := FALSE;
 	handle_reinit_done	: BOOL := FALSE;
 	selfcheck_reset_req : BOOL := FALSE;

@@ -434,7 +434,7 @@ namespace AdsControlUI
         public bool ModeSwitchAllowed => SpacingRecoveryInactive && CooperativeReturnOwner == 0;
         public bool Axis6SoftLimitHold => _state.axis6_soft_limit_hold;
         public string Axis6SoftLimitText => Axis6SoftLimitHold
-            ? "轴6软件限位：已锁止，需安全处理后重新启动控制。"
+            ? "轴6软件限位：当前动作已阻断，松手或回到安全窗口后自动重新评估。"
             : "轴6软件限位：正常（<= 670 mm）。";
         public bool CooperativeModeEnabled =>
             DualHandleReady &&

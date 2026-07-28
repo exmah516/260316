@@ -104,8 +104,9 @@ struct ControlConfig
 	double axis1_window_right_from_left_mm = 18.0;
 	double axis6_window_size_mm = 20.0;
 	// 轴6窗口以轴5当前位置为基准，左边界至少领先轴5该距离。
-	double axis6_window_min_gap_from_axis5_mm = 6.0;
-	double axis56_ready_gap_mm = 20.0;
+	double axis6_window_min_gap_from_axis5_mm = 1.0;
+	// 标准启动中间夹持阶段的轴5/6间距；与运行时20 mm窗口宽度相互独立。
+	double axis56_ready_gap_mm = 15.0;
 	double axis3_delivery_stop_from_left_mm = 20.0;
 	double axis3_delivery_release_hysteresis_mm = 2.0;
 	double guidewire_entry_axis6_from_left_max_mm = 667.0;
@@ -172,15 +173,27 @@ struct ControlConfig
 
 	// 启动准备阶段目标。
 	DWORD startup_clamp_settle_delay_ms = 300;
+	DWORD startup_recovery_stage_delay_ms = 2000;
 	double startup_motion_speed_scale = 0.005;
 	unsigned short startup_cyl3_open = 500;
 	unsigned short startup_cyl4_open = 0;
 	unsigned short startup_cyl3_clamp = 0;
 	unsigned short startup_cyl4_clamp = 1000;
+	// 标准装卸启动的中间移动目标。
 	double startup_axis1_ready_from_left_mm = 20.0;
 	double startup_axis5_ready_from_left_mm = 290.0;
-	double startup_axis3_ready_from_left_mm = 635.0;
+	// 未经 UI 覆盖时采用的最终启动目标。
+	double startup_final_axis1_default_from_left_mm = 20.0;
+	double startup_final_axis3_default_from_left_mm = 649.0;
+	double startup_final_axis5_default_from_left_mm = 649.0;
+	double startup_final_axis6_default_from_left_mm = 650.0;
 	double startup_rot_arrive_tol_deg = 0.2;
+	// PLC 自检完成后的器械装卸等待姿态；旧 PLC 无就绪标志时也用于兼容判定。
+	double startup_loading_axis1_from_left_mm = 96.0;
+	double startup_loading_axis3_from_left_mm = 280.0;
+	double startup_loading_axis5_from_left_mm = 430.0;
+	double startup_loading_axis6_from_left_mm = 580.0;
+	double startup_loading_pose_tolerance_mm = 2.0;
 	// 在 axis3 完全到达目标前提前触发 cylinder2 夹紧；现场调参使其领先约 0.5 s。
 	double startup_axis3_cyl2_clamp_advance_mm = 10.0;
 };
@@ -285,6 +298,9 @@ enum class StartupPhase
 	ClampCylinder34Wait,
 	MoveAxis356BackToReady,
 	ClampCylinder2AfterAxis3,
+	RecoveryMoveAxis1267,
+	RecoveryMoveAxis5,
+	RecoveryMoveAxis3,
 	Done
 };
 
@@ -445,11 +461,17 @@ struct StartupState
 	double axis6_move_base_rel = 0.0;
 
 	double final_axis1_from_left_mm = 20.0;
-	double final_axis3_from_left_mm = 635.0;
-	double final_axis5_from_left_mm = 290.0;
-	double final_axis6_from_left_mm = 310.0;
+	double final_axis3_from_left_mm = 649.0;
+	double final_axis5_from_left_mm = 649.0;
+	double final_axis6_from_left_mm = 650.0;
 	double final_axis2_deg = 0.0;
 	double final_axis7_deg = 0.0;
+
+	// 标准装卸启动与上位机中断恢复启动的入口判定状态。
+	bool recovery_mode = false;
+	bool loading_pose_match = false;
+	bool loading_ready_symbol_available = false;
+	bool loading_ready_plc = false;
 
 	double v_limit_backup[7] = {};
 	bool v_limit_scaled = false;

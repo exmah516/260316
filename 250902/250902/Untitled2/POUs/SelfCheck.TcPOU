@@ -64,6 +64,7 @@ FUNCTION_BLOCK: SelfCheck
 
 // 统计：目标轴是否全部进入同步等待阶段（stu>=6）
 IF G.selfcheck_reset_req THEN
+	G.startup_loading_ready := FALSE;
     FOR i:=1 TO 7 DO
         stu[i] := 0;
         mv_vel_exec[i] := FALSE;
@@ -528,6 +529,7 @@ IF all_done THEN
 	G.cylinder3_value := 1000;
 	G.cylinder4_value := 0;
     G.self_check_done := TRUE;
+	G.startup_loading_ready := TRUE;
     G.handle_reinit_req := TRUE;
     FOR i:=1 TO 7 DO
         // 统一刷新相对坐标/参考，避免切换到 handle 后出现参考突变

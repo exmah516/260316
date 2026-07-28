@@ -23,6 +23,7 @@ namespace AdsSymbol
 	extern const char* cylinder5_press_req;
 	extern const char* cylinder5_value;
 	extern const char* self_check_done;
+	extern const char* startup_loading_ready;
 	extern const char* handle_reinit_req;
 	extern const char* estop_hold_req;
 	extern const char* ft_1_value;
@@ -53,6 +54,8 @@ namespace plc_io
 	bool write_refer(AppContext& ctx);
 	bool read_v_limit(AppContext& ctx);
 	bool write_v_limit(AppContext& ctx, const double* values);
+	bool read_startup_loading_ready(AppContext& ctx, bool& ready);
+	bool write_startup_loading_ready(AppContext& ctx, bool ready);
 	void load_pos_from_actual(AppContext& ctx);
 
 	bool read_axis_return_status(AppContext& ctx, const AxisReturnAdsSymbols& symbols, AxisReturnStatus& status);

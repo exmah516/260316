@@ -3,9 +3,9 @@
 > 本文档梳理上位机与倍福 PLC 之间的 ADS 通讯实现：连接、符号表、读写封装、断线/重同步路径，以及与主循环的契约。
 > 修改 `plc_io.cpp/.h`、`ADSComm.cpp`、符号表、或新增 PLC 变量时，请同步在最末"变更日志"追加条目。
 
-更新时间：2026-07-27
+更新时间：2026-07-28
 适用工程：`64位ADS - 相对路径 - 传数组 - 加上手柄\ADS.sln`
-对应代码版本：2026-06-26 主分支（基于 `plc_io.cpp` / `ADSComm1.h` / `main.cpp` 当前状态校对）
+对应代码版本：2026-07-28 主分支（基于 `plc_io.cpp` / `ADSComm1.h` / `main.cpp` 当前状态校对）
 
 ***
 
@@ -108,6 +108,7 @@ PLC 统一使用 `G.return_cmd[1..7]` 数组；上位机将启用回退的第 1�
 | 常量 | PLC 符号 | 类型 | 读写 | 含义 |
 |---|---|---|---|---|
 | `self_check_done` | `G.self_check_done` | bool | 读 | PLC 自检完成 |
+| `startup_loading_ready` | `G.startup_loading_ready` | bool | 读+写清除 | 标准装卸启动一次性资格位；启动入口读取，开始控制前写 FALSE 消费 |
 | `handle_reinit_req` | `G.handle_reinit_req` | bool | 读+写清除 | PLC 请求上位机重新同步 |
 | `estop_hold_req` | `G.estop_hold_req` | bool | 读（降频 1/10） | PLC 急停/保持激活 |
 | `axis1_fast_return` | `G.axis1_fast_return` | bool | 写 | 轴1快退标志（PLC 用于平滑旁路） |
@@ -164,6 +165,9 @@ if (ads.OpenComm_inside()) {
 | `read_force_sample` | 力反馈/旧高频记录按原节拍；仅主从实验记录时 50ms | `ADSReadSum` 读 `ft_1 / fn_1 / fn_2 / ft_2 / act_pos`，并把 axis1 两路原始 `INT` 统一换算为伏特。 |
 | `write_refer` | 每控制拍 | `ADSWrite` 写 `G.refer`（double[7]）。 |
 | `read_v_limit` / `write_v_limit` | 启动准备 | 读 / 写 `G.v_limit`。 |
+| `read_startup_loading_ready` / `write_startup_loading_ready` | 进程启动探测、启动准备/直接控制入口 | 读 PLC 标志；开始控制前写 FALSE 消费。 |
+
+`G.startup_loading_ready` 与实际位置组成双重判定：标志为 TRUE，且 axis1/3/5/6 距左限位分别处于 `[96,280,430,580] ±2 mm`，才执行标准装卸启动。否则执行中断恢复启动。旧 PLC 没有该符号时，上位机打印一次兼容提示并仅按实际位置判断；这不会改变旧 7 轴 ADS 数组布局。
 
 ### 5.2 计划回退时序
 
@@ -209,6 +213,7 @@ clear_axis_return_request(symbols)
 | `act_pos_from_left` / `refer_from_left` 读取（ADSReadSum 两符号） | 每 5 拍 | 步骤 2（快退标志清零之后） | 约 L736-L750 |
 | `estop_hold_req` 读取 | 每 10 拍 | 步骤 4 | 约 L916 |
 | `self_check_done` / `handle_reinit_req` 读取 | 每 50 拍 | 步骤 8（自检/重同步轮询） | 约 L1179、L1213 |
+| `startup_loading_ready` 读/写 | 进程启动时探测；每次启动准备入口读取；启动准备或直接控制开始前写 FALSE | `startup_sequence::start_startup_sequence` / `consume_startup_loading_ready` | 2026-07-28 |
 | `axis4_manual_*` 读取 | 每 20 拍 | 步骤 13（轴 4 手动控制轮询） | 约 L2180 |
 | `axis1_fast_return` / `axis6_fast_retract` / `startup_smoothing_bypass` 写 | 每拍 | 步骤 14（气缸/快退标志写入 PLC） | 约 L2268-L2270 |
 | 气缸 1/2/3/4 写 + `cylinder5_press_req` 写 | 每拍（控制激活或启动序列激活时） | 步骤 14 | 约 L2205-L2211 |
@@ -255,6 +260,12 @@ clear_axis_return_request(symbols)
 
 ## 10. 变更日志
 
+### 2026-07-28 — 新增标准装卸启动资格 ADS 握手
+- 作者：AI（Codex）。
+- 涉及文件：`plc_io.cpp/.h`、`startup_sequence.cpp/.h`、`main.cpp`，以及 PLC `G.TcGVL/init.TcPOU/SelfCheck.TcPOU`。
+- 行为变化：绑定 `G.startup_loading_ready`；上位机启动时探测符号，每次启动准备读取，开始启动准备或直接控制前写 FALSE 消费。标志与 `[96,280,430,580] ±2 mm` 实际位置共同决定标准/中断恢复路径；旧 PLC 无符号时只按位置兼容判定。
+- 契约影响：新增单个 BOOL 符号；原 7 轴高频读写、定位臂通道和 328 字节 WPF/C++ 命名管道协议不变。
+
 ### 2026-06-26 — 文档初版（无代码变更）
 - 作者：AI（Claude，应用户要求梳理）。
 - 内容：基于现网代码（`ADSComm1.h`、`plc_io.cpp/.h`、`control_types.h` 中的 `AppContext`、`main.cpp` 主循环前段的 ADS 连接与 lambda 包装、主循环步骤 4/8/13 的自检/重同步/axis4 诊断段）编写第一版说明。
@@ -289,7 +300,12 @@ clear_axis_return_request(symbols)
 ### 2026-07-27 — axis6 软件限位状态与 axis1 回退后先行（无 PLC ADS 符号变更）
 - 作者：AI（Codex）。
 - 涉及文件：`main.cpp`、`control_types.h`、`vis_server.h`、`AdsControlUI/VisProtocol.cs`、`AdsControlUI/VisPipeClient.cs`、WPF 参数输入区。
-- 行为变化：axis6 的 `670 mm from-left` 保护完全在上位机控制层计算，未增加 ADS 读写符号。预测到 axis6 手柄/计划回退/axis1 联动回退的最终目标越限时，不写对应 PLC `return_cmd`；现有 PLC 与 NC 的硬限位、`G.refer[1..7]` 及定位臂通道均不改变。axis1 回退后先行量仅经本地命名管道写入 C++ 配置，不通过 ADS 下传到 PLC。
+- 行为变化：axis6 的 `670 mm from-left` 保护完全在上位机控制层计算，未增加 ADS 读写符号。预测到 axis6 手柄/计划回退/axis1 联动回退的最终目标越限时，不写对应 PLC `return_cmd`，只阻断当前危险动作并在后续周期重新评估；实际位置越限时继续冻结相关链路，直到回到限制内。现有 PLC 与 NC 的硬限位、`G.refer[1..7]` 及定位臂通道均不改变。axis1 回退后先行量仅经本地命名管道写入 C++ 配置，不通过 ADS 下传到 PLC。
 - 协议变化：新增 `SetAxis1PostReturnLead=24`，`param1 = mm * 1000`，范围 `[-10,10]`；`VisState` 末尾追加 `bool axis6_soft_limit_hold`。Pack=1 布局由 327 字节扩展为 **328 字节**，C++ 与 WPF 必须同时更新并重启，禁止与 327 字节版本混用。
 
 ### （此处持续追加）
+
+### 2026-07-28 — 轴3/5/6几何默认值与 axis6 窗口调整（无 ADS 符号变更）
+- 作者：AI（Codex）。
+- 行为变化：上位机启动最终默认值改为 axis1/3/5/6=`20/649/649/650 mm`，标准启动中间 axis5/6 间距改为 `15 mm`，运行时 axis6 窗口改为 `[axis5+1,axis5+21]`。axis1/axis6 在重启或重同步后已到达/略微越过触发边时，可由新的有效同向输入重触发换手。
+- 接口影响：无新增或修改 ADS 符号；不改变 `G.refer[1..7]`、计划回退结构、TwinCAT 状态机、NC 映射、定位臂通道或 328 字节 WPF/C++ 管道布局。

@@ -4,9 +4,9 @@
 >
 > 修改任何 PLC POU、DUT、GVL、或改变与上位机的 ADS 契约，请同步更新本文档与相关子文档，并在最末"变更日志"追加条目。
 
-更新时间：2026-07-06
+更新时间：2026-07-28
 适用工程：`250902\250902.sln`（PLC 项目：`250902\Untitled2`）
-对应代码版本：2026-07-06 主分支（基于 `MAIN.TcPOU` / `ArmManual.TcPOU` / `SelfCheck.TcPOU` / `handle.TcPOU` / `init.TcPOU` / `reset.TcPOU` / `err.TcPOU` / `clear_err.TcPOU` / `G.TcGVL` / `state.TcDUT` / `ST_AxisPlannedReturnCmd.TcDUT` 当前状态校对）
+对应代码版本：2026-07-28 主分支（基于 `MAIN.TcPOU` / `ArmManual.TcPOU` / `SelfCheck.TcPOU` / `handle.TcPOU` / `init.TcPOU` / `reset.TcPOU` / `err.TcPOU` / `clear_err.TcPOU` / `G.TcGVL` / `state.TcDUT` / `ST_AxisPlannedReturnCmd.TcDUT` 当前状态校对）
 
 ***
 
@@ -61,6 +61,7 @@ PLC 侧**不直接决定运动模式**（导管/导丝/协同、启动准备阶�
 | 变量 | 方向 | 语义 |
 |---|---|---|
 | `G.self_check_done` | PLC→上位 | 自检完成 |
+| `G.startup_loading_ready` | PLC↔上位 | SelfCheck 完成标准装卸回位后置位；上位机开始启动准备或直接控制前清零消费 |
 | `G.handle_reinit_req` | PLC→上位（上位读后清除） | 请求上位机做一次全量重同步 |
 | `G.handle_reinit_done` | PLC 内部 | handle POU 已完成重初始化 |
 | `G.estop_hold_req` | PLC→上位 | PLC 处于保持态，上位机应停写 refer |
@@ -165,13 +166,13 @@ PLC 侧**不直接决定运动模式**（导管/导丝/协同、启动准备阶�
 | 手柄输入采样、滤波、按键解码 | 上位机 | — |
 | 模式判定（导管/导丝独立/协同） | 上位机 | — |
 | 爬行状态机、窗口重建、快退触发 | 上位机 | `G.axisN_return_cmd.*` + `G.axis1_fast_return` / `G.axis6_fast_retract` |
-| 启动准备序列 | 上位机 | `G.startup_smoothing_bypass` + `G.cylinderN_value` + `G.v_limit` |
+| 启动准备序列 | 上位机 | `G.startup_loading_ready` + 实际位置判定 + `G.startup_smoothing_bypass` + `G.cylinderN_value` + `G.v_limit` |
 | 力反馈标定、映射、下发手柄 | 上位机 | — |
 | 目标位置计算（相对坐标） | 上位机 | `G.refer[1..7]` |
 | 定位臂点动按钮与参数 | 上位机 | `G.arm_manual_enable` + `G.arm_enable_req[]` + `G.arm_jog_pos_req[]` / `G.arm_jog_neg_req[]` + `G.arm_jog_velocity/acc/dec/jerk[]` |
 | 轴使能（MC_Power） | PLC | 内部 |
 | 定位臂上电/复位/点动执行 | PLC | `ArmManual.TcPOU` + `G.arm_*` 状态 |
-| 寻参自检（左限位） | PLC | 记录 `G.leftlimit[]`、置 `G.self_check_done` |
+| 寻参自检（左限位） | PLC | 记录 `G.leftlimit[]`、置 `G.self_check_done`；标准装卸回位完成时置 `G.startup_loading_ready` |
 | refer → 设定点的**滑动平均 + 速度限幅 + 二阶滤波** | PLC | `handle` POU 内部 |
 | 计划回退运动执行（MC_MoveAbsolute） | PLC | `handle` POU 内 `fb_return_move_abs` |
 | axis4 手动点动执行 | PLC | `handle` POU 内 `fb_axis4_move_velocity` |
@@ -274,6 +275,7 @@ G.arm_jog_pos_req[i] 按住              ├─ MC_Power / MC_Reset
 | 自检逼近速度 | `vel_scan = 30.0` | `SelfCheck.TcPOU` | 向左限位低速逼近速度 |
 | 自检回位速度 | `vel_back = 50.0` | `SelfCheck.TcPOU` | 记录左限位后向工作位回退速度 |
 | 自检回位目标（距左限位） | `[96, 0, 280, 0, 430, 580, 0]` | `SelfCheck.TcPOU::init_target_from_left` | 轴1/3/5/6 工作位 |
+| 标准装卸启动姿态（距左限位） | axis1/3/5/6=`[96,280,430,580] mm` | PLC 资格位 + 上位机实际位置复核 | 容差由上位机固定为 `±2 mm` |
 | 目标轴（平移轴）掩码 | `[T, F, T, F, T, T, F]` | `SelfCheck.TcPOU::target_axes` | 参与自检寻参的轴 |
 | 错峰启动延迟 | `[0, 0, 300, 0, 600, 900, 0] ms` | `SelfCheck.TcPOU::scan_stagger_delay` | 各轴逼近启动错峰 |
 | 错峰回位延迟 | `[3, 0, 2, 0, 1, 0, 0] s` | `SelfCheck.TcPOU::stagger_delay` | 各轴回位启动错峰 |
@@ -317,6 +319,12 @@ G.arm_jog_pos_req[i] 按住              ├─ MC_Power / MC_Reset
 5. **新增 POU 或改状态枚举**：`state.TcDUT` + `PLC状态机与流程说明.md §2` 状态跳转矩阵同步。
 
 ## 10. 变更日志
+
+### 2026-07-28 — 标准装卸启动与中断恢复启动分流
+- 作者：AI（Codex）。
+- 内容：新增 `G.startup_loading_ready` 一次性资格位。PLC 自检结束时置位，`init`/SelfCheck 重置时清零；上位机以该位和 axis1/3/5/6 实际装卸姿态双重判断启动路径，并在开始控制前消费该位。
+- 恢复路径：不在标准装卸姿态时保持电缸 `1开2闭、3开4闭`，axis1/2/6/7 同时走各自 UI 最终目标，2 秒后启动 axis5，再 2 秒后启动 axis3，全部到位后统一重同步。
+- 接口影响：仅新增一个 BOOL ADS 符号；原 `G.refer[1..7]`、NC 轴映射、计划回退和定位臂接口不变。
 
 ### 2026-07-06 — 12 轴可用性改造
 - 作者：AI（Codex，应用户计划实施）。

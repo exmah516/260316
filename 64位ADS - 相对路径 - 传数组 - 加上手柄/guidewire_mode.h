@@ -10,7 +10,7 @@ namespace guidewire_mode_ctrl
 {
 	bool enter_independent_guidewire_mode(AppContext& ctx);
 	bool enter_cooperative_guidewire_mode(AppContext& ctx);
+	// 读取 axis6 入口门控位置；返回值表示 ADS 读取成功，距离门限由调用方判定。
 	bool check_axis6_guidewire_entry_gate(AppContext& ctx, double& axis6_from_left_mm);
 	bool exit_guidewire_mode_to_normal(AppContext& ctx);
 }
-

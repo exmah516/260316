@@ -23,6 +23,7 @@ namespace AdsSymbol
 	const char* cylinder5_press_req = "G.cylinder5_press_req";
 	const char* cylinder5_value = "G.cylinder5_value";
 	const char* self_check_done = "G.self_check_done";
+	const char* startup_loading_ready = "G.startup_loading_ready";
 	const char* handle_reinit_req = "G.handle_reinit_req";
 	const char* estop_hold_req = "G.estop_hold_req";
 	const char* ft_1_value = "G.ft_1_value";
@@ -172,6 +173,16 @@ namespace plc_io
 	bool write_v_limit(AppContext& ctx, const double* values)
 	{
 		return ctx.ads->ADSWrite(AdsSymbol::v_limit, sizeof(double) * 7, const_cast<double*>(values));
+	}
+
+	bool read_startup_loading_ready(AppContext& ctx, bool& ready)
+	{
+		return ctx.ads->ADSRead(AdsSymbol::startup_loading_ready, sizeof(ready), &ready);
+	}
+
+	bool write_startup_loading_ready(AppContext& ctx, bool ready)
+	{
+		return ctx.ads->ADSWrite(AdsSymbol::startup_loading_ready, sizeof(ready), &ready);
 	}
 
 	void load_pos_from_actual(AppContext& ctx)
