@@ -4,9 +4,9 @@
 >
 > 新增/删除/修改 GVL 变量，或改变读写方向/语义，请同步更新本文档、`PLC项目说明.md §5`，以及上位机 `ADS通讯说明.md §3`。
 
-更新时间：2026-07-28
+更新时间：2026-08-03
 适用工程：`250902\Untitled2`（`GVLs\G.TcGVL`）
-对应代码版本：2026-07-28 主分支
+对应代码版本：2026-08-03 工作区（100 Hz ADS 通信与主机看门狗）
 
 ***
 
@@ -72,19 +72,19 @@
 |---|---|---|---|
 | `G.init_pos[1..7]` | `ARRAY[1..7] OF LREAL` | PLC 内部写，上位机只读 | 相对坐标零点（绝对值）。`init` 首次记录；SelfCheck 完成时以左限位工作位覆盖 |
 | `G.refer[1..7]` | `ARRAY[1..7] OF LREAL` | **上位机写**，PLC 读 | 上位机目标位置（相对 init_pos）。handle POU 用此驱动平滑链路 |
-| `G.Act_pos[1..7]` | `ARRAY[1..7] OF LREAL` | PLC 写，**上位机读** | 各轴实际位置（相对 init_pos）。每周期 handle/SelfCheck 写入 |
+| `G.Act_pos[1..7]` | `ARRAY[1..7] OF LREAL` | PLC 写，上位机兼容读 | 各轴实际位置（相对 init_pos）。正常 100 Hz 快照直接读取 `NcToPlc.ActPos` 后在上位机减 `init_pos`；本数组保留给 PLC 内部和兼容诊断 |
 | `G.act_h[1..7]` | `ARRAY[1..7] OF LREAL` | PLC 内部 | 速度限幅 + 滑动平均后的平滑参考 |
 | `G.act_hf[1..7]` | `ARRAY[1..7] OF LREAL` | PLC 内部 | 最终输出给 MC_ExtSetPointGenFeed 的前一周期平滑位置；ext_setpoint 未使能时 = ActPos - init_pos |
 | `G.ref_slow[1..7]` | `ARRAY[1..7] OF LREAL` | PLC 内部 | 速度限幅后的中间值（滑动平均的输入） |
 | `G.leftlimit[1..7]` | `ARRAY[1..7] OF LREAL` | PLC 写（SelfCheck），上位机只读 | 自检记录的左限位绝对位置。上位机用于 from_left 坐标换算与窗口计算 |
-| `G.act_pos_from_left[1..7]` | `ARRAY[1..7] OF LREAL` | PLC 写，**上位机降频读** | 各轴距左限位距离（监测/门控，每 5 拍读一次） |
-| `G.refer_from_left[1..7]` | `ARRAY[1..7] OF LREAL` | PLC 写（由 handle 维护），上位机降频读 | refer 对应的距左限位距离 |
+| `G.act_pos_from_left[1..7]` | `ARRAY[1..7] OF LREAL` | PLC 写，兼容/诊断 | 各轴距左限位距离；正常上位机不读取，直接用绝对实际位置减 `leftlimit` 计算 |
+| `G.refer_from_left[1..7]` | `ARRAY[1..7] OF LREAL` | PLC 写（由 handle 维护），兼容/诊断 | refer 对应的距左限位距离；正常上位机不读取 |
 
 ### 2.4 自检相关
 
 | 变量 | 类型 | 说明 |
 |---|---|---|
-| `G.self_check_done` | `BOOL` | SelfCheck 完成标志。上位机轮询（50 拍一次）。`init` 每次进入时清零 |
+| `G.self_check_done` | `BOOL` | SelfCheck 完成标志。上位机用 OnChange Notification 监听并在注册时读取初值；`init` 每次进入时清零 |
 | `G.startup_loading_ready` | `BOOL` | SelfCheck 完成且机构位于标准器械装卸等待姿态时置 TRUE；`init` 或 SelfCheck 重置时清零，上位机开始启动准备/直接控制前消费为 FALSE |
 | `G.selfcheck_reset_req` | `BOOL` | `init` 拉起，请求 SelfCheck 重置内部状态机 |
 | `G.selfcheck_stu[1..7]` | `ARRAY[1..7] OF INT` | SelfCheck 各轴当前子状态（上位机可读用于诊断） |
@@ -94,11 +94,20 @@
 
 | 变量 | 类型 | 写方 | 读方 | 说明 |
 |---|---|---|---|---|
-| `G.handle_reinit_req` | `BOOL` | PLC（SelfCheck/handle/clear_err） | 上位机（50 拍一次），读后置 FALSE | PLC 请求上位机重同步 |
+| `G.handle_reinit_req` | `BOOL` | PLC（SelfCheck/handle/clear_err） | 上位机 Notification，处理后置 FALSE | PLC 请求上位机重同步 |
 | `G.handle_reinit_done` | `BOOL` | PLC（handle 重初始化完成时） | PLC 内部（诊断） | handle 已完成 SetPointGen 使能 |
 | `G.startup_loading_ready` | `BOOL` | PLC（SelfCheck；init/reset 清零） | 上位机（启动入口读，开始控制前写 FALSE） | 标准装卸启动的一次性资格位；实际位置仍由上位机二次校验 |
-| `G.estop_hold_req` | `BOOL` | PLC（handle/err/clear_err/init） | 上位机（10 拍一次） | 急停/保持激活；上位机应停写 refer |
+| `G.estop_hold_req` | `BOOL` | PLC（handle/err/clear_err/init） | 上位机 100 Hz 快照 + Notification | 急停/保持激活；上位机应停写 refer |
 | `G.startup_smoothing_bypass` | `BOOL` | **上位机写** | PLC（handle） | 启动准备阶段临时旁路二阶滤波，用传统滑动平均路径 |
+
+### 2.5.1 上位机通信看门狗
+
+| 变量 | 类型 | 写方 | 读方 | 说明 |
+|---|---|---|---|---|
+| `G.host_session_id` | `UDINT` | 上位机 100 Hz | PLC | 本次上位机进程会话号；新进程接管时变化 |
+| `G.host_heartbeat_sequence` | `UDINT` | 上位机 100 Hz | PLC | 每个通信周期递增；连续 100 ms 不变化触发超时锁存 |
+| `G.host_recover_req` | `BOOL` | 上位机请求，PLC 清除 | 双向握手 | 心跳恢复且机构停稳后请求解除超时并重初始化 |
+| `G.host_comm_timeout` | `BOOL` | PLC | 上位机 100 Hz 快照 + Notification | 主机通信超时锁存；为 TRUE 时冻结外部参考并执行安全清理 |
 
 ### 2.6 快退控制
 
@@ -123,7 +132,7 @@ PID 参数（`G.Kp / G.Ki / G.Kd / G.pid_i / G.pid_e_prev / G.pid_i_limit`）：
 |---|---|---|---|---|
 | `G.axis4_fwd_req` | `BOOL` | **上位机写** | PLC | 正向点动请求 |
 | `G.axis4_rev_req` | `BOOL` | **上位机写** | PLC | 反向点动请求 |
-| `G.axis4_manual_busy` | `BOOL` | PLC | **上位机读（20 拍一次）** | 点动进行中 |
+| `G.axis4_manual_busy` | `BOOL` | PLC | **上位机 Notification** | 点动进行中 |
 | `G.axis4_manual_done` | `BOOL` | PLC | 上位机读 | 点动已停止（正常） |
 | `G.axis4_manual_error` | `BOOL` | PLC | 上位机读 | 点动报错 |
 | `G.axis4_manual_error_id` | `UDINT` | PLC | 上位机读 | 错误码 |
@@ -158,7 +167,7 @@ PID 参数（`G.Kp / G.Ki / G.Kd / G.pid_i / G.pid_e_prev / G.pid_i_limit`）：
 | `G.ft_2_value` | `INT AT %I*` | 输入 | 第二路扭矩 |
 | `G.fn_2_value` | `INT AT %I*` | 输入 | 第二路轴向力 |
 
-PLC 侧无处理逻辑，仅做总线映射。上位机通过 ADS 读取（TCP_DAQ 模式下此路作为备份，见 `../力反馈说明.md §2.1`）。
+PLC 侧无滤波或标定逻辑，仅做总线映射。正常上位机在 100 Hz 快速 Sum Read 中同步读取四路；TCP_DAQ 仅为人工选择的回退源，见 `../64位ADS - 相对路径 - 传数组 - 加上手柄/力反馈说明.md §2.1`。
 
 ## 3. `ST_AxisPlannedReturnCmd.TcDUT`
 
@@ -202,15 +211,17 @@ END_STRUCT
 
 | PLC 符号 | 类型 | GVL 变量 | 频率约定 |
 |---|---|---|---|
-| `G.refer` | `double[7]` | `G.refer[1..7]` | 每控制拍 |
+| `G.host_session_id` / `G.host_heartbeat_sequence` | `UDINT` / `UDINT` | 同名 | 100 Hz 统一 Sum Write，每周期必写 |
+| `G.host_recover_req` | `BOOL` | 同名 | 看门狗恢复握手时按需写 |
+| `G.refer` | `double[7]` | `G.refer[1..7]` | 运动输出有效时随 100 Hz 统一 Sum Write |
 | `G.v_limit` | `double[7]` | `G.v_limit[1..7]` | 启动准备/恢复时 |
-| `G.cylinder1_value` .. `G.cylinder4_value` | `WORD` | 同名 | 每控制拍（控制激活时） |
-| `G.cylinder5_press_req` | `BOOL` | 同名 | 每控制拍 |
-| `G.axis1_fast_return` | `BOOL` | 同名 | 每控制拍 |
-| `G.axis6_fast_retract` | `BOOL` | 同名 | 每控制拍 |
-| `G.startup_smoothing_bypass` | `BOOL` | 同名 | 每控制拍 |
+| `G.cylinder1_value` .. `G.cylinder4_value` | `WORD` | 同名 | 变化时并入统一 Sum Write，失败保持脏状态重试 |
+| `G.cylinder5_press_req` | `BOOL` | 同名 | 变化时写 |
+| `G.axis1_fast_return` | `BOOL` | 同名 | 有效期内随 100 Hz 输出写 |
+| `G.axis6_fast_retract` | `BOOL` | 同名 | 有效期内随 100 Hz 输出写 |
+| `G.startup_smoothing_bypass` | `BOOL` | 同名 | 变化时写 |
 | `G.startup_loading_ready` | `BOOL` | 同名 | 启动准备或直接控制入口消费时写 FALSE |
-| `G.axis4_fwd_req` / `G.axis4_rev_req` | `BOOL` | 同名 | 每 20 拍轮询写 |
+| `G.axis4_fwd_req` / `G.axis4_rev_req` | `BOOL` | 同名 | 变化时写，失败重试 |
 | `G.axisN_return_cmd.Req` + `TargetAbs/Vel/Acc/Dec/Jerk` | `BOOL` + `LREAL×5` | `G.return_cmd[N]` | 触发时写，完成后清 Req |
 | `G.handle_reinit_req` | `BOOL` | 同名 | 读后清零（写 FALSE） |
 | `G.arm_manual_enable` | `BOOL` | 同名 | 定位臂手动点动总使能，按需写 |
@@ -223,19 +234,19 @@ END_STRUCT
 
 | PLC 符号 | 类型 | GVL 变量 | 频率约定 |
 |---|---|---|---|
-| `G.Act_pos` | `double[7]` | `G.Act_pos[1..7]` | 每控制拍（随 `read_plc_state`） |
-| `G.init_pos` | `double[7]` | `G.init_pos[1..7]` | 每控制拍 |
-| `G.leftlimit` | `double[7]` | `G.leftlimit[1..7]` | 每控制拍 |
-| `G.act_pos_from_left` | `double[7]` | `G.act_pos_from_left[1..7]` | 每 5 拍 |
-| `G.refer_from_left` | `double[7]` | `G.refer_from_left[1..7]` | 每 5 拍 |
-| `G.self_check_done` | `BOOL` | 同名 | 每 50 拍 |
+| `G.axis[1..7].NcToPlc.ActPos` | `LREAL×7` | NC 轴过程数据 | 100 Hz 快速 Sum Read；上位机据此计算相对位置和 from-left |
+| `G.Act_pos` | `double[7]` | `G.Act_pos[1..7]` | 兼容/诊断，不进入正常 100 Hz 路径 |
+| `G.init_pos` | `double[7]` | `G.init_pos[1..7]` | 首次连接、重连、自检完成上升沿和显式重同步时缓存 |
+| `G.leftlimit` | `double[7]` | `G.leftlimit[1..7]` | 与 `init_pos` 同步刷新缓存 |
+| `G.act_pos_from_left` / `G.refer_from_left` | `double[7]` / `double[7]` | 同名 | 正常上位机不读取，保留 PLC 内部和兼容诊断 |
+| `G.self_check_done` | `BOOL` | 同名 | Notification + 注册时初值读取 |
 | `G.startup_loading_ready` | `BOOL` | 同名 | 上位机进程启动时探测符号；每次启动准备入口读取 |
-| `G.handle_reinit_req` | `BOOL` | 同名 | 每 50 拍 |
-| `G.estop_hold_req` | `BOOL` | 同名 | 每 10 拍 |
-| `G.axisN_return_cmd.Busy/Done/Error/ErrorId` | `BOOL×3 + UDINT` | `G.return_cmd[N]` | 主循环 FastMove 阶段每拍读 |
-| `G.axis4_manual_busy/error/error_id` | `BOOL×2 + UDINT` | 同名 | 每 20 拍 |
-| `G.ft_1/fn_1/fn_2/ft_2_value` | `INT` | 同名 | 按力采样节拍（随 `read_force_sample`） |
-| `G.gen_state` | `WORD` | 同名 | 诊断用，不定时 |
+| `G.handle_reinit_req` | `BOOL` | 同名 | Notification + 注册时初值读取 |
+| `G.estop_hold_req` / `G.host_comm_timeout` | `BOOL` / `BOOL` | 同名 | 100 Hz 快速 Sum Read + Notification |
+| `G.axisN_return_cmd.Busy/Done/Error/ErrorId` | `BOOL×3 + UDINT` | `G.return_cmd[N]` | FastMove 状态机按需提交一次专项 Sum Read |
+| `G.axis4_manual_busy/done/error/error_id` | `BOOL×3 + UDINT` | 同名 | Notification + 注册时初值读取 |
+| `G.ft_1/fn_1/fn_2/ft_2_value` | `INT` | 同名 | 100 Hz 快速 Sum Read，同一包同步获取四路 |
+| `G.gen_state` | `WORD` | 同名 | Notification + 注册时初值读取 |
 | `G.arm_power_output` / `G.arm_reset_output` | `ST_McOutputs[5]` | 同名 | 定位臂诊断，按需读 |
 | `G.arm_act_pos` / `G.arm_act_vel` | `double[5]` | 同名 | 定位臂实际位置/速度，按需读 |
 | `G.arm_motion_busy/done/error/error_id` | `BOOL[5] / BOOL[5] / BOOL[5] / UDINT[5]` | 同名 | 定位臂点动状态，按需读 |
@@ -252,17 +263,18 @@ END_STRUCT
 5. **`G.cylinder5_value` 上位机不应直接写**；通过 `G.cylinder5_press_req` 写布尔量，由 PLC 每周期映射。直接写 `cylinder5_value` 会在下一周期被 PLC 覆盖。
 6. **定位臂变量不参与原 `G.gen_state` 状态机**；`G.arm_manual_enable=FALSE` 或对应轴未上电时，`G.arm_jog_*` 请求不会产生运动。正反向同时为 TRUE 时 `G.arm_cmd_conflict[i]=TRUE`，PLC 停止该轴并拒绝启动新运动。
 7. **`G.startup_loading_ready` 不是位置反馈**：PLC 仅在本轮 SelfCheck 全部完成后置 TRUE。上位机还会核对 axis1/3/5/6 距左限位是否分别处于 `[96,280,430,580] ±2 mm`；任一条件不满足时改走中断恢复启动。旧 PLC 没有该符号时仅按实际位置兼容判定。
+8. **主机看门狗超时不是普通状态提示**：`host_heartbeat_sequence` 连续 100 ms 不变化时，PLC 锁存 `host_comm_timeout`，冻结外部参考，清快退、axis4 和平滑旁路请求，并对运行中的计划回退/axis4 运动执行受控停止；气缸保持最后状态。只有新鲜心跳、显式 `host_recover_req` 和停稳条件同时满足后才受理恢复。
 
 ### 4.3 ADS 连接参数
 
 | 参数 | 值 | 来源 |
 |---|---|---|
 | TwinCAT 端口 | `851` | TwinCAT 3 PLC1 默认端口 |
-| 本机路由 | `OpenComm_inside()` 优先 | 上位机 `main.cpp` |
+| 本机路由 | `OpenCommInsideReadOnly()` 优先 | 上位机 `main.cpp` |
 | 远端 NetId（回退） | `169.254.119.135.1.1` | 上位机 `main.cpp hardcoded_ads_netid` |
 | PLC 应用名（诊断） | `TwinCAT_SystemInfoVarList._AppInfo.AppName` | 上位机启动时验证 |
 
-PLC 侧无 ADS 配置文件，由 TwinCAT XAR 路由表管理。
+PLC 侧无 ADS 配置文件，由 TwinCAT XAR 路由表管理。上位机连接和重连只接受已经处于 `ADSSTATE_RUN` 的 PLC，不自动切换 PLC 状态，也不执行 Activate Configuration。
 
 ## 5. 历史遗留变量速查
 
@@ -288,6 +300,13 @@ PLC 侧无 ADS 配置文件，由 TwinCAT XAR 路由表管理。
 6. 在本文档"§7 变更日志"追加条目，注明：日期 / 变更人 / 变量名 / 改动类型 / 是否需要上位机同步修改。
 
 ## 7. 变更日志
+
+### 2026-08-03 — 100 Hz ADS 契约与主机看门狗
+- 作者：AI（Codex）。
+- 变量：新增 `G.host_session_id`、`G.host_heartbeat_sequence`、`G.host_recover_req`、`G.host_comm_timeout`。
+- 通信变化：7 轴 NC 实际位置与四路力进入 100 Hz 快速 Sum Read；`init_pos/leftlimit` 改为事件刷新缓存，低频状态改用 Notification，`act_pos_from_left/refer_from_left` 不再由正常上位机读取。
+- 安全行为：心跳连续 100 ms 不变化时冻结外部参考并受控停止相关运动；连接/重连不自动把 PLC 切到 RUN，不激活 TwinCAT 配置。
+- PDO 影响：不修改或猜测四路力 EtherCAT PDO 映射。
 
 ### 2026-07-28 — 新增器械装卸启动资格握手位
 - 作者：AI（Codex）。

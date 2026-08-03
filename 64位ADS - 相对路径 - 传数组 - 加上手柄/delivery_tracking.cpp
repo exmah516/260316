@@ -21,29 +21,7 @@ DeliveryTrackingController::DeliveryTrackingController()
 {
 	for (int i = 0; i < 2; ++i)
 	{
-		axis_[i].snapshot.invalid_reason = static_cast<int>(TrackingInvalidReason::NotLogging);
-	}
-}
-
-void DeliveryTrackingController::start_session()
-{
-	session_active_ = true;
-	compensation_enabled_ = false;
-	next_segment_id_ = 0;
-	for (int i = 0; i < 2; ++i)
-	{
-		axis_[i] = AxisRuntime{};
 		axis_[i].snapshot.invalid_reason = static_cast<int>(TrackingInvalidReason::NotForwardDelivery);
-	}
-}
-
-void DeliveryTrackingController::stop_session()
-{
-	session_active_ = false;
-	compensation_enabled_ = false;
-	for (int i = 0; i < 2; ++i)
-	{
-		end_segment(axis_[i], TrackingInvalidReason::NotLogging, false);
 	}
 }
 
@@ -117,7 +95,7 @@ bool DeliveryTrackingController::can_enable_compensation(DeliveryTrackingAxis ac
 {
 	const DeliveryTrackingParameters& params = parameters(active_axis);
 	const AxisRuntime& state = runtime(active_axis);
-	return session_active_ && state.active && params.kp > 0.0 &&
+	return state.active && params.kp > 0.0 &&
 		params.max_gain > 1.0 && params.max_error_mm > 0.0;
 }
 
@@ -156,12 +134,6 @@ void DeliveryTrackingController::update_gate(
 	TrackingInvalidReason invalid_reason)
 {
 	AxisRuntime& state = runtime(axis);
-	if (!session_active_)
-	{
-		end_segment(state, TrackingInvalidReason::NotLogging, false);
-		return;
-	}
-
 	if (!base_eligible)
 	{
 		end_segment(state, invalid_reason, false);
@@ -229,7 +201,7 @@ void DeliveryTrackingController::record_handover_forward_increment(
 	double forward_increment_mm)
 {
 	AxisRuntime& state = runtime(axis);
-	if (!session_active_ || forward_increment_mm <= kIncrementEpsilonMm)
+	if (forward_increment_mm <= kIncrementEpsilonMm)
 	{
 		return;
 	}

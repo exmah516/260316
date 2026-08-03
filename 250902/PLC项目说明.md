@@ -4,9 +4,9 @@
 >
 > 修改任何 PLC POU、DUT、GVL、或改变与上位机的 ADS 契约，请同步更新本文档与相关子文档，并在最末"变更日志"追加条目。
 
-更新时间：2026-07-28
+更新时间：2026-08-03
 适用工程：`250902\250902.sln`（PLC 项目：`250902\Untitled2`）
-对应代码版本：2026-07-28 主分支（基于 `MAIN.TcPOU` / `ArmManual.TcPOU` / `SelfCheck.TcPOU` / `handle.TcPOU` / `init.TcPOU` / `reset.TcPOU` / `err.TcPOU` / `clear_err.TcPOU` / `G.TcGVL` / `state.TcDUT` / `ST_AxisPlannedReturnCmd.TcDUT` 当前状态校对）
+对应代码版本：2026-08-03 工作区（100 Hz ADS 通信与主机看门狗）
 
 ***
 
@@ -27,7 +27,7 @@ PLC 侧**不直接决定运动模式**（导管/导丝/协同、启动准备阶�
 2. 通过 `MC_ExtSetPointGenFeed` 下发给 NC；
 3. 处理**计划回退**（`ST_AxisPlannedReturnCmd`）作为快退阶段的专用通道；
 4. 处理 axis4 手动点动；
-5. 处理错误/急停保持并通过握手位通知上位机。
+5. 处理错误/急停保持并通过握手位通知上位机；监控 100 Hz 主机心跳，通信超时后冻结外部参考并受控停止相关运动。
 
 ## 2. 术语对照表
 
@@ -51,8 +51,8 @@ PLC 侧**不直接决定运动模式**（导管/导丝/协同、启动准备阶�
 | 字段 | 基准 | 表达式 | 用途 |
 |---|---|---|---|
 | **NC 绝对** | 机械原点 | `G.axis[i].NcToPlc.ActPos` | PLC 内部与限位判断 |
-| **相对** | `G.init_pos[i]` | `G.Act_pos[i] = ActPos - init_pos[i]` | 上位机读写基线 |
-| **距左限位** | `G.leftlimit[i]` | `G.act_pos_from_left[i] = ActPos - leftlimit[i]` | 监测/门控 |
+| **相对** | `G.init_pos[i]` | `ActPos - init_pos[i]`；PLC 同时维护兼容数组 `G.Act_pos[i]` | 上位机控制基线 |
+| **距左限位** | `G.leftlimit[i]` | `ActPos - leftlimit[i]`；PLC 同时维护兼容数组 `G.act_pos_from_left[i]` | 监测/门控 |
 
 `G.refer[i]` 与 `G.Act_pos[i]` 使用相对坐标；`G.leftlimit[i]` 用绝对坐标；`G.axisN_return_cmd.TargetAbs` 用绝对坐标。这与上位机文档 `§1.5.4` 的三套基准一一对应。
 
@@ -69,6 +69,8 @@ PLC 侧**不直接决定运动模式**（导管/导丝/协同、启动准备阶�
 | `G.axis1_fast_return` / `G.axis6_fast_retract` | 上位→PLC | 快退阶段旁路 PLC 平滑层 |
 | `G.startup_smoothing_bypass` | 上位→PLC | 启动准备阶段旁路二阶滤波 |
 | `G.axisN_return_cmd.Req` | 上位→PLC | 计划回退触发 |
+| `G.host_session_id` / `G.host_heartbeat_sequence` | 上位→PLC | 100 Hz 主机身份与递增心跳 |
+| `G.host_recover_req` / `G.host_comm_timeout` | 双向握手 / PLC→上位 | 通信超时锁存与显式恢复 |
 
 ## 3. 硬件对象与轴映射
 
@@ -116,7 +118,7 @@ PLC 侧**不直接决定运动模式**（导管/导丝/协同、启动准备阶�
 | `G.ft_2_value` | INT (%I*) | 第二路扭矩通道 |
 | `G.fn_2_value` | INT (%I*) | 第二路轴向力通道 |
 
-对应倍福 TwinCAT 拓扑中的 `nDataIn2[0..1]` 等 EtherCAT 输入。PLC 侧仅做输入映射，不解算/滤波；上位机通过 ADS 备份读，主路径走 TCP 采集卡。见 `../64位ADS - 相对路径 - 传数组 - 加上手柄/力反馈说明.md`。
+对应倍福 TwinCAT 拓扑中的 EtherCAT 输入。PLC 侧仅做输入映射，不解算/滤波；正常上位机在 100 Hz 快速 Sum Read 中同步读取四路，TCP 采集卡仅保留为人工选择的回退源。四路 PDO 映射需通过在线配置和实际施力确认，本轮不依据旧 Box 编号修改。见 `../64位ADS - 相对路径 - 传数组 - 加上手柄/力反馈说明.md`。
 
 ## 4. 目录结构
 
@@ -178,13 +180,14 @@ PLC 侧**不直接决定运动模式**（导管/导丝/协同、启动准备阶�
 | axis4 手动点动执行 | PLC | `handle` POU 内 `fb_axis4_move_velocity` |
 | 软限位（右侧） | PLC | `slimit_enable` + `rslimit_distance` |
 | 错误保持 & 恢复策略 | PLC | `_err` / `_reset` / `_clear_err` |
+| 主机通信看门狗、超时冻结与受控停止 | PLC | `G.host_*` + `handle.TcPOU` |
 
 ### 5.1 控制链路时序
 
 ```
-上位机主循环 (~1kHz)                  PLC 任务 (1ms)
-──────────────────────                ────────────────
-读手柄 + 生成 refer[7]     ── ADS ─►  G.refer[7]
+上位机 ADS 通信线程 (100 Hz)          PLC 任务 (1ms)
+──────────────────────────            ────────────────
+Sum Write: refer[7] + 心跳  ── ADS ─►  G.refer[7] / G.host_*
                                        ↓
                                        handle POU:
                                         ├─ 速度限幅   → G.ref_slow
@@ -194,8 +197,10 @@ PLC 侧**不直接决定运动模式**（导管/导丝/协同、启动准备阶�
                                        ↓
                                        NC → EtherCAT → 伺服
                                        ↓
-G.Act_pos ◄── ADS ───────────────      更新 Act_pos / act_pos_from_left
+100 Hz Sum Read: NcToPlc.ActPos ◄─ ADS ── NC 实际位置
 ```
+
+主控制线程只消费 `AdsFastSnapshot` 并发布输出/专项请求；服务启动后不与通信线程并发直接访问 ADS。`init_pos/leftlimit` 在连接、重连、自检上升沿和显式重同步时刷新缓存，`act_pos_from_left/refer_from_left` 不进入正常高频读取。
 
 ### 5.2 快退（计划回退）时序
 
@@ -319,6 +324,12 @@ G.arm_jog_pos_req[i] 按住              ├─ MC_Power / MC_Reset
 5. **新增 POU 或改状态枚举**：`state.TcDUT` + `PLC状态机与流程说明.md §2` 状态跳转矩阵同步。
 
 ## 10. 变更日志
+
+### 2026-08-03 — 100 Hz ADS 通信与最小主机看门狗
+- 作者：AI（Codex）。
+- 内容：新增 `G.host_session_id`、`G.host_heartbeat_sequence`、`G.host_recover_req`、`G.host_comm_timeout`；上位机以 100 Hz Sum Read/Sum Write 交换实际位置、四路力、refer 和心跳，低频状态使用 Notification。
+- 超时行为：心跳 100 ms 不变化时冻结外部参考，清快退/axis4/平滑旁路请求，对运行中的计划回退和 axis4 运动受控停止，气缸保持最后状态。
+- 部署边界：PLC 连接不自动切 RUN；本轮不修改四路力 PDO，不执行 Activate Configuration。
 
 ### 2026-07-28 — 标准装卸启动与中断恢复启动分流
 - 作者：AI（Codex）。

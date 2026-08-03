@@ -1,15 +1,19 @@
-项目详细说明文档
-更新日期：2026-03-23
+项目详细说明文档（历史综合稿）
+更新日期：2026-08-03
 
 一、文档目的与适用范围
-本文件用于说明当前工程中“PLC + C++ 上位机”这一主控制链路的实际结构、功能、状态流和接口关系。
+本文件保留早期“PLC + C++ 上位机”综合说明，章节较多，部分细节仅用于追溯。当前 ADS 通信、PLC 接口和主循环契约以以下文档为准：
+- `PLC项目说明.md`
+- `PLC全局变量与ADS接口.md`
+- `..\64位ADS - 相对路径 - 传数组 - 加上手柄\ADS通讯说明.md`
+- `..\64位ADS - 相对路径 - 传数组 - 加上手柄\项目架构总览.md`
 
 本文档对应的当前有效代码路径为：
 - PLC：`250902\250902\Untitled2`
 - 上位机：`64位ADS - 相对路径 - 传数组 - 加上手柄\main.cpp`
 
 需要特别说明：
-- 本文档以“当前代码实际实现”为准，而不是以历史需求讨论或旧版本文档为准。
+- 本文档中的 PLC 状态机与机械说明仍可参考；若与上述当前维护文档冲突，以上述当前维护文档为准。
 - 工程中仍保留一些历史文件，如 `main(备份).cpp`、旧版注释、旧版状态枚举项、Qt 工程目录等；这些内容不一定反映当前主控制链路。
 - 当前系统已切换为“左限位模式”，后续所有主链路几何基准均以 `G.leftlimit` 和“距离左限位”的表达为核心。
 
@@ -124,12 +128,12 @@ PLC `G.leftlimit / G.Act_pos / G.init_pos / G.self_check_done / G.handle_reinit_
 - 当前文档只记录代码中的变量与赋值逻辑，不强行重新定义现场机械语义。
 
 3. 力传感器
-- `G.fn_value`
-  法向力原始值
-- `G.ft_value`
-  扭矩/切向力原始值
+- `G.fn_1_value / G.ft_1_value`
+  第一路轴向力与扭矩原始值
+- `G.fn_2_value / G.ft_2_value`
+  第二路轴向力与扭矩原始值
 
-当前仅由上位机用于手柄 582 的力反馈。
+正常上位机通过 100 Hz 快速 Sum Read 同步读取四路；纯净力/反馈标定主要使用第一组，第二组保留为高频采集与后续处理输入。
 
 
 五、PLC 工程详细说明
@@ -373,30 +377,23 @@ PLC `G.leftlimit / G.Act_pos / G.init_pos / G.self_check_done / G.handle_reinit_
 
 6.3 ADS 连接策略
 程序优先尝试：
-1. `ads.OpenComm_inside()`
-2. 若失败，再尝试 `ads.OpenComm()`
+1. `ads.OpenCommInsideReadOnly()`
+2. 若失败，再尝试 `ads.OpenCommReadOnly()`
 
 当前远程兜底 NetId：
 - `169.254.119.135.1.1`
 
+两种接口都只建链并读取设备状态。PLC 必须已经处于 `ADSSTATE_RUN`；连接或重连不会自动切 RUN，也不会执行 Activate Configuration。正常控制随后启动独立 `AdsCommunicationService`，按 100 Hz 执行快速 Sum Read/Sum Write。
+
 6.4 当前上位机所用 ADS 符号
-`main.cpp` 当前直接读写以下 PLC 符号：
-- `G.refer`
-- `G.Act_pos`
-- `G.init_pos`
-- `G.leftlimit`
-- `G.v_limit`
-- `G.cylinder1_value`
-- `G.cylinder2_value`
-- `G.cylinder3_value`
-- `G.cylinder4_value`
-- `G.self_check_done`
-- `G.handle_reinit_req`
-- `G.estop_hold_req`
-- `G.fn_value`
-- `G.ft_value`
-- `G.axis1_fast_return`
-- `G.axis6_fast_retract`
+服务启动后，主循环不直接执行周期 ADS 调用：
+- 100 Hz Sum Read：7 轴 `NcToPlc.ActPos`、`G.fn_1_value/G.ft_1_value/G.fn_2_value/G.ft_2_value`、PLC Task 时序、`G.estop_hold_req/G.host_comm_timeout`；
+- 100 Hz Sum Write：`G.host_session_id/G.host_heartbeat_sequence`，以及有效期内的 `G.refer`、快退标志和变化后的离散输出；
+- Notification：`G.self_check_done`、`G.handle_reinit_req`、`G.gen_state`、axis4 状态和看门狗状态；
+- 事件缓存：`G.init_pos/G.leftlimit` 只在连接、重连、自检完成上升沿和重同步时刷新；
+- 运行期专项请求：`G.v_limit`、启动资格和计划回退等由通信服务队列串行执行。
+
+`G.act_pos_from_left/G.refer_from_left` 仍由 PLC 维护，但正常上位机不再读取。详细频率与符号方向见《PLC全局变量与ADS接口.md》。
 
 6.5 当前手柄与按键映射
 根据 `按钮说明.txt`，`buttons2` 常见空闲值为 `0x06`，按位映射为：
@@ -646,7 +643,7 @@ PLC `G.leftlimit / G.Act_pos / G.init_pos / G.self_check_done / G.handle_reinit_
   - 然后清除该标志
 
 6.11 自检完成后的上位机行为
-上位机轮询 `G.self_check_done`：
+上位机通过 OnChange Notification 监听 `G.self_check_done`，注册时另读取一次初值：
 - 若检测到它从 `FALSE -> TRUE`
   - 恢复启动阶段可能缩放过的 `v_limit`
   - 清空导丝模式

@@ -7,6 +7,8 @@ namespace AdsControlUI
     {
         private readonly AdsControlViewModel _vm;
         private ForceRealtimeWindow _forceWindow;
+        private CleanForceWindow _cleanForceWindow;
+        private CameraPreviewWindow _cameraPreviewWindow;
         private ForceTransitionWindow _ftExpWindow;
 
         public MainWindow()
@@ -21,6 +23,8 @@ namespace AdsControlUI
         {
             _vm.StateUpdated -= Vm_StateUpdated;
             _forceWindow?.Close();
+            _cleanForceWindow?.Close();
+            _cameraPreviewWindow?.Close();
             _ftExpWindow?.Close();
             _vm.Dispose();
             base.OnClosed(e);
@@ -60,7 +64,6 @@ namespace AdsControlUI
         private void Zero_Click(object sender, RoutedEventArgs e) => _vm.ZeroForceSensor();
         private void FfToggle_Click(object sender, RoutedEventArgs e) => _vm.ToggleForceFeedback();
         private void GravityComp_Click(object sender, RoutedEventArgs e) => _vm.SetGravityCompensation(GravityCompCheckBox.IsChecked == true);
-        private void ForceLog_Click(object sender, RoutedEventArgs e) => _vm.ToggleForceLog();
         private void TrackingCompensation_Click(object sender, RoutedEventArgs e)
         {
             if (sender is ToggleButton button)
@@ -89,13 +92,13 @@ namespace AdsControlUI
                 return;
             }
 
-            bool gainsValid = a1Gain > 1.0 && a1Gain <= 1.50 && a6Gain > 1.0 && a6Gain <= 1.50;
-            bool errorsValid = a1Error > 0.0 && a1Error <= 20.0 && a6Error > 0.0 && a6Error <= 20.0;
-            bool piValid = a1Kp >= 0.0 && a1Kp <= 1.0 && a1Ki >= 0.0 && a1Ki <= 1.0 &&
-                           a6Kp >= 0.0 && a6Kp <= 1.0 && a6Ki >= 0.0 && a6Ki <= 1.0;
-            if (!gainsValid || !errorsValid || !piValid)
-            {
-                TrackingError.Text = "Kp/Ki 范围为 0-1，最大增益为 (1, 1.50]，换手欠账上界为 (0, 20] mm。";
+			bool gainsValid = a1Gain > 1.0 && a1Gain <= 5.0 && a6Gain > 1.0 && a6Gain <= 5.0;
+			bool errorsValid = a1Error > 0.0 && a1Error <= 20.0 && a6Error > 0.0 && a6Error <= 20.0;
+			bool piValid = a1Kp >= 0.0 && a1Kp <= 1.0 && a1Ki >= 0.0 && a1Ki <= 100.0 &&
+						   a6Kp >= 0.0 && a6Kp <= 1.0 && a6Ki >= 0.0 && a6Ki <= 100.0;
+			if (!gainsValid || !errorsValid || !piValid)
+			{
+				TrackingError.Text = "Kp 范围为 0-1，Ki 范围为 0-100，最大增益为 (1, 5]，换手欠账上界为 (0, 20] mm。";
                 return;
             }
 
@@ -155,8 +158,62 @@ namespace AdsControlUI
         private void Vm_StateUpdated(VisState state)
         {
             _forceWindow?.AddState(state);
+			_cleanForceWindow?.AddState(state);
+			_cameraPreviewWindow?.OnState(state);
             _ftExpWindow?.OnState(state);
         }
+
+		private void StartExperimentRecording_Click(object sender, RoutedEventArgs e)
+		{
+			if (_vm.CanStartExperimentRecording)
+				_vm.StartExperimentRecording(TbExperimentName.Text);
+		}
+
+		private void StopExperimentRecording_Click(object sender, RoutedEventArgs e)
+		{
+			if (_vm.CanStopExperimentRecording)
+				_vm.StopExperimentRecording();
+		}
+
+		private void ShowCameraPreview_Click(object sender, RoutedEventArgs e)
+		{
+			if (_cameraPreviewWindow == null)
+			{
+				_cameraPreviewWindow = new CameraPreviewWindow { Owner = this };
+				_cameraPreviewWindow.Closed += (s, args) =>
+				{
+					_vm.SetCameraPreview(false);
+					_cameraPreviewWindow = null;
+				};
+				_vm.SetCameraPreview(true);
+				_cameraPreviewWindow.Show();
+			}
+			else
+			{
+				_cameraPreviewWindow.Activate();
+			}
+			_cameraPreviewWindow?.OnState(_vm.LatestState);
+		}
+
+		private void ShowCleanForce_Click(object sender, RoutedEventArgs e)
+		{
+			if (_cleanForceWindow == null)
+			{
+				_cleanForceWindow = new CleanForceWindow { Owner = this };
+				_cleanForceWindow.Closed += (s, args) =>
+				{
+					_vm.SetCleanForceMonitor(false);
+					_cleanForceWindow = null;
+				};
+				_vm.SetCleanForceMonitor(true);
+				_cleanForceWindow.Show();
+			}
+			else
+			{
+				_cleanForceWindow.Activate();
+			}
+			_cleanForceWindow?.AddState(_vm.LatestState);
+		}
 
         private void ShowFtExp_Click(object sender, RoutedEventArgs e)
         {

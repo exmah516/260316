@@ -1,120 +1,136 @@
-ADS 分频通讯修改说明
-=====================
+ADS 100 Hz 通讯优化说明
+=======================
 
-文档目的
+文档状态
 --------
-说明本次 ADS 通讯改动的影响、后续调用方式差异，以及与其它电脑/软件的兼容性。
+更新时间：2026-08-03。
+
+本文件原先描述的“主循环分频双包读取”已经停用。当前实现以独立
+AdsCommunicationService 为唯一的运行期 ADS 调度者；详细符号表、超时状态机和
+接口说明见《ADS通讯说明.md》。
 
 
-一、改动内容概述
-----------------
-本次修改没有改变 PLC 变量名、PLC 数据结构、ADS 路由方式，只优化了上位机读取方式：
-
-1) 新增批量读取接口（C++ 封装层）
-- 在 CADSComm 中新增：
-  bool ADSReadSum(const char* const* symbols,
-                  const unsigned long* lengths,
-                  void* const* outputs,
-                  unsigned long count);
-
-2) 主循环改为“分频双包”读取
-- 高频包（每帧）一次读取 3 组数组：
-  G.act_pos[7] + G.init_pos[7] + G.leftlimit[7]
-- 低频包（每 5 帧）一次读取 2 组数组：
-  G.act_pos_from_left[7] + G.refer_from_left[7]
-
-3) 力传感器读取保持原有降频策略
-- 仍按当前逻辑（每 10 帧）读取，不与控制读包耦合。
-
-
-二、对系统行为的影响
---------------------
-1) 正向影响
-- ADS 网络往返次数减少，主循环通讯耗时通常会下降。
-- 控制循环中通讯抖动源减少，整体时序更稳定。
-- 读取数据的“同包一致性”更好（同一个 Sum 包内的数据来自同次请求）。
-
-2) 可能的副作用（属于预期行为变化）
-- 错误粒度变化：单变量时代是“某一条 ADSRead 失败”；现在是“一个 Sum 调用中某子项失败会让本次 Sum 返回 false”。
-- 单次包体略大：但总往返减少，通常收益仍为正。
-- 调试时需要看子项错误码（封装已把子项索引/符号写入 LastError）。
-
-3) 运动逻辑影响
-- 无直接影响。该改动不改变状态机、不改变回退规划块、不改变气缸时序。
-- 属于“通讯层优化”，不是“控制策略重写”。
-
-
-三、后续调用方式与旧版区别
---------------------------
-1) 旧版调用（单变量多次）
-- 每个符号单独 ADSRead，一次循环内可能调用多次。
-
-2) 新版调用（多变量一次）
-- 把多个符号、长度、输出地址按数组传入 ADSReadSum。
-- 典型场景：把同频率读取的变量打成同一个包。
-
-3) 兼容性（对你现有代码）
-- 旧接口 ADSRead/ADSWrite 仍保留，可继续使用。
-- 新增 ADSReadSum 是“增量能力”，不是替换/删除旧接口。
-
-4) 建议的使用边界
-- 同频率、同优先级、强关联的数据适合合包。
-- 低频监测量（如调试量、日志量）建议独立降频包，不要塞进高频控制包。
-
-
-四、与其它电脑/其它软件的通讯兼容性
-----------------------------------
-结论：一般不会造成“无法通讯”。
-
-原因如下：
-1) PLC 对外符号接口没有变化
-- 变量名、类型、数组长度未改。
-- 对方软件只要读写相同符号，仍可正常通讯。
-
-2) 协议仍是标准 ADS
-- 本次使用的是 ADS Sum Read（ADSIGRP_SUMUP_READ，标准组命令）。
-- 不是私有协议，不会破坏 ADS 路由机制。
-
-3) 旧客户端仍可用
-- 对方软件即使继续用“单变量 ADSRead”，也可与同一 PLC 正常通讯。
-- 不要求对方必须使用 ADSReadSum。
-
-需要注意的前提条件：
-1) 对方软件若“依赖你这个 C++ 封装库并重新编译接入”，需要同步头文件/实现（新增函数声明）。
-2) 若对方软件是独立工程（直接用自己的 ADS SDK），通常无需任何改动。
-3) 真正会导致无法通讯的常见原因仍是：
-- AMS NetId/端口/路由未配置
-- PLC 不在 RUN
-- 目标机防火墙或权限限制
-- 符号名拼写或类型不一致
-
-
-五、建议的联调检查清单
-----------------------
-1) 通讯连通性
-- 先验证 AdsSyncReadStateReqEx 正常。
-- 验证单变量读（ADSRead）和批量读（ADSReadSum）都可成功。
-
-2) 数据一致性
-- 同一时刻对比：
-  act_pos/init_pos/leftlimit
-  act_pos_from_left/refer_from_left
-- 确认与改动前数值范围一致。
-
-3) 失败诊断
-- 若 ADSReadSum 返回 false，优先查看 GetLastError：
-  是否是总调用失败，还是某个子项错误码非 0。
-
-4) 性能观察
-- 统计主循环耗时均值与峰值（P95/最大值），确认分频合包收益。
-
-
-六、版本结论
+一、当前架构
 ------------
-这是一次“向后兼容”的通讯优化：
-- 对 PLC 接口兼容；
-- 对旧 ADSRead 调用兼容；
-- 对跨电脑 ADS 通讯机制兼容；
-- 主要收益是降低往返开销与时序抖动。
+1) 上位机启动阶段建立 ADS 路由，确认 PLC 已经处于 ADSSTATE_RUN。
 
-如果后续需要继续扩展，可把其它同频读取也迁移到 ADSReadSum，但建议保持“控制高频包”和“观测低频包”分离。
+2) 连接和重连只检查 PLC 状态，不自动把 STOP/CONFIG 切到 RUN，也不执行
+Activate Configuration。
+
+3) AdsCommunicationService 使用 QPC 绝对截止时间按 10 ms 周期运行，目标频率
+100 Hz。服务启动后，高频通信和运行期专项低频 ADS 请求都由该线程串行执行；
+主循环只消费内存快照、提交输出命令或等待专项请求结果。
+
+4) 服务启动前的初始化检查以及独立的 --sensor-calibration 工具保留同步直连，
+不与正常控制线程并发访问同一个 CADSComm。
+
+
+二、100 Hz 快速输入
+-------------------
+每个通信周期使用一次 Sum Read 获取：
+
+- TwinCAT PLC Task 的 CycleCount（包首和包尾各一次）与 DcTaskTime；
+- 7 轴 NcToPlc.ActPos；
+- G.fn_1_value、G.ft_1_value、G.fn_2_value、G.ft_2_value；
+- G.estop_hold_req 与 G.host_comm_timeout。
+
+整次 ADS 调用前后 QPC 的中点作为 AdsFastSnapshot.qpc_ticks。若 Sum Read 失败、
+PLC 周期跨度超过限制或设备状态异常，该尝试序号仍发布一份无效快照，消费者不得
+把上一次有效值伪装成新样本。
+
+上位机根据缓存坐标计算：
+
+Act_pos = NcToPlc.ActPos - init_pos
+act_pos_from_left = Act_pos + init_pos - leftlimit
+
+init_pos 和 leftlimit 仅在首次连接、重连、自检完成上升沿或显式重同步时刷新。
+正常 100 Hz 路径不再读取 G.act_pos_from_left 或 G.refer_from_left。
+
+
+三、状态变化通知
+----------------
+self_check_done、handle_reinit_req、gen_state、axis4 状态、estop_hold_req 和 PLC
+看门狗状态使用 ADSTRANS_SERVERONCHA Notification。注册后先批量读取一次初值；
+ADS 回调只复制数据并唤醒工作线程，不在回调中继续发起 ADS 请求。
+
+Notification 是状态变化通道，不替代 100 Hz 力和位置 Sum Read。它减少不必要的
+轮询，不会把每个状态变量变成额外的周期网络往返。
+
+
+四、100 Hz 输出与专项请求
+-------------------------
+每个正常通信周期最多使用一次 Sum Write，下发：
+
+- host_session_id 和递增的 host_heartbeat_sequence；
+- 有效期内的 refer[7]、axis1_fast_return 和 axis6_fast_retract；
+- 发生变化或失败待重试的气缸、axis4 请求和平滑旁路；
+- 按需的 host_recover_req 恢复握手。
+
+离散输出的脏状态只比较离散字段，refer 每拍变化不会导致气缸、axis4 或平滑旁路
+被误判为每拍都需要重发。
+
+计划回退使用运行期专项请求队列：先清 Req 并批量写目标、速度、加速度、减速度、
+jerk，下一事务再置 Req；Busy/Done/Error/ErrorId 用一次 Sum Read 获取。专项请求与
+快速周期在同一通信线程串行执行，避免主循环和通信线程同时操作 ADS 端口。
+
+
+五、主循环契约
+--------------
+主循环等待并复制完整的 AdsFastSnapshot，不直接执行周期性 ADSRead/ADSWrite：
+
+- read_plc_state 和 ADS 模式的 read_force_sample 只复制最新快照；
+- 主循环把 refer、快退、气缸、axis4 和平滑旁路组成 AdsOutputCommand；
+- 低频专项动作提交到通信服务队列；
+- CSV 路径只做非阻塞入队，不执行磁盘 I/O。
+
+WPF VisState 约 30 Hz 只是界面状态推送频率，不代表 ADS、力或运动记录频率。
+
+
+六、记录频率与时间语义
+----------------------
+- ADS 快速尝试：目标 100 Hz；
+- force.csv：每个 ADS 尝试序号最多一行，目标 100 Hz；
+- motion.csv：取偶数 attempt_sequence，目标 50 Hz；
+- WPF VisState：约 30 Hz；
+- Action 4 视频：实际协商参数，目标 30 fps。
+
+ADS 失败时 force.csv/motion.csv 保留对应时间槽并写 valid=0 与 NaN，不突发补写
+历史行。力、位置和视频旁车均映射到同一会话 QPC 时基。
+
+
+七、失败、重连和 PLC 重启
+--------------------------
+第一次 ADS 失败立即进入软保持：保持最后 refer、清零手柄力输出并丢弃故障期间的
+手柄增量。100 ms 内恢复时用新鲜位置和当前手柄重建基准，不补发积累位移。
+
+连续 100 ms 没有完整成功周期后进入退避重连；退避期间仍按 100 Hz 发布无效快照，
+使记录中的故障持续时间可见。重连不会自动切换 PLC 到 RUN。
+
+PLC Task 计数/时间回退、设备状态离开 RUN、自检重新开始或应用身份变化按 PLC
+重启处理。上位机清坐标缓存和力零点，关闭反馈/PI及运动模式，要求重新自检、调零
+和人工启动；统一实验记录可继续写无效行。
+
+PLC 端主机看门狗要求 heartbeat_sequence 在 100 ms 内变化。超时时冻结外部参考，
+清除快退、axis4 和平滑旁路请求，对正在执行的计划回退或 axis4 运动受控停止；
+气缸保持最后状态。
+
+
+八、兼容性与本轮边界
+--------------------
+- PLC 既有运动符号和四路力 PDO 映射不因本次优化改变；
+- ADSRead/ADSWrite 兼容接口仍保留，供初始化或独立工具使用；
+- 正常控制使用标准 ADS Sum Read、Sum Write 和 Notification，不是私有协议；
+- 本轮不增加 PLC 力采样环形缓存，也不使用 write_sequence；
+- 不依据离线 Box 编号猜测或修改 PDO，不激活离线 EtherCAT 配置。
+
+
+九、联调检查
+------------
+1) 确认 PLC 已在 RUN，连接过程没有状态切换调用。
+2) 统计正常运行每周期最多一次快速 Sum Read 和一次统一 Sum Write。
+3) 确认实际 ADS 频率稳定在 95-105 Hz，快照 QPC 单调。
+4) 确认 force.csv 约 100 Hz、motion.csv 约 50 Hz，无重复序号和突发补写。
+5) 注入单拍和小于 100 ms 丢包，确认软保持及恢复无跳变。
+6) 断开 ADS 超过 100 ms，确认 PLC 看门狗受控停止且上位机持续重连。
+7) 分别验证同 PLC 重连和 PLC 重启；后者必须重新自检、调零和人工启动。
+8) 实机下载前在线核对四路力当前 PDO 映射，不执行 Activate Configuration。

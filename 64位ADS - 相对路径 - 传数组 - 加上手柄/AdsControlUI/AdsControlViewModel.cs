@@ -30,23 +30,29 @@ namespace AdsControlUI
         private const double PosEpsilon = 1e-4;
         private const double ForceEpsilon = 1e-6;
 
-        private bool _hasUiSnapshot;
-        private bool _prevConnected;
-        private VisState _prevState;
+		private bool _hasUiSnapshot;
+		private bool _prevConnected;
+		private VisState _prevState;
+		private string _physicalButtonNoticeText = "";
 
         private void RefreshFromPipe()
         {
             bool connected = _client.IsConnected;
             if (!_client.TryGetLatestState(out var state))
             {
+				bool connectionChanged = _prevConnected != connected;
                 NotifyIfChanged(ref _prevConnected, connected, nameof(IsConnected));
+				if (connectionChanged)
+					NotifyAdsProperties();
                 return;
             }
 
-            _state = state;
-            if (!_hasUiSnapshot)
-            {
-                NotifyAllUiProperties();
+			_state = state;
+			if (!_hasUiSnapshot)
+			{
+				if (state.physical_button_event_counter != 0)
+					_physicalButtonNoticeText = PhysicalButtonEventText(state.physical_button_event_code);
+				NotifyAllUiProperties();
                 _prevState = state;
                 _prevConnected = connected;
                 _hasUiSnapshot = true;
@@ -110,7 +116,7 @@ namespace AdsControlUI
             if (CylOpenChanged(prev, state, 3)) OnPropertyChanged(nameof(Cyl4Open));
 
             // 模式与方向
-            if (prev.guidewire_mode != state.guidewire_mode ||
+			if (prev.guidewire_mode != state.guidewire_mode ||
                 prev.axis1_reverse != state.axis1_reverse ||
                 prev.axis6_reverse != state.axis6_reverse ||
                 prev.cooperative_direction != state.cooperative_direction)
@@ -124,8 +130,13 @@ namespace AdsControlUI
                 OnPropertyChanged(nameof(ModeCooperativeRetractionSelected));
                 OnPropertyChanged(nameof(CooperativeStatusText));
                 OnPropertyChanged(nameof(Axis1Reverse));
-                OnPropertyChanged(nameof(Axis6Reverse));
-            }
+				OnPropertyChanged(nameof(Axis6Reverse));
+			}
+			if (prev.physical_button_event_counter != state.physical_button_event_counter)
+			{
+				_physicalButtonNoticeText = PhysicalButtonEventText(state.physical_button_event_code);
+				OnPropertyChanged(nameof(PhysicalButtonNoticeText));
+			}
 
             if (prev.control_active != state.control_active)
             {
@@ -145,7 +156,6 @@ namespace AdsControlUI
             if (prev.ff_enabled != state.ff_enabled) OnPropertyChanged(nameof(FfEnabled));
             if (prev.cal_zeroed != state.cal_zeroed) OnPropertyChanged(nameof(CalZeroed));
             if (prev.gravity_comp_enabled != state.gravity_comp_enabled) OnPropertyChanged(nameof(GravityCompEnabled));
-            if (prev.force_log_running != state.force_log_running) OnPropertyChanged(nameof(ForceLogRunning));
             if (prev.startup_waiting != state.startup_waiting) OnPropertyChanged(nameof(StartupWaiting));
             if (prev.startup_completed != state.startup_completed)
             {
@@ -212,8 +222,9 @@ namespace AdsControlUI
                 OnPropertyChanged(nameof(ModeGuideFwdSelected));
                 OnPropertyChanged(nameof(ModeGuideRevSelected));
                 OnPropertyChanged(nameof(ModeCooperativeDeliverySelected));
-                OnPropertyChanged(nameof(ModeCooperativeRetractionSelected));
-                OnPropertyChanged(nameof(ModeSwitchAllowed));
+			OnPropertyChanged(nameof(ModeCooperativeRetractionSelected));
+			OnPropertyChanged(nameof(PhysicalButtonNoticeText));
+			OnPropertyChanged(nameof(ModeSwitchAllowed));
                 OnPropertyChanged(nameof(CooperativeModeEnabled));
                 OnPropertyChanged(nameof(CooperativeStatusText));
                 OnPropertyChanged(nameof(PhaseText));
@@ -231,21 +242,23 @@ namespace AdsControlUI
             OnPropertyChanged(nameof(ModeCathRevSelected));
             OnPropertyChanged(nameof(ModeGuideFwdSelected));
             OnPropertyChanged(nameof(ModeGuideRevSelected));
-            OnPropertyChanged(nameof(ModeCooperativeDeliverySelected));
-            OnPropertyChanged(nameof(ModeCooperativeRetractionSelected));
-			OnPropertyChanged(nameof(TrackingLogRunning));
+			OnPropertyChanged(nameof(ModeCooperativeDeliverySelected));
+			OnPropertyChanged(nameof(ModeCooperativeRetractionSelected));
 			OnPropertyChanged(nameof(TrackingCompensationEnabled));
 			OnPropertyChanged(nameof(Axis1TrackingError));
 			OnPropertyChanged(nameof(Axis6TrackingError));
 			OnPropertyChanged(nameof(Axis1CompensationGain));
 			OnPropertyChanged(nameof(Axis6CompensationGain));
-			OnPropertyChanged(nameof(TrackingLogDropped));
 			OnPropertyChanged(nameof(TrackingCompensationCanEnable));
 			OnPropertyChanged(nameof(TrackingCompensationToggleEnabled));
 			OnPropertyChanged(nameof(TrackingParametersEditable));
 			OnPropertyChanged(nameof(TrackingStatusText));
+			NotifyExperimentProperties();
+			NotifyAdsProperties();
 
             NotifyIfChanged(ref _prevConnected, connected, nameof(IsConnected));
+			OnPropertyChanged(nameof(CanStartExperimentRecording));
+			OnPropertyChanged(nameof(CanOpenCameraPreview));
             _prevState = state;
             StateUpdated?.Invoke(state);
         }
@@ -305,7 +318,6 @@ namespace AdsControlUI
             OnPropertyChanged(nameof(IsConnected));
             OnPropertyChanged(nameof(Axis1Reverse));
             OnPropertyChanged(nameof(Axis6Reverse));
-            OnPropertyChanged(nameof(ForceLogRunning));
             OnPropertyChanged(nameof(StartupWaiting));
             OnPropertyChanged(nameof(StartupCompleted));
             OnPropertyChanged(nameof(PhaseText));
@@ -321,18 +333,51 @@ namespace AdsControlUI
             OnPropertyChanged(nameof(SpacingRecoveryActive));
             OnPropertyChanged(nameof(SpacingRecoveryInactive));
             OnPropertyChanged(nameof(SpacingRecoveryStatusText));
-			OnPropertyChanged(nameof(TrackingLogRunning));
 			OnPropertyChanged(nameof(TrackingCompensationEnabled));
 			OnPropertyChanged(nameof(Axis1TrackingError));
 			OnPropertyChanged(nameof(Axis6TrackingError));
 			OnPropertyChanged(nameof(Axis1CompensationGain));
 			OnPropertyChanged(nameof(Axis6CompensationGain));
-			OnPropertyChanged(nameof(TrackingLogDropped));
 			OnPropertyChanged(nameof(TrackingCompensationCanEnable));
 			OnPropertyChanged(nameof(TrackingCompensationToggleEnabled));
 			OnPropertyChanged(nameof(TrackingParametersEditable));
 			OnPropertyChanged(nameof(TrackingStatusText));
+			NotifyExperimentProperties();
+			NotifyAdsProperties();
         }
+
+		private void NotifyExperimentProperties()
+		{
+			OnPropertyChanged(nameof(RecordingState));
+			OnPropertyChanged(nameof(RecordingStateText));
+			OnPropertyChanged(nameof(RecordingErrorText));
+			OnPropertyChanged(nameof(RecordingElapsedText));
+			OnPropertyChanged(nameof(RecordingLossText));
+			OnPropertyChanged(nameof(CanStartExperimentRecording));
+			OnPropertyChanged(nameof(CanStopExperimentRecording));
+			OnPropertyChanged(nameof(ExperimentNameEditable));
+			OnPropertyChanged(nameof(CameraStatusText));
+			OnPropertyChanged(nameof(CameraParameterText));
+			OnPropertyChanged(nameof(CameraRecordingElapsedText));
+			OnPropertyChanged(nameof(CameraRecording));
+			OnPropertyChanged(nameof(CanOpenCameraPreview));
+			OnPropertyChanged(nameof(ForceSampleValid));
+			OnPropertyChanged(nameof(CleanForceValid));
+			OnPropertyChanged(nameof(RawFnVoltage));
+			OnPropertyChanged(nameof(RawFtVoltage));
+			OnPropertyChanged(nameof(CleanForceN));
+			OnPropertyChanged(nameof(CleanHandleTorqueNm));
+		}
+
+		private void NotifyAdsProperties()
+		{
+			OnPropertyChanged(nameof(AdsState));
+			OnPropertyChanged(nameof(AdsHealthy));
+			OnPropertyChanged(nameof(HostCommTimeout));
+			OnPropertyChanged(nameof(AdsStateText));
+			OnPropertyChanged(nameof(AdsDiagnosticsText));
+			OnPropertyChanged(nameof(AdsCounterText));
+		}
 
         private static bool Changed(double a, double b, double eps) => Math.Abs(a - b) > eps;
 
@@ -366,6 +411,44 @@ namespace AdsControlUI
         }
 
         public bool IsConnected => _client.IsConnected;
+		public int AdsState => _state.ads_state;
+		public bool HostCommTimeout => _state.host_comm_timeout;
+		public bool AdsHealthy => IsConnected && AdsState == 2 && !HostCommTimeout;
+
+		public string AdsStateText
+		{
+			get
+			{
+				if (!IsConnected) return "上位机管道未连接";
+				if (HostCommTimeout) return "PLC 通信超时";
+				switch (AdsState)
+				{
+					case 0: return "ADS 未启动";
+					case 1: return "ADS 正在连接";
+					case 2: return "ADS 正常";
+					case 3: return "ADS 单拍软保持";
+					case 4: return "ADS 重连中";
+					case 5: return "PLC 已重启，等待人工恢复";
+					case 6: return "ADS 通信错误";
+					default: return $"ADS 未知状态（{AdsState}）";
+				}
+			}
+		}
+
+		public string AdsDiagnosticsText
+		{
+			get
+			{
+				string frequency = _state.ads_actual_hz > 0.0 &&
+					!double.IsNaN(_state.ads_actual_hz) && !double.IsInfinity(_state.ads_actual_hz)
+					? $"{_state.ads_actual_hz:F1} Hz"
+					: "-- Hz";
+				return $"实际频率 {frequency} · 数据龄 {FormatLatency(_state.ads_snapshot_age_us)} · RTT {FormatLatency(_state.ads_rtt_us)}";
+			}
+		}
+
+		public string AdsCounterText =>
+			$"失败 {_state.ads_failed_cycles} · 重连 {_state.ads_reconnect_count} · PLC 重启 {_state.plc_restart_count}";
         public double Axis1Pos => GetAxisPos(0);
         public double Axis2Pos => GetAxisPos(1);
         public double Axis3Pos => GetAxisPos(2);
@@ -431,7 +514,22 @@ namespace AdsControlUI
             _state.cooperative_direction == 2;
         public bool DualHandleReady => _state.dual_handle_ready;
         public int CooperativeReturnOwner => _state.cooperative_return_owner;
-        public bool ModeSwitchAllowed => SpacingRecoveryInactive && CooperativeReturnOwner == 0;
+		public bool ModeSwitchAllowed => CooperativeReturnOwner == 0;
+		public string PhysicalButtonNoticeText => _physicalButtonNoticeText;
+
+		private static string PhysicalButtonEventText(int eventCode)
+		{
+			switch (eventCode)
+			{
+				case 1: return "物理按钮触发：导管递送";
+				case 2: return "物理按钮触发：导管撤出";
+				case 3: return "物理按钮触发：导丝递送";
+				case 4: return "物理按钮触发：导丝撤出";
+				case 5: return "物理按钮触发：协同递送";
+				case 6: return "物理按钮触发：协同撤出";
+				default: return "物理按钮触发";
+			}
+		}
         public bool Axis6SoftLimitHold => _state.axis6_soft_limit_hold;
         public string Axis6SoftLimitText => Axis6SoftLimitHold
             ? "轴6软件限位：当前动作已阻断，松手或回到安全窗口后自动重新评估。"
@@ -459,14 +557,11 @@ namespace AdsControlUI
                 return "双手柄就绪：587 导管，582 导丝";
             }
         }
-        public bool ForceLogRunning => _state.force_log_running;
-		public bool TrackingLogRunning => _state.tracking_log_running;
 		public bool TrackingCompensationEnabled => _state.tracking_compensation_enabled;
 		public double Axis1TrackingError => _state.axis1_tracking_error_mm;
 		public double Axis6TrackingError => _state.axis6_tracking_error_mm;
 		public double Axis1CompensationGain => _state.axis1_compensation_gain;
 		public double Axis6CompensationGain => _state.axis6_compensation_gain;
-		public ulong TrackingLogDropped => _state.tracking_log_dropped;
 		public bool TrackingParametersEditable => !TrackingCompensationEnabled;
 		public bool TrackingCompensationCanEnable
 		{
@@ -474,7 +569,7 @@ namespace AdsControlUI
 			{
 				bool forwardMode = (_state.guidewire_mode == 0 && !_state.axis1_reverse) ||
 					(_state.guidewire_mode == 1 && !_state.axis6_reverse);
-				return TrackingLogRunning && ControlActive && !FreezeActive && !EstopHold &&
+				return ControlActive && !FreezeActive && !EstopHold &&
 					!SpacingRecoveryActive && !FtExpActive && forwardMode &&
 					_state.axis1_phase == 0 && _state.axis6_phase == 0;
 			}
@@ -485,10 +580,8 @@ namespace AdsControlUI
 		{
 			get
 			{
-				if (!TrackingLogRunning) return "自动记录启动失败";
 				string compensation = TrackingCompensationEnabled ? "补偿已开启" : "补偿关闭";
-				string dropped = TrackingLogDropped > 0 ? $" · 丢弃 {TrackingLogDropped}" : "";
-				return $"自动 20 Hz 记录 · {compensation} · 轴1换手待补 {Axis1TrackingError:F3} mm / 增益 {Axis1CompensationGain:F3} · 轴6换手待补 {Axis6TrackingError:F3} mm / 增益 {Axis6CompensationGain:F3}{dropped}";
+				return $"{compensation} · 轴1换手待补 {Axis1TrackingError:F3} mm / 增益 {Axis1CompensationGain:F3} · 轴6换手待补 {Axis6TrackingError:F3} mm / 增益 {Axis6CompensationGain:F3}";
 			}
 		}
         public bool StartupWaiting => _state.startup_waiting;
@@ -518,6 +611,121 @@ namespace AdsControlUI
         public double Force582TheoryN => _state.force_582_theory_n;
         public bool GravityCompEnabled => _state.gravity_comp_enabled;
         public VisState LatestState => _state;
+
+		public int RecordingState => _state.recording_state;
+		public bool CanStartExperimentRecording => IsConnected && (RecordingState == 0 || RecordingState == 4);
+		public bool CanStopExperimentRecording => IsConnected && RecordingState == 2;
+		public bool ExperimentNameEditable => RecordingState == 0 || RecordingState == 4;
+		public bool CameraRecording => _state.camera_recording;
+		public bool CanOpenCameraPreview => IsConnected;
+		public bool ForceSampleValid => _state.force_sample_valid;
+		public bool CleanForceValid => _state.clean_force_valid;
+		public double RawFnVoltage => _state.fn_1_v;
+		public double RawFtVoltage => _state.ft_1_v;
+		public double CleanForceN => _state.clean_force_n;
+		public double CleanHandleTorqueNm => _state.clean_handle_torque_nm;
+
+		public string RecordingStateText
+		{
+			get
+			{
+				switch (RecordingState)
+				{
+					case 1: return "正在启动";
+					case 2: return "记录中";
+					case 3: return "正在停止并封装";
+					case 4: return "启动失败";
+					default: return "空闲";
+				}
+			}
+		}
+
+		public string RecordingErrorText
+		{
+			get
+			{
+				switch (_state.recording_error)
+				{
+					case 1: return "实验名称不是有效的 UTF-8 文本";
+					case 2: return "无法创建会话目录";
+					case 3: return "无法创建 force.csv";
+					case 4: return "无法创建 motion.csv";
+					case 5: return "force.csv 写入失败，记录已自动停止";
+					case 6: return "motion.csv 写入失败，记录已自动停止";
+					case 7: return "无法启动停止后台线程";
+					case 8: return "力过渡专用 CSV 写入失败，统一记录已自动停止";
+					case 9: return "video_frames.csv 写入失败，统一记录已自动停止";
+					default: return "";
+				}
+			}
+		}
+
+		public string RecordingElapsedText => FormatElapsed(_state.recording_elapsed_us);
+		public string CameraRecordingElapsedText => FormatElapsed(_state.camera_recording_elapsed_us);
+
+		public string RecordingLossText
+		{
+			get
+			{
+				ulong dropped = _state.force_writer_dropped + _state.motion_writer_dropped;
+				ulong forceMissed = _state.force_schedule_missed;
+				ulong motionMissed = _state.motion_schedule_missed;
+				ulong missed = forceMissed + motionMissed;
+				return dropped == 0 && missed == 0
+					? "CSV 队列与采样调度正常"
+					: $"队列丢样 {dropped} · 调度错过：力 {forceMissed} / 位置 {motionMissed}";
+			}
+		}
+
+		public string CameraStatusText
+		{
+			get
+			{
+				switch (_state.camera_state)
+				{
+					case 1: return "正在打开摄像设备：OsmoAction4";
+					case 2: return "摄像设备预览中：OsmoAction4";
+					case 3: return "摄像设备录像中：OsmoAction4";
+					case 4: return "无法找到摄像设备：OsmoAction4";
+					case 5: return "摄像设备已断开：OsmoAction4";
+					case 6: return $"摄像设备错误：OsmoAction4（0x{unchecked((uint)_state.camera_error_code):X8}）";
+					default: return "摄像设备未打开：OsmoAction4";
+				}
+			}
+		}
+
+		public string CameraParameterText
+		{
+			get
+			{
+				if (_state.camera_width <= 0 || _state.camera_height <= 0)
+					return "等待实际视频参数";
+				double fps = _state.camera_fps_denominator > 0
+					? (double)_state.camera_fps_numerator / _state.camera_fps_denominator
+					: 0.0;
+				string input = _state.camera_input_format == 1 ? "H.264" :
+					(_state.camera_input_format == 2 ? "MJPEG" :
+					(_state.camera_input_format == 3 ? "RGB32" : "未知"));
+				return $"{_state.camera_width}×{_state.camera_height} · {fps:F1} fps · 输入 {input} · 输出 H.264 / 无音频";
+			}
+		}
+
+		private static string FormatElapsed(ulong elapsedUs)
+		{
+			TimeSpan value = TimeSpan.FromMilliseconds(elapsedUs / 1000.0);
+			return value.ToString(@"hh\:mm\:ss");
+		}
+
+		private static string FormatLatency(ulong elapsedUs)
+		{
+			if (elapsedUs == ulong.MaxValue)
+				return "--";
+			if (elapsedUs >= 1_000_000)
+				return $"{elapsedUs / 1_000_000.0:F2} s";
+			if (elapsedUs >= 1_000)
+				return $"{elapsedUs / 1_000.0:F1} ms";
+			return $"{elapsedUs} us";
+		}
 
         public bool SpacingRecoveryActive => _state.spacing_recovery_phase != 0;
         public bool SpacingRecoveryInactive => !SpacingRecoveryActive;
@@ -640,9 +848,6 @@ namespace AdsControlUI
         public void SetGravityCompensation(bool enabled) =>
             _client.SendCommand(VisCommandType.SetGravityCompensation, enabled ? 1 : 0);
 
-        public void ToggleForceLog() =>
-            _client.SendCommand(VisCommandType.ToggleForceLog);
-
 		public void SetTrackingCompensation(bool enabled) =>
 			_client.SendCommand(VisCommandType.SetTrackingCompensation, enabled ? 1 : 0);
 
@@ -713,6 +918,22 @@ namespace AdsControlUI
 
         public void StopForceTransitionExperiment() =>
             _client.SendCommand(VisCommandType.StopForceTransitionExperiment);
+
+		public void StartExperimentRecording(string experimentName) =>
+			_client.SendCommand(
+				VisCommandType.StartExperimentRecording,
+				0,
+				0,
+				experimentName ?? string.Empty);
+
+		public void StopExperimentRecording() =>
+			_client.SendCommand(VisCommandType.StopExperimentRecording);
+
+		public void SetCameraPreview(bool enabled) =>
+			_client.SendCommand(VisCommandType.SetCameraPreview, enabled ? 1 : 0);
+
+		public void SetCleanForceMonitor(bool enabled) =>
+			_client.SendCommand(VisCommandType.SetCleanForceMonitor, enabled ? 1 : 0);
 
         public event PropertyChangedEventHandler PropertyChanged;
         private void OnPropertyChanged([CallerMemberName] string name = null) =>

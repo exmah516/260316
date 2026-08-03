@@ -1,6 +1,6 @@
 // 文件职责说明：
-// 1) 实现 control_types.h 中声明的公共工具函数与日志结构方法。
-// 2) 保持与原 main.cpp 一致的时间戳、采样缓冲与基础数学行为。
+// 1) 实现 control_types.h 中声明的公共工具函数。
+// 2) 保持与原 main.cpp 一致的基础数学行为。
 // 3) 不承载模式切换、同步状态机等业务逻辑。
 #include "control_types.h"
 
@@ -12,41 +12,6 @@ void setup_console_utf8()
 	SetConsoleOutputCP(CP_UTF8);
 	SetConsoleCP(CP_UTF8);
 	std::setlocale(LC_ALL, ".UTF-8");
-}
-
-std::string build_force_log_filename()
-{
-	SYSTEMTIME st;
-	GetLocalTime(&st);
-	char name[128] = { 0 };
-	sprintf_s(
-		name,
-		"Force_sensor_%04u%02u%02u_%02u%02u%02u.csv",
-		static_cast<unsigned>(st.wYear),
-		static_cast<unsigned>(st.wMonth),
-		static_cast<unsigned>(st.wDay),
-		static_cast<unsigned>(st.wHour),
-		static_cast<unsigned>(st.wMinute),
-		static_cast<unsigned>(st.wSecond));
-	return std::string(name);
-}
-
-std::string build_force_log_timestamp()
-{
-	SYSTEMTIME st;
-	GetLocalTime(&st);
-	char ts[64] = { 0 };
-	sprintf_s(
-		ts,
-		"%04u-%02u-%02u %02u:%02u:%02u.%03u",
-		static_cast<unsigned>(st.wYear),
-		static_cast<unsigned>(st.wMonth),
-		static_cast<unsigned>(st.wDay),
-		static_cast<unsigned>(st.wHour),
-		static_cast<unsigned>(st.wMinute),
-		static_cast<unsigned>(st.wSecond),
-		static_cast<unsigned>(st.wMilliseconds));
-	return std::string(ts);
 }
 
 double clamp_double(double value, double low, double high)
@@ -116,106 +81,5 @@ void copy_positions(const double* src, double* dst, int count)
 	for (int i = 0; i < count; ++i)
 	{
 		dst[i] = src[i];
-	}
-}
-
-bool ForceLogState::open_file(const std::string& output_name)
-{
-	filename = output_name;
-	file.open(filename.c_str(), std::ios::out | std::ios::trunc);
-	if (!file.is_open())
-	{
-		return false;
-	}
-
-	// 表头沿用历史格式：仅替换 ft_1/fn_1 的来源，不改变列结构。
-	file << "timestamp,ft_1_value,fn_1_value,fn_2_value,ft_2_value,mode_code,reverse_code,push_pull_code,rot_sign_code,axis1_pos_rel\n";
-	last_sample_ms = 0;
-	last_buffer_flush_ms = GetTickCount();
-	return true;
-}
-
-bool ForceLogState::should_sample(DWORD now_ms) const
-{
-	if (!enabled)
-	{
-		return false;
-	}
-	if (period_ms == 0)
-	{
-		return true;
-	}
-	return (last_sample_ms == 0) || ((now_ms - last_sample_ms) >= period_ms);
-}
-
-void ForceLogState::append_sample(
-	DWORD now_ms,
-	double ft1_value,
-	double fn1_value,
-	short fn2_value,
-	short ft2_value,
-	int mode_code,
-	int reverse_code,
-	int push_pull_code,
-	int rot_sign_code,
-	double axis1_pos_rel)
-{
-	last_sample_ms = now_ms;
-	if (!file.is_open())
-	{
-		return;
-	}
-
-	// 先写入内存缓冲，减少每周期磁盘写入对控制环的影响。
-	char line[512] = { 0 };
-	sprintf_s(
-		line,
-		"%s,%.6f,%.6f,%d,%d,%d,%d,%d,%d,%.6f\n",
-		build_force_log_timestamp().c_str(),
-		ft1_value,
-		fn1_value,
-		static_cast<int>(fn2_value),
-		static_cast<int>(ft2_value),
-		mode_code,
-		reverse_code,
-		push_pull_code,
-		rot_sign_code,
-		axis1_pos_rel);
-	line_buffer += line;
-
-	++buffered_lines;
-
-	// 行数达到阈值或超过时间间隔就刷入文件。
-	if (buffered_lines >= 100 || (now_ms - last_buffer_flush_ms) >= 500)
-	{
-		flush(false);
-	}
-}
-
-void ForceLogState::flush(bool force_flush)
-{
-	if (!file.is_open())
-	{
-		return;
-	}
-	if (!line_buffer.empty())
-	{
-		file << line_buffer;
-		line_buffer.clear();
-		buffered_lines = 0;
-	}
-	if (force_flush)
-	{
-		file.flush();
-	}
-	last_buffer_flush_ms = GetTickCount();
-}
-
-void ForceLogState::close()
-{
-	flush(true);
-	if (file.is_open())
-	{
-		file.close();
 	}
 }

@@ -23,6 +23,21 @@ VAR
 	has_axis_error : BOOL;
 	hold_active : BOOL := FALSE;
 
+	// 上位机通信看门狗。超时锁存后只能通过显式恢复握手解除。
+	host_watchdog_timer : TON;
+	host_last_session_id : UDINT := 0;
+	host_last_heartbeat_sequence : UDINT := 0;
+	host_heartbeat_seen : BOOL := FALSE;
+	host_session_changed : BOOL;
+	host_heartbeat_changed : BOOL;
+	host_timeout_latched : BOOL := TRUE;
+	host_timeout_prev : BOOL := FALSE;
+	host_all_stopped : BOOL;
+	host_return_stop_active : ARRAY[1..7] OF BOOL;
+	host_return_stop_exec : ARRAY[1..7] OF BOOL;
+	host_axis4_stop_active : BOOL := FALSE;
+	fb_host_return_stop : ARRAY[1..7] OF MC_Stop;
+
 	right_slimit : ARRAY[1..7] OF LREAL;
 	rslimit_distance	: ARRAY[1..7] OF LREAL := [99.0, 0.0, 666.0, 0.0, 688.0, 688.0, 0.0];
 	slimit_enable : ARRAY[1..7] OF BOOL := [TRUE, FALSE, TRUE, FALSE, TRUE, TRUE, FALSE];
@@ -74,7 +89,34 @@ END_VAR
 
 ]]></Declaration>
     <Implementation>
-      <ST><![CDATA[IF G.handle_reinit_req THEN
+      <ST><![CDATA[host_session_changed := G.host_session_id <> host_last_session_id;
+host_heartbeat_changed := host_session_changed OR
+	(G.host_heartbeat_sequence <> host_last_heartbeat_sequence);
+
+IF host_session_changed THEN
+	// 非零会话发生变化表示新的上位机接管，必须重新完成恢复握手。
+	IF host_last_session_id <> 0 THEN
+		host_timeout_latched := TRUE;
+	END_IF
+	host_last_session_id := G.host_session_id;
+END_IF
+
+IF host_heartbeat_changed THEN
+	host_last_heartbeat_sequence := G.host_heartbeat_sequence;
+END_IF
+
+host_heartbeat_seen := G.host_session_id <> 0;
+// 心跳变化的扫描周期将 TON 复位；序号连续 100 ms 不变化才判定通信超时。
+host_watchdog_timer(
+	IN:=host_heartbeat_seen AND NOT host_heartbeat_changed,
+	PT:=T#100MS
+);
+IF (NOT host_heartbeat_seen) OR host_watchdog_timer.Q THEN
+	host_timeout_latched := TRUE;
+END_IF
+G.host_comm_timeout := host_timeout_latched;
+
+IF G.handle_reinit_req THEN
 	init_done := FALSE;
 	G.handle_reinit_done := FALSE;
 	G.handle_reinit_req := FALSE;
@@ -157,7 +199,8 @@ IF NOT init_done THEN
 		G.axis4_manual_error_id := 0;
 
 		init_done := TRUE;
-		G.handle_reinit_done := TRUE;
+		// 通信超时未解除时不提前确认恢复；正式握手后会再次进入本初始化流程。
+		G.handle_reinit_done := NOT G.host_comm_timeout;
 	END_IF
 	RETURN;
 END_IF
@@ -218,6 +261,149 @@ IF has_axis_error THEN
 	G.gen_state := _err;
 	RETURN;
 END_IF
+
+IF G.host_comm_timeout THEN
+	G.estop_hold_req := TRUE;
+	G.handle_reinit_done := FALSE;
+
+	IF NOT host_timeout_prev THEN
+		// 仅捕获超时发生时已经在运行的独立运动，禁止恢复后自动续跑。
+		FOR i:=1 TO 7 DO
+			host_return_stop_active[i] := return_enable[i] AND
+				((return_state[i] <> 0) OR G.return_cmd[i].Busy OR fb_return_move_abs[i].Busy);
+			host_return_stop_exec[i] := FALSE;
+		END_FOR
+		host_axis4_stop_active := (axis4_manual_state <> 0) OR fb_axis4_move_velocity.Busy;
+	END_IF
+
+	// 超时期间持续清除运动请求，避免上位机重连时把旧请求重新送入状态机。
+	G.axis1_fast_return := FALSE;
+	G.axis6_fast_retract := FALSE;
+	G.axis4_fwd_req := FALSE;
+	G.axis4_rev_req := FALSE;
+	G.startup_smoothing_bypass := FALSE;
+	axis4_move_exec := FALSE;
+	host_all_stopped := TRUE;
+
+	FOR i:=1 TO 7 DO
+		spg_enable_exec[i] := FALSE;
+		spg_disable_exec[i] := FALSE;
+		return_exec[i] := FALSE;
+		G.return_cmd[i].Req := FALSE;
+		G.return_cmd[i].Done := FALSE;
+
+		// 外部参考冻结在当前实际位置；气缸输出不在此分支修改。
+		G.Act_pos[i] := G.axis[i].NcToPlc.ActPos - G.init_pos[i];
+		G.act_pos_from_left[i] := G.axis[i].NcToPlc.ActPos - G.leftlimit[i];
+		G.refer[i] := G.Act_pos[i];
+		G.ref_slow[i] := G.Act_pos[i];
+		G.act_h[i] := G.Act_pos[i];
+		G.act_hf[i] := G.Act_pos[i];
+		G.refer_from_left[i] := G.act_pos_from_left[i];
+		FOR k:=1 TO 30 DO
+			act_hh[i][k] := G.Act_pos[i];
+		END_FOR
+		act_h_prev[i] := G.Act_pos[i];
+		traj_pos[i] := G.Act_pos[i];
+		traj_vel[i] := 0.0;
+		traj_acc[i] := 0.0;
+
+		IF host_return_stop_active[i] THEN
+			IF fb_host_return_stop[i].Done THEN
+				host_return_stop_exec[i] := FALSE;
+				host_return_stop_active[i] := FALSE;
+			ELSIF fb_host_return_stop[i].Error THEN
+				// 拉低一个扫描周期清除错误，下一周期继续尝试受控停止。
+				host_return_stop_exec[i] := FALSE;
+				host_all_stopped := FALSE;
+			ELSE
+				host_return_stop_exec[i] := TRUE;
+				host_all_stopped := FALSE;
+			END_IF
+		ELSE
+			host_return_stop_exec[i] := FALSE;
+		END_IF
+		G.return_cmd[i].Busy := host_return_stop_active[i];
+
+		IF ext_setpoint_enabled[i] THEN
+			MC_ExtSetPointGenFeed(
+				Position:=G.axis[i].NcToPlc.ActPos,
+				Velocity:=0.0,
+				Acceleration:=0.0,
+				Direction:=1,
+				Axis:=G.axis[i]);
+		END_IF
+
+		// 所有运动功能块在看门狗分支中仍保持每扫描调用。
+		G.SetPointGenEnable[i](Axis:=G.axis[i], Execute:=FALSE);
+		G.SetPointGenDisable[i](Axis:=G.axis[i], Execute:=FALSE);
+		fb_return_move_abs[i](
+			Axis:=G.axis[i],
+			Position:=return_target_abs[i],
+			Velocity:=return_velocity[i],
+			Acceleration:=return_acc[i],
+			Deceleration:=return_dec[i],
+			Jerk:=return_jerk[i],
+			Execute:=FALSE
+		);
+		fb_host_return_stop[i](
+			Axis:=G.axis[i],
+			Execute:=host_return_stop_exec[i],
+			Deceleration:=100.0,
+			Jerk:=500.0
+		);
+	END_FOR
+
+	IF host_axis4_stop_active THEN
+		IF fb_axis4_stop.Done THEN
+			axis4_stop_exec := FALSE;
+			host_axis4_stop_active := FALSE;
+		ELSIF fb_axis4_stop.Error THEN
+			// 拉低一个扫描周期清除错误，下一周期继续尝试受控停止。
+			axis4_stop_exec := FALSE;
+			host_all_stopped := FALSE;
+		ELSE
+			axis4_stop_exec := TRUE;
+			host_all_stopped := FALSE;
+		END_IF
+	ELSE
+		axis4_stop_exec := FALSE;
+	END_IF
+	G.axis4_manual_busy := host_axis4_stop_active;
+	G.axis4_manual_done := FALSE;
+
+	fb_axis4_move_velocity(
+		Axis:=G.axis[4],
+		Execute:=FALSE,
+		Velocity:=axis4_manual_velocity,
+		Acceleration:=axis4_manual_acc,
+		Deceleration:=axis4_manual_dec,
+		Jerk:=axis4_manual_jerk,
+		Direction:=axis4_manual_direction
+	);
+	fb_axis4_stop(
+		Axis:=G.axis[4],
+		Execute:=axis4_stop_exec,
+		Deceleration:=axis4_manual_dec,
+		Jerk:=axis4_manual_jerk
+	);
+
+	// 清请求并解除超时即为 PLC 对恢复请求的确认；随后复用既有重初始化流程。
+	IF G.host_recover_req AND host_heartbeat_seen AND
+		(NOT host_watchdog_timer.Q) AND host_all_stopped THEN
+		host_timeout_latched := FALSE;
+		G.host_comm_timeout := FALSE;
+		G.host_recover_req := FALSE;
+		G.handle_reinit_req := TRUE;
+	END_IF
+
+	host_timeout_prev := G.host_comm_timeout;
+	RETURN;
+END_IF
+
+host_timeout_prev := FALSE;
+// 非超时状态收到的恢复请求没有业务含义，清除以免成为下一次超时的陈旧握手。
+G.host_recover_req := FALSE;
 
 G.estop_hold_req := FALSE;
 

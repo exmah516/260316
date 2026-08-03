@@ -1,7 +1,7 @@
 <Window x:Class="AdsControlUI.ForceRealtimeWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="实时力反馈" Height="480" Width="820"
+        Title="力反馈下发与目标" Height="480" Width="820"
         MinHeight="360" MinWidth="580"
         WindowStartupLocation="CenterOwner">
     <Grid Margin="14">
@@ -22,25 +22,25 @@
                 <Border Style="{StaticResource StatusPill}">
                     <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
                         <Rectangle Width="16" Height="3" Fill="{StaticResource SeriesForceBrush}" RadiusX="1.5" RadiusY="1.5"/>
-                        <TextBlock Text="实际力 F" Style="{StaticResource PillLabel}" Foreground="{StaticResource TextPrimaryBrush}"/>
+                        <TextBlock Text="实际下发轴向力" Style="{StaticResource PillLabel}" Foreground="{StaticResource TextPrimaryBrush}"/>
                     </StackPanel>
                 </Border>
                 <Border Style="{StaticResource StatusPill}">
                     <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
                         <Rectangle Width="16" Height="3" Fill="{StaticResource SeriesTorqueBrush}" RadiusX="1.5" RadiusY="1.5"/>
-                        <TextBlock Text="实际力矩 T" Style="{StaticResource PillLabel}" Foreground="{StaticResource TextPrimaryBrush}"/>
+                        <TextBlock Text="实际下发力矩" Style="{StaticResource PillLabel}" Foreground="{StaticResource TextPrimaryBrush}"/>
                     </StackPanel>
                 </Border>
                 <Border Style="{StaticResource StatusPill}">
                     <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
                         <Rectangle Width="16" Height="3" Fill="#F87171" RadiusX="1.5" RadiusY="1.5" Opacity="0.85"/>
-                        <TextBlock Text="理论力 F" Style="{StaticResource PillLabel}"/>
+                        <TextBlock Text="反馈目标轴向力" Style="{StaticResource PillLabel}"/>
                     </StackPanel>
                 </Border>
                 <Border Style="{StaticResource StatusPill}">
                     <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
                         <Rectangle Width="16" Height="3" Fill="#38BDF8" RadiusX="1.5" RadiusY="1.5" Opacity="0.85"/>
-                        <TextBlock Text="理论力矩 T" Style="{StaticResource PillLabel}"/>
+                        <TextBlock Text="反馈目标力矩" Style="{StaticResource PillLabel}"/>
                     </StackPanel>
                 </Border>
             </WrapPanel>
@@ -94,22 +94,22 @@
         <Border Grid.Row="2" Style="{StaticResource CardBorder}" Margin="0,10,0,0" Padding="12,10">
             <UniformGrid Columns="4">
                 <StackPanel Margin="0,0,12,0">
-                    <TextBlock Text="实际力 F (N)" Style="{StaticResource CaptionText}" Margin="0,0,0,2"/>
+                    <TextBlock Text="实际下发轴向力 (N)" Style="{StaticResource CaptionText}" Margin="0,0,0,2"/>
                     <TextBlock x:Name="ForceValueText" Style="{StaticResource DataValueText}"
                                FontSize="15" FontWeight="SemiBold" Foreground="#EF4444" Text="—"/>
                 </StackPanel>
                 <StackPanel Margin="0,0,12,0">
-                    <TextBlock Text="实际力矩 T (N·m)" Style="{StaticResource CaptionText}" Margin="0,0,0,2"/>
+                    <TextBlock Text="实际下发力矩 (N·m)" Style="{StaticResource CaptionText}" Margin="0,0,0,2"/>
                     <TextBlock x:Name="TorqueValueText" Style="{StaticResource DataValueText}"
                                FontSize="15" FontWeight="SemiBold" Foreground="#0EA5E9" Text="—"/>
                 </StackPanel>
                 <StackPanel Margin="0,0,12,0">
-                    <TextBlock Text="理论力 F (N)" Style="{StaticResource CaptionText}" Margin="0,0,0,2"/>
+                    <TextBlock Text="反馈目标轴向力 (N)" Style="{StaticResource CaptionText}" Margin="0,0,0,2"/>
                     <TextBlock x:Name="ForceTheoryValueText" Style="{StaticResource DataValueText}"
                                FontSize="15" FontWeight="SemiBold" Foreground="#F87171" Text="—"/>
                 </StackPanel>
                 <StackPanel>
-                    <TextBlock Text="理论力矩 T (N·m)" Style="{StaticResource CaptionText}" Margin="0,0,0,2"/>
+                    <TextBlock Text="反馈目标力矩 (N·m)" Style="{StaticResource CaptionText}" Margin="0,0,0,2"/>
                     <TextBlock x:Name="TorqueTheoryValueText" Style="{StaticResource DataValueText}"
                                FontSize="15" FontWeight="SemiBold" Foreground="#38BDF8" Text="—"/>
                 </StackPanel>

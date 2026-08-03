@@ -1,14 +1,14 @@
 #include "control_types.h"
+#include "ads_communication.h"
 #include "delivery_tracking.h"
-#include "delivery_tracking_logger.h"
+#include "experiment_recorder.h"
 #include "force_calibration.h"
 #include "force_feedback.h"
-#include "force_logger.h"
 #include "force_transition_experiment.h"
-#include "force_transition_logger.h"
 #include "guidewire_mode.h"
 #include "motion_sync.h"
 #include "plc_io.h"
+#include "sensor_calibration_experiment.h"
 #include "startup_sequence.h"
 #include "tcp_force_daq.h"
 #include "vis_server.h"
@@ -17,8 +17,11 @@
 #include <conio.h>
 #include <cstdlib>
 #include <cstring>
+#include <deque>
 #include <iostream>
+#include <limits>
 #include <string>
+#include <vector>
 #include <windows.h>
 
 // 文件职责说明：
@@ -29,6 +32,10 @@
 int main(int argc, char* argv[])
 {
 	setup_console_utf8();
+	if (sensor_calibration_experiment::is_command(argc, argv))
+	{
+		return sensor_calibration_experiment::run(argc, argv);
+	}
 
 	constexpr DWORD physical_handle_582_serial = 582;
 	constexpr DWORD physical_handle_587_serial = 587;
@@ -139,17 +146,12 @@ int main(int argc, char* argv[])
 	const CylinderPreset cyl;
 
 	const unsigned char axis1_pause_button_mask = cfg.btn_b6;
-	const unsigned char axis1_reverse_button_mask = cfg.btn_b0;
-	const unsigned char axis6_independent_button_mask = cfg.btn_b6;
-	const unsigned char axis6_cooperative_button_mask = cfg.btn_b0;
-	// Handle587（本轮重映射约定）：
-	// - b6: 导丝模式主键（独立）
-	// - b0: 导丝反向键（仅在 b6 未按下时作为反向判定）
-	// - b7: 本轮不参与导丝模式与反向判定
-	// Handle587 在基值 0x06 下的状态：
-	// 0x46 -> 独立导丝（正向）
-	// 0x07 -> 独立导丝（反向）
-	// 0x47 -> 独立导丝（取消“同时按 b6+b0 进入协同模式”）
+	const unsigned char physical_mode_toggle_button_mask = cfg.btn_b0;
+	const unsigned char physical_direction_toggle_button_mask = cfg.btn_b6;
+	// 当前角色交换后，物理 SN 582 是导丝/axis6 手柄：
+	// - B0 仅在 0->1 按下沿切换导管/导丝模式；1->0 松开沿不改变模式。
+	// - B6 仅在 0->1 按下沿切换当前普通模式方向；1->0 松开沿不改变方向。
+	// - 协同递送/撤出仍只由 UI 显式选择，期间忽略这两个物理切换键。
 	// Handle 582 上 Axis4 点动目标状态：
 	// 正向  ~= 0x86（b7 开，b5 关，基值 0x06）
 	// 反向  ~= 0x26（b5 开，b7 关，基值 0x06）
@@ -164,10 +166,8 @@ int main(int argc, char* argv[])
 	Handle handle_axis6(serial_axis6_handle);
 	CADSComm ads;
 	TcpForceDaqClient tcp_force_daq;
-	ForceLogger force_logger;
-	ForceTransitionLogger ft_logger;
 	DeliveryTrackingController tracking_controller;
-	DeliveryTrackingLogger tracking_logger;
+	ExperimentRecorder experiment_recorder;
 	ForceTransitionExperiment ft_exp;
 	VisServer vis_server;
 	HandleFilterState axis1_handle_filter;
@@ -237,14 +237,15 @@ int main(int argc, char* argv[])
 	axis1_handle_filter.reset(axis1_input_handle->fJoints2[0], axis1_input_handle->fJoints2[1]);
 	axis6_handle_filter.reset(axis6_input_handle->fJoints2[0], axis6_input_handle->fJoints2[1]);
 
-	if (ads.OpenComm_inside())
+	// 连接只建立 ADS 路由，不再把人工 STOP 的 PLC 自动切回 RUN。
+	if (ads.OpenCommInsideReadOnly())
 	{
 		std::cout << "ADS 已连接：本地 AMS 路由，端口 851。" << std::endl;
 	}
 	else
 	{
 		// 本地路由失败时尝试远端 NetId；仅当两者都失败再输出错误，避免无效告警干扰。
-		if (ads.OpenComm())
+		if (ads.OpenCommReadOnly())
 		{
 			std::cout << "ADS 已连接：远端 AMS NetId " << hardcoded_ads_netid << "，端口 851。" << std::endl;
 		}
@@ -290,7 +291,6 @@ int main(int argc, char* argv[])
 	double plc_init_pos[7] = { 0 }; // PLC 相对零点偏置（G.init_pos）
 	double plc_leftlimit[7] = { 0 }; // 左限位绝对位置（G.leftlimit）
 	double plc_act_pos_from_left[7] = { 0 };
-	double plc_refer_from_left[7] = { 0 };
 	double plc_v_limit[7] = { 0 };
 	bool startup_smoothing_bypass = false;
 
@@ -312,15 +312,11 @@ int main(int argc, char* argv[])
 	ctx.plc_init_pos = plc_init_pos;
 	ctx.plc_leftlimit = plc_leftlimit;
 	ctx.plc_act_pos_from_left = plc_act_pos_from_left;
-	ctx.plc_refer_from_left = plc_refer_from_left;
 	ctx.plc_v_limit = plc_v_limit;
 	ctx.startup_smoothing_bypass = &startup_smoothing_bypass;
 
 	auto read_plc_state = [&]() -> bool { return plc_io::read_plc_state(ctx); };
 	auto read_force_sample = [&](ForceSampleFrame& sample) -> bool { return plc_io::read_force_sample(ctx, sample); };
-	auto write_refer = [&]() -> bool { return plc_io::write_refer(ctx); };
-	auto read_v_limit = [&]() -> bool { return plc_io::read_v_limit(ctx); };
-	auto write_v_limit = [&](const double* values) -> bool { return plc_io::write_v_limit(ctx, values); };
 	auto load_pos_from_actual = [&]() { plc_io::load_pos_from_actual(ctx); };
 	auto from_left_to_abs = [&](int axis_index, double from_left_mm) -> double
 	{
@@ -351,11 +347,6 @@ int main(int argc, char* argv[])
 	{
 		return plc_io::clear_axis1_group_return_requests(ctx);
 	};
-	auto write_axis4_manual_requests = [&](bool forward_req, bool reverse_req) -> bool
-	{
-		return plc_io::write_axis4_manual_requests(ctx, forward_req, reverse_req);
-	};
-
 	// 常规导管模式的跟随基准。
 	double axis3_base_rel = 0.0;
 	double axis5_base_rel = 0.0;
@@ -421,7 +412,6 @@ int main(int argc, char* argv[])
 	ForceFeedbackState ff;
 	ForceCalibrationConfig cal_cfg;
 	ForceCalibrationState cal_state;
-	ForceLogState force_log;
 	CrawlState axis1_crawl;
 	CrawlState axis6_crawl;
 	SpacingRecoveryState spacing_recovery;
@@ -440,7 +430,6 @@ int main(int argc, char* argv[])
 	ctx.axis6_crawl = &axis6_crawl;
 	ctx.startup = &startup;
 	ctx.ff = &ff;
-	ctx.force_log = &force_log;
 	ctx.axis3_base_rel = &axis3_base_rel;
 	ctx.axis5_base_rel = &axis5_base_rel;
 	ctx.axis6_mirror_base_rel = &axis6_mirror_base_rel;
@@ -504,7 +493,6 @@ int main(int argc, char* argv[])
 		return motion_sync::sync_cooperative_guidewire(ctx, samples, log_window_rebuild);
 	};
 	auto sync_all = [&](int samples) -> bool { return motion_sync::sync_all(ctx, samples); };
-	auto clear_plc_reinit_req = [&]() { plc_io::clear_plc_reinit_req(ctx); };
 	auto capture_axis1_follow_baseline = [&]() { motion_sync::capture_axis1_follow_baseline(ctx); };
 	auto apply_axis1_mirror_from_abs = [&](double axis1_abs_cmd, bool include_axis6)
 	{
@@ -563,7 +551,7 @@ int main(int argc, char* argv[])
 	axis6_prev_abs_for_trigger = axis6_follow_cmd_abs;
 	axis1_prev_abs_valid = true;
 	axis6_prev_abs_valid = true;
-	write_refer();
+	(void)plc_io::write_refer(ctx);
 
 	bool self_check_done = true;
 	bool has_self_check_flag = ads.ADSRead(AdsSymbol::self_check_done, sizeof(self_check_done), &self_check_done);
@@ -577,6 +565,7 @@ int main(int argc, char* argv[])
 	bool control_active = !has_self_check_flag || self_check_done;
 	bool last_self_check_done = self_check_done;
 	bool handle_reinit_req = false;
+	bool last_handle_reinit_req = false;
 	bool estop_hold_req = false;
 	bool estop_hold_active = false;
 	bool axis1_push_rearm_after_hold = false;
@@ -586,6 +575,10 @@ int main(int argc, char* argv[])
 	bool pause_pressed_prev = false;
 	bool axis1_reverse_pressed_prev = false;
 	bool axis6_effective_reverse_prev = false;
+	bool physical_mode_button_pressed_prev =
+		(axis6_input_handle->buttons2 & physical_mode_toggle_button_mask) != 0;
+	bool physical_direction_button_pressed_prev =
+		(axis6_input_handle->buttons2 & physical_direction_toggle_button_mask) != 0;
 	bool axis4_manual_error_prev = false;
 	unsigned long axis4_manual_error_id_prev = 0;
 	GuidewireMode requested_guidewire_mode_prev = GuidewireMode::None;
@@ -596,6 +589,9 @@ int main(int argc, char* argv[])
 	bool axis1_post_return_lead_armed = false;
 	bool axis1_post_return_lead_active = false;
 	double axis1_post_return_lead_target_abs = 0.0;
+	DWORD axis1_post_return_lead_arm_t0_ms = 0;
+	bool axis1_post_return_lead_arrive_pending = false;
+	DWORD axis1_post_return_lead_arrive_t0_ms = 0;
 	// axis6 软限位只在当前危险动作或实际越限时阻断，不把一次被拒绝的换手永久锁死。
 	enum class Axis6SoftLimitReason : unsigned char
 	{
@@ -615,7 +611,7 @@ int main(int argc, char* argv[])
 	ForceSampleFrame force_sample;
 	int loop_count = 0;
 	DWORD force_sample_last_sample_ms = 0;
-	DWORD tracking_log_last_sample_ms = 0;
+	bool clean_force_monitor_enabled = false;
 	std::string force_feedback_diag_reason;
 	std::string force_sample_diag_reason;
 	// 协同模式请求不能穿越暂停、自检重建或 ADS 故障继续保留。
@@ -627,6 +623,10 @@ int main(int argc, char* argv[])
 		cooperative_return_owner = CooperativeReturnOwner::None;
 		axis1_post_return_lead_armed = false;
 		axis1_post_return_lead_active = false;
+		axis1_post_return_lead_target_abs = 0.0;
+		axis1_post_return_lead_arm_t0_ms = 0;
+		axis1_post_return_lead_arrive_pending = false;
+		axis1_post_return_lead_arrive_t0_ms = 0;
 		if (leave_active_mode && guidewire_mode == GuidewireMode::Cooperative)
 		{
 			guidewire_mode = GuidewireMode::None;
@@ -644,6 +644,9 @@ int main(int argc, char* argv[])
 		axis1_post_return_lead_armed = false;
 		axis1_post_return_lead_active = false;
 		axis1_post_return_lead_target_abs = 0.0;
+		axis1_post_return_lead_arm_t0_ms = 0;
+		axis1_post_return_lead_arrive_pending = false;
+		axis1_post_return_lead_arrive_t0_ms = 0;
 	};
 	auto axis6_from_left_mm = [&](double axis6_abs) -> double
 	{
@@ -819,70 +822,20 @@ int main(int argc, char* argv[])
 	std::cout << "力反馈：关闭（按 F 键切换）。" << std::endl;
 	clear_force_output();
 
-	// 力感高频记录在用户选择 C/S 后启动；force_log.period_ms 仅控制力采样节拍。
-	force_log.period_ms = cfg.force_log_period_ms;
-	force_log.enabled = false;
-	bool force_log_started = false;
 	bool force_tcp_zero_wait_logged = false;
 	DWORD force_feedback_value_log_last_ms = 0;
-	auto ensure_force_log_started = [&]()
+	// TCP 采集卡是力输入源，不再与任何磁盘记录开关绑定。
+	if (ctx.force_sample_source == ForceSampleSource::TCP_DAQ)
 	{
-		if (force_log_started)
+		if (tcp_force_daq.start(cfg.tcp_force_daq_ip, cfg.tcp_force_daq_port, cfg.tcp_force_daq_local_ip))
 		{
-			return;
-		}
-		if (ctx.force_sample_source == ForceSampleSource::TCP_DAQ)
-		{
-			if (tcp_force_daq.start(cfg.tcp_force_daq_ip, cfg.tcp_force_daq_port, cfg.tcp_force_daq_local_ip))
-			{
-				std::cout << "CSV采样源：TCP_DAQ（" << cfg.tcp_force_daq_ip << ":" << cfg.tcp_force_daq_port
-					<< "，本机绑定 " << cfg.tcp_force_daq_local_ip
-					<< "），fn_1/ft_1 原始电压按传感器频率落盘。" << std::endl;
-			}
-			else
-			{
-				std::cout << "CSV采样源：TCP_DAQ 启动失败，日志将等待 TCP 有效帧后再写入。" << std::endl;
-			}
+			std::cout << "力采样源：TCP_DAQ（" << cfg.tcp_force_daq_ip << ":" << cfg.tcp_force_daq_port
+				<< "，本机绑定 " << cfg.tcp_force_daq_local_ip << "）。" << std::endl;
 		}
 		else
 		{
-			std::cout << "CSV采样源：ADS（仅主循环节拍粗采样，未启用高频记录）。" << std::endl;
+			std::cout << "力采样源：TCP_DAQ 后台线程启动失败。" << std::endl;
 		}
-		if (force_logger.start("."))
-		{
-			force_logger.publish_force_zero(cal_state.f_zero, cal_state.ft_zero);
-			if (ctx.force_sample_source == ForceSampleSource::TCP_DAQ)
-			{
-				tcp_force_daq.set_on_sample([&](std::uint64_t tick_ms, const double v[6])
-				{
-					force_logger.on_sensor_sample(tick_ms, v);
-				});
-			}
-			else
-			{
-				tcp_force_daq.set_on_sample(nullptr);
-			}
-			std::cout << "高频传感数据记录器已启动（CSV 文件位于工作目录）。" << std::endl;
-		}
-		else
-		{
-			std::cout << "高频传感数据记录器启动失败：CSV 文件打开失败。" << std::endl;
-		}
-		force_log_started = true;
-	};
-
-	// 主从位移研究记录从上位机进程启动即创建会话，不再依赖 UI 先点击“开始记录”。
-	// 记录器仅异步写 CSV，不会阻塞运动控制循环；程序退出时统一 flush 并关闭。
-	if (tracking_logger.start_session("."))
-	{
-		tracking_controller.start_session();
-		tracking_log_last_sample_ms = 0;
-		force_sample_last_sample_ms = 0;
-		std::cout << "主从位移实验记录已自动启动（20 Hz，CSV 位于工作目录）。" << std::endl;
-	}
-	else
-	{
-		std::cout << "主从位移实验记录自动启动失败：CSV 文件打开失败；位移补偿不可用。" << std::endl;
 	}
 
 	auto zero_force_sensor = [&](const char* source) -> bool
@@ -897,7 +850,6 @@ int main(int argc, char* argv[])
 				cal_state.ft_zero = raw_v[1];
 				cal_state.theta0_deg = plc_act_pos[1];
 				cal_state.zeroed = true;
-				force_logger.publish_force_zero(cal_state.f_zero, cal_state.ft_zero);
 				force_tcp_zero_wait_logged = false;
 				std::cout << source << "力传感器零点已采集：AI0/f_zero=" << cal_state.f_zero
 					<< " V, AI1/ft_zero=" << cal_state.ft_zero
@@ -921,7 +873,6 @@ int main(int argc, char* argv[])
 			cal_state.f_zero = sampled_frame.fn_1_value_v;
 			cal_state.theta0_deg = sampled_frame.axis2_pos_rel;
 			cal_state.zeroed = true;
-			force_logger.publish_force_zero(cal_state.f_zero, cal_state.ft_zero);
 			std::cout << source << "力传感器零点已采集（ADS 当前采样）：ft_zero=" << cal_state.ft_zero
 				<< " V, f_zero=" << cal_state.f_zero << " V"
 				<< ", axis2/theta0=" << cal_state.theta0_deg << " deg" << std::endl;
@@ -942,6 +893,27 @@ int main(int argc, char* argv[])
 			startup.prompted = false;
 			prompt_startup_mode();
 		}
+	}
+
+	AdsCommunicationService ads_communication(ads);
+	if (!ads_communication.start(plc_init_pos, plc_leftlimit))
+	{
+		std::cout << "ADS 100 Hz 通信线程启动失败。" << std::endl;
+		handle_axis1.close();
+		handle_axis6.close();
+		return 0;
+	}
+	ctx.ads_service = &ads_communication;
+	AdsFastSnapshot initial_ads_snapshot{};
+	if (ads_communication.wait_for_snapshot(0, 500, initial_ads_snapshot) &&
+		initial_ads_snapshot.position_valid)
+	{
+		(void)read_plc_state();
+		std::cout << "ADS 高频通信已切换为 100 Hz 统一快照。" << std::endl;
+	}
+	else
+	{
+		std::cout << "ADS 高频通信尚无有效首帧，控制将保持并由后台线程重连。" << std::endl;
 	}
 
 	enum class CylinderManualMode : unsigned char
@@ -976,6 +948,62 @@ int main(int argc, char* argv[])
 	bool vis_reverse_override_active = false;
 	bool vis_reverse_override_value = false;
 	int vis_reverse_override_target = 0;
+	enum class ModeSelection : int
+	{
+		None = 0,
+		CatheterDelivery = 1,
+		CatheterRetraction = 2,
+		GuidewireDelivery = 3,
+		GuidewireRetraction = 4,
+		CooperativeDelivery = 5,
+		CooperativeRetraction = 6
+	};
+	ModeSelection pending_mode_selection = ModeSelection::None;
+	std::uint32_t physical_button_event_counter = 0;
+	int physical_button_event_code = 0;
+
+	auto apply_mode_selection = [&](ModeSelection selection)
+	{
+		if (selection == ModeSelection::CooperativeDelivery ||
+			selection == ModeSelection::CooperativeRetraction)
+		{
+			cooperative_direction_requested =
+				selection == ModeSelection::CooperativeRetraction
+				? CooperativeDirection::Retraction
+				: CooperativeDirection::Delivery;
+			clear_cylinder_manual_overrides("模式切换");
+			return;
+		}
+
+		const bool guidewire =
+			selection == ModeSelection::GuidewireDelivery ||
+			selection == ModeSelection::GuidewireRetraction;
+		const bool reverse =
+			selection == ModeSelection::CatheterRetraction ||
+			selection == ModeSelection::GuidewireRetraction;
+		if (single_handle_mode)
+		{
+			single_handle_requested_mode = guidewire ? GuidewireMode::Independent : GuidewireMode::None;
+		}
+		cooperative_direction_requested = CooperativeDirection::None;
+		clear_cylinder_manual_overrides("模式切换");
+		vis_reverse_override_active = true;
+		vis_reverse_override_target = guidewire ? 1 : 0;
+		vis_reverse_override_value = reverse;
+	};
+
+	auto request_mode_selection = [&](ModeSelection selection, const char* source)
+	{
+		if (spacing_recovery.active() || spacing_recovery.requested)
+		{
+			pending_mode_selection = selection;
+			spacing_recovery.requested = false;
+			std::cout << source << "：正在退出屈曲恢复并重同步，随后切换目标模式。" << std::endl;
+			return;
+		}
+		pending_mode_selection = ModeSelection::None;
+		apply_mode_selection(selection);
+	};
 
 	struct PendingStartupParams {
 		double axis1_from_left_mm = 0.0;
@@ -992,9 +1020,129 @@ int main(int argc, char* argv[])
 	pending_startup.axis6_from_left_mm = startup.final_axis6_from_left_mm;
 	pending_startup.speed_scale = cfg.startup_motion_speed_scale;
 	bool tracking_manual_cylinder_override = false;
+	std::uint64_t ads_snapshot_sequence = initial_ads_snapshot.attempt_sequence;
+	std::uint64_t handled_plc_restart_count = 0;
+	std::uint64_t handled_reconnect_count = 0;
+	bool ads_soft_hold_active = !initial_ads_snapshot.valid;
+	bool plc_restart_recovery_latched = false;
+	std::vector<AdsFastSnapshot> drained_ads_snapshots;
+	struct HandleRecordSnapshot
+	{
+		std::int64_t qpc_ticks = 0;
+		double axis1_linear_raw = 0.0;
+		double axis1_linear_filtered = 0.0;
+		double axis1_rotation_raw = 0.0;
+		double axis1_rotation_filtered = 0.0;
+		double axis6_linear_raw = 0.0;
+		double axis6_linear_filtered = 0.0;
+		double axis6_rotation_raw = 0.0;
+		double axis6_rotation_filtered = 0.0;
+		bool axis1_valid = false;
+		bool axis6_valid = false;
+	};
+	std::deque<HandleRecordSnapshot> handle_record_history;
+	std::uint64_t force_sample_ads_sequence = 0;
+	bool ft_v_limit_last_valid = false;
+	double ft_v_limit_last[7] = {};
+	LARGE_INTEGER vis_qpc_frequency{};
+	QueryPerformanceFrequency(&vis_qpc_frequency);
+	std::int64_t next_vis_publish_qpc = 0;
 
 	while (true)
 	{
+		AdsFastSnapshot ads_snapshot{};
+		const bool has_new_ads_snapshot = ads_communication.wait_for_snapshot(
+			ads_snapshot_sequence, 20, ads_snapshot);
+		if (has_new_ads_snapshot)
+		{
+			ads_snapshot_sequence = ads_snapshot.attempt_sequence;
+			if (ads_snapshot.position_valid)
+			{
+				(void)read_plc_state();
+			}
+		}
+		ads_communication.drain_snapshots(drained_ads_snapshots);
+		const AdsCommunicationStats ads_stats = ads_communication.stats();
+		const AdsEventState ads_events = ads_communication.event_state();
+		self_check_done = ads_events.self_check_done;
+		handle_reinit_req = ads_events.handle_reinit_req;
+		estop_hold_req = ads_events.estop_hold_req || ads_events.host_comm_timeout;
+		if (ads_stats.reconnect_count != handled_reconnect_count)
+		{
+			handled_reconnect_count = ads_stats.reconnect_count;
+			ads_communication.request_coordinate_refresh();
+			ads_communication.request_watchdog_recovery();
+			spacing_recovery.reset();
+			if (ft_exp.active()) ft_exp.abort(ctx, "ADS reconnect");
+			tracking_controller.disable_compensation();
+			axis1_crawl.phase = CrawlState::Phase::Follow;
+			axis1_crawl.plc_move_requested = false;
+			axis6_crawl.phase = CrawlState::Phase::Follow;
+			axis6_crawl.plc_move_requested = false;
+			axis6_coupled_active = false;
+			axis6_coupled_requested = false;
+			cooperative_return_owner = CooperativeReturnOwner::None;
+			reset_axis1_post_return_lead();
+			std::cout << "ADS 重连：已取消中断的回退、屈曲恢复、力过渡和 PI 瞬态，保留稳定模式与方向。" << std::endl;
+		}
+		const bool ads_cycle_valid = has_new_ads_snapshot && ads_snapshot.valid &&
+			ads_stats.state == AdsConnectionState::Running;
+		if (!ads_cycle_valid)
+		{
+			if (!ads_soft_hold_active)
+			{
+				ads_soft_hold_active = true;
+				clear_force_output();
+				std::cout << "ADS 快照中断：保持最后参考并丢弃故障期间手柄增量。" << std::endl;
+			}
+		}
+		else if (ads_soft_hold_active)
+		{
+			axis1_handle_filter.reset(axis1_input_handle->fJoints2[0], axis1_input_handle->fJoints2[1]);
+			axis6_handle_filter.reset(axis6_input_handle->fJoints2[0], axis6_input_handle->fJoints2[1]);
+			axis1_prev_linear_filtered = axis1_handle_filter.axis0_filtered;
+			axis6_prev_linear_filtered = axis6_handle_filter.axis0_filtered;
+			axis1_prev_rot_filtered = axis1_handle_filter.axis1_filtered;
+			axis6_prev_rot_filtered = axis6_handle_filter.axis1_filtered;
+			load_pos_from_actual();
+			bool baseline_rebuilt = true;
+			if (!plc_restart_recovery_latched)
+			{
+				if (guidewire_mode == GuidewireMode::Cooperative)
+				{
+					baseline_rebuilt = sync_cooperative_guidewire(1, false);
+				}
+				else if (guidewire_mode == GuidewireMode::Independent)
+				{
+					baseline_rebuilt = sync_axis6(1, false, false);
+				}
+				else
+				{
+					baseline_rebuilt = sync_axis1(1);
+				}
+			}
+			ads_soft_hold_active = !baseline_rebuilt;
+			if (baseline_rebuilt)
+			{
+				std::cout << "ADS 快照已恢复：实际位置、手柄基准与当前稳定模式已重建。" << std::endl;
+			}
+		}
+		if (ads_stats.plc_restart_count != handled_plc_restart_count)
+		{
+			handled_plc_restart_count = ads_stats.plc_restart_count;
+			plc_restart_recovery_latched = true;
+			cal_state.zeroed = false;
+			ff.enabled = false;
+			tracking_controller.disable_compensation();
+			spacing_recovery.reset();
+			if (ft_exp.active()) ft_exp.abort(ctx, "PLC restart");
+			cancel_cooperative_delivery(true);
+			control_active = false;
+			startup.completed = false;
+			startup.phase = StartupPhase::WaitForEnter;
+			clear_force_output();
+			std::cout << "检测到 PLC 重启或应用重载：已清除力零点并锁定控制，必须重新自检、调零和人工启动。" << std::endl;
+		}
 		// 1) 采样逻辑手柄输入，并生成按键边沿触发状态。
 		if (axis1_input_handle == axis6_input_handle)
 		{
@@ -1015,6 +1163,27 @@ int main(int argc, char* argv[])
 			axis6_input_handle->fJoints2[1],
 			cfg.linear_handle_alpha,
 			cfg.rotational_handle_alpha);
+		LARGE_INTEGER handle_record_qpc{};
+		QueryPerformanceCounter(&handle_record_qpc);
+		HandleRecordSnapshot handle_record{};
+		handle_record.qpc_ticks = handle_record_qpc.QuadPart;
+		handle_record.axis1_valid = axis1_input_handle != nullptr;
+		handle_record.axis6_valid = axis6_input_handle != nullptr;
+		handle_record.axis1_linear_raw = axis1_input_handle->fJoints2[0];
+		handle_record.axis1_linear_filtered = axis1_handle_filter.axis0_filtered;
+		handle_record.axis1_rotation_raw = axis1_input_handle->fJoints2[1];
+		handle_record.axis1_rotation_filtered = axis1_handle_filter.axis1_filtered;
+		handle_record.axis6_linear_raw = axis6_input_handle->fJoints2[0];
+		handle_record.axis6_linear_filtered = axis6_handle_filter.axis0_filtered;
+		handle_record.axis6_rotation_raw = axis6_input_handle->fJoints2[1];
+		handle_record.axis6_rotation_filtered = axis6_handle_filter.axis1_filtered;
+		handle_record_history.push_back(handle_record);
+		const std::int64_t handle_history_ticks = std::max<std::int64_t>(1, vis_qpc_frequency.QuadPart / 10);
+		while (!handle_record_history.empty() &&
+			handle_record.qpc_ticks - handle_record_history.front().qpc_ticks > handle_history_ticks)
+		{
+			handle_record_history.pop_front();
+		}
 
 		++loop_count;
 		axis1_fast_return = false; // 每周期先清零，仅在快退状态机阶段置 TRUE
@@ -1034,29 +1203,68 @@ int main(int argc, char* argv[])
 			clear_force_output();
 		}
 
-		// from-left 观测量仅用于监测/门控，不需要每帧刷新。
-		// 降频到每 5 帧读取一次，减少 ADS 通信负担。
-		if ((loop_count % 5) == 0)
-		{
-			const char* from_left_symbols[] = {
-				AdsSymbol::act_pos_from_left,
-				AdsSymbol::refer_from_left
-			};
-			const unsigned long from_left_lengths[] = {
-				static_cast<unsigned long>(sizeof(plc_act_pos_from_left)),
-				static_cast<unsigned long>(sizeof(plc_refer_from_left))
-			};
-			void* from_left_outputs[] = {
-				plc_act_pos_from_left,
-				plc_refer_from_left
-			};
-			(void)ads.ADSReadSum(from_left_symbols, from_left_lengths, from_left_outputs, 2);
-		}
-
 		const unsigned char axis1_buttons = axis1_input_handle->buttons2;
 		const unsigned char axis6_buttons = axis6_input_handle->buttons2;
 		const bool pause_pressed = (axis1_buttons & axis1_pause_button_mask) != 0;
-		const bool axis1_reverse_button_pressed = (axis1_buttons & axis1_reverse_button_mask) != 0;
+		const bool physical_mode_button_pressed =
+			(axis6_buttons & physical_mode_toggle_button_mask) != 0;
+		const bool physical_direction_button_pressed =
+			(axis6_buttons & physical_direction_toggle_button_mask) != 0;
+		const bool physical_mode_button_press_edge =
+			physical_mode_button_pressed && !physical_mode_button_pressed_prev;
+		const bool physical_direction_button_press_edge =
+			physical_direction_button_pressed && !physical_direction_button_pressed_prev;
+
+		// 屈曲恢复正常退出并完成重同步后，再落实恢复期间点击的目标模式。
+		if (pending_mode_selection != ModeSelection::None &&
+			!ads_soft_hold_active && !spacing_recovery.active() && !spacing_recovery.requested)
+		{
+			const ModeSelection selection = pending_mode_selection;
+			pending_mode_selection = ModeSelection::None;
+			apply_mode_selection(selection);
+			std::cout << "屈曲恢复退出后的目标模式切换请求已生效。" << std::endl;
+		}
+
+		const bool physical_mode_switch_allowed =
+			!ads_soft_hold_active &&
+			!single_handle_mode &&
+			guidewire_mode != GuidewireMode::Cooperative &&
+			cooperative_direction_requested == CooperativeDirection::None &&
+			cooperative_return_owner == CooperativeReturnOwner::None;
+		if (physical_mode_switch_allowed && physical_mode_button_press_edge)
+		{
+			const bool guidewire_selected =
+				guidewire_mode == GuidewireMode::Independent ||
+				(vis_reverse_override_active && vis_reverse_override_target == 1);
+			const bool reverse = guidewire_selected
+				? axis6_effective_reverse_prev
+				: axis1_reverse_pressed_prev;
+			const ModeSelection selection = guidewire_selected
+				? (reverse ? ModeSelection::CatheterRetraction : ModeSelection::CatheterDelivery)
+				: (reverse ? ModeSelection::GuidewireRetraction : ModeSelection::GuidewireDelivery);
+			request_mode_selection(selection, "物理 B0 按下沿");
+			++physical_button_event_counter;
+			physical_button_event_code = static_cast<int>(selection);
+		}
+		if (physical_mode_switch_allowed && physical_direction_button_press_edge)
+		{
+			const bool guidewire_selected =
+				guidewire_mode == GuidewireMode::Independent ||
+				(vis_reverse_override_active && vis_reverse_override_target == 1);
+			const bool reverse = guidewire_selected
+				? axis6_effective_reverse_prev
+				: axis1_reverse_pressed_prev;
+			const ModeSelection selection = guidewire_selected
+				? (!reverse ? ModeSelection::GuidewireRetraction : ModeSelection::GuidewireDelivery)
+				: (!reverse ? ModeSelection::CatheterRetraction : ModeSelection::CatheterDelivery);
+			request_mode_selection(selection, "物理 B6 按下沿");
+			++physical_button_event_counter;
+			physical_button_event_code = static_cast<int>(selection);
+		}
+		// 松开沿不触发任何模式动作，只刷新下一拍的边沿基线。
+		physical_mode_button_pressed_prev = physical_mode_button_pressed;
+		physical_direction_button_pressed_prev = physical_direction_button_pressed;
+
 		// 只有实际进入协同模式后才固定为其选定方向。入口请求尚未通过门控时，
 		// 必须继续沿用当前模式的方向，避免被拒绝的请求造成单拍反向跳变。
 		bool cooperative_mode_active =
@@ -1068,10 +1276,7 @@ int main(int argc, char* argv[])
 			? cooperative_retraction_active
 			: ((vis_reverse_override_active && vis_reverse_override_target == 0)
 				? vis_reverse_override_value
-				: axis1_reverse_button_pressed);
-		const bool guidewire_independent_pressed = (axis6_buttons & axis6_independent_button_mask) != 0;
-		const bool guidewire_cooperative_pressed = (axis6_buttons & axis6_cooperative_button_mask) != 0;
-		const bool guidewire_reverse_pressed = guidewire_cooperative_pressed && !guidewire_independent_pressed;
+				: false);
 		const bool axis4_base_pressed = (axis1_buttons & axis4_buttons_base_mask) == axis4_buttons_base_mask;
 		const bool axis4_forward_pressed =
 			axis4_base_pressed &&
@@ -1082,11 +1287,7 @@ int main(int argc, char* argv[])
 			((axis1_buttons & axis4_buttons_reverse_mask) != 0) &&
 			((axis1_buttons & axis4_buttons_forward_mask) == 0);
 
-		// 导丝模式请求解码（物理 SN 582，axis6 逻辑角色）：
-		// - b6=1,b0=0 -> Independent（0x46）
-		// - b6=0,b0=1 -> Independent + Reverse（0x07）
-		// - b6=1,b0=1 -> Independent（0x47，协同模式入口已取消）
-		// - b6=0,b0=0 -> None（0x06）
+		// 普通物理按钮和 UI 都写入同一锁存请求；按钮松开不会让模式回跳。
 		GuidewireMode requested_guidewire_mode = GuidewireMode::None;
 		if (cooperative_direction_requested != CooperativeDirection::None && dual_handle_ready)
 		{
@@ -1102,22 +1303,18 @@ int main(int argc, char* argv[])
 		{
 			requested_guidewire_mode = single_handle_requested_mode;
 		}
-		else if (guidewire_independent_pressed || guidewire_cooperative_pressed)
-		{
-			requested_guidewire_mode = GuidewireMode::Independent;
-		}
 		if (spacing_recovery.active())
 		{
 			// 恢复模式接管轴3/5/6期间忽略物理导丝模式按键。
 			requested_guidewire_mode = GuidewireMode::None;
 			cancel_cooperative_delivery(true);
 		}
-		// 反向有效键仅在“独立且 b0 按下（0x07）”时生效。
+		// 普通模式方向同样来自锁存值，物理方向按钮松开时保持不变。
 		bool axis6_effective_reverse_pressed = cooperative_mode_active
 			? cooperative_retraction_active
 			: ((vis_reverse_override_active && vis_reverse_override_target == 1)
 				? vis_reverse_override_value
-				: (single_handle_mode ? axis1_reverse_pressed : guidewire_reverse_pressed));
+				: (single_handle_mode ? axis1_reverse_pressed : false));
 		const bool startup_sequence_active = startup.is_active();
 		// axis1 单独先行只属于普通导管正向递送的紧邻回退后阶段，不能穿越模式或安全状态。
 		if (guidewire_mode != GuidewireMode::None || axis1_reverse_pressed ||
@@ -1129,7 +1326,7 @@ int main(int argc, char* argv[])
 		}
 		// 正式控制阶段：启动流程已完成，b6 从“暂停键”切换为“电缸5开关键”。
 		const bool formal_control_stage = startup.completed && (startup.phase == StartupPhase::Done);
-		const bool axis4_jog_allowed = !freeze_active && !estop_hold_active && !startup_sequence_active &&
+		const bool axis4_jog_allowed = ads_cycle_valid && !freeze_active && !estop_hold_active && !startup_sequence_active &&
 			!spacing_recovery.active() && !spacing_recovery.requested;
 		const bool axis4_forward_request = axis4_jog_allowed && axis4_forward_pressed;
 		const bool axis4_reverse_request = axis4_jog_allowed && axis4_reverse_pressed;
@@ -1242,35 +1439,26 @@ int main(int argc, char* argv[])
 		axis1_reverse_pressed_prev = axis1_reverse_pressed;
 		axis6_effective_reverse_prev = axis6_effective_reverse_pressed;
 
-		// 3) 轮询 PLC 侧保持状态，并在保持期间禁用上位机力输出。
-		if ((loop_count % 10) == 0)
+		// 3) 保持状态由 ADS Notification 更新，只在状态边沿执行安全处理。
+		if (estop_hold_req != estop_hold_active)
 		{
-			if (ads.ADSRead(AdsSymbol::estop_hold_req, sizeof(estop_hold_req), &estop_hold_req))
+			if (estop_hold_req)
 			{
-				if (estop_hold_req)
+				std::cout << "PLC 保持：开启。" << std::endl;
+				estop_hold_active = true;
+				control_active = false;
+				cancel_cooperative_delivery(true);
+				clear_force_output();
+			}
+			else
+			{
+				std::cout << "PLC 保持：关闭。" << std::endl;
+				if (formal_control_stage)
 				{
-					if (!estop_hold_active)
-					{
-						std::cout << "PLC 保持：开启。" << std::endl;
-					}
-					estop_hold_active = true;
-					control_active = false;
-					cancel_cooperative_delivery(true);
-					clear_force_output();
+					axis1_push_rearm_after_hold = true;
+					std::cout << "轴1推送已锁定，请先反向回拉手柄完成重接管。" << std::endl;
 				}
-				else
-				{
-					if (estop_hold_active)
-					{
-						std::cout << "PLC 保持：关闭。" << std::endl;
-						if (formal_control_stage)
-						{
-							axis1_push_rearm_after_hold = true;
-							std::cout << "轴1推送已锁定，请先反向回拉手柄完成重接管。" << std::endl;
-						}
-					}
-					estop_hold_active = false;
-				}
+				estop_hold_active = false;
 			}
 		}
 
@@ -1283,6 +1471,7 @@ int main(int argc, char* argv[])
 			(spacing_recovery.active() || spacing_recovery.requested))
 		{
 			spacing_recovery.reset();
+			pending_mode_selection = ModeSelection::None;
 			clear_force_output();
 			std::cout << "屈曲恢复已由暂停、急停或 ADS 故障终止。" << std::endl;
 		}
@@ -1303,9 +1492,17 @@ int main(int argc, char* argv[])
 					{
 						std::cout << "直接控制启动已忽略：PLC 保持处于开启状态。" << std::endl;
 					}
+					else if (ads_soft_hold_active)
+					{
+						std::cout << "直接控制启动已忽略：ADS 当前处于软保持或重连状态。" << std::endl;
+					}
 					else if (has_self_check_flag && !self_check_done)
 					{
 						std::cout << "直接控制启动已忽略：PLC 自检尚未完成。" << std::endl;
+					}
+					else if (plc_restart_recovery_latched && !cal_state.zeroed)
+					{
+						std::cout << "直接控制启动已忽略：PLC 重启后必须先重新力感调零。" << std::endl;
 					}
 					else if (!restore_startup_v_limit())
 					{
@@ -1323,7 +1520,7 @@ int main(int argc, char* argv[])
 						startup.completed = true;
 						startup.prompted = false;
 						control_active = true;
-						ensure_force_log_started();
+						plc_restart_recovery_latched = false;
 						std::cout << "已进入直接控制。" << std::endl;
 					}
 					else
@@ -1344,15 +1541,22 @@ int main(int argc, char* argv[])
 					{
 						std::cout << "启动准备已忽略：PLC 保持处于开启状态。" << std::endl;
 					}
+					else if (ads_soft_hold_active)
+					{
+						std::cout << "启动准备已忽略：ADS 当前处于软保持或重连状态。" << std::endl;
+					}
 					else if (has_self_check_flag && !self_check_done)
 					{
 						std::cout << "启动准备已忽略：PLC 自检尚未完成。" << std::endl;
+					}
+					else if (plc_restart_recovery_latched && !cal_state.zeroed)
+					{
+						std::cout << "启动准备已忽略：PLC 重启后必须先重新力感调零。" << std::endl;
 					}
 					else if (start_startup_sequence())
 					{
 						clear_cylinder_manual_overrides("启动准备");
 						control_active = false;
-						ensure_force_log_started();
 						std::cout << "启动准备流程已开始。" << std::endl;
 					}
 					else
@@ -1469,7 +1673,7 @@ int main(int argc, char* argv[])
 				axis1_reverse_pressed =
 					(vis_reverse_override_active && vis_reverse_override_target == 0)
 					? vis_reverse_override_value
-					: axis1_reverse_button_pressed;
+					: false;
 			}
 			else if (freeze_active)
 			{
@@ -1619,75 +1823,77 @@ int main(int argc, char* argv[])
 			}
 		}
 
-		// 6) 周期性响应 PLC 自检完成与 PLC 请求的重同步。
-		if (has_self_check_flag && (loop_count % 50) == 0)
+		// 6) 自检和重同步请求均由 Notification 驱动，不再做周期单读。
+		if (has_self_check_flag && self_check_done != last_self_check_done)
 		{
-			if (ads.ADSRead(AdsSymbol::self_check_done, sizeof(self_check_done), &self_check_done))
+			if (last_self_check_done && !self_check_done)
 			{
-				if (last_self_check_done && !self_check_done)
-				{
-					cancel_cooperative_delivery(true);
-					control_active = false;
-					clear_force_output();
-					std::cout << "PLC 自检重新开始，已退出协同递送。" << std::endl;
-				}
-				if (!last_self_check_done && self_check_done)
-				{
-					spacing_recovery.reset();
-					cancel_cooperative_delivery(true);
-					if (!restore_startup_v_limit())
-					{
-						std::cout << "警告：PLC 自检切换后恢复启动期速度限制参数失败。" << std::endl;
-					}
-					guidewire_mode = GuidewireMode::None;
-					axis6_crawl.enabled = false;
-					axis6_window_locked = false;
-					axis6_coop_ff_inited = false;
-					axis6_coop_prev_axis1_cmd_abs = 0.0;
-					startup.phase = StartupPhase::WaitForEnter;
-					startup.completed = false;
-					startup.prompted = false;
-					if (!freeze_active && !estop_hold_active && sync_all(30))
-					{
-						control_active = false;
-						std::cout << "PLC 自检已完成。" << std::endl;
-						prompt_startup_mode();
-					}
-					else
-					{
-						control_active = false;
-					}
-				}
-				last_self_check_done = self_check_done;
+				cancel_cooperative_delivery(true);
+				control_active = false;
+				clear_force_output();
+				std::cout << "PLC 自检重新开始，已退出协同递送。" << std::endl;
 			}
-
-			if (ads.ADSRead(AdsSymbol::handle_reinit_req, sizeof(handle_reinit_req), &handle_reinit_req))
+			else if (!last_self_check_done && self_check_done)
 			{
-				if (handle_reinit_req)
+				const bool coordinates_refreshed = ads_communication.refresh_coordinates();
+				if (!coordinates_refreshed)
 				{
-					spacing_recovery.reset();
-					cancel_cooperative_delivery(true);
-					if (!freeze_active && !estop_hold_active && !startup.is_active())
-					{
-						if (sync_all(30))
-						{
-							control_active = startup.completed && (startup.phase == StartupPhase::Done);
-							if (!startup.completed && (!has_self_check_flag || self_check_done) && !startup.prompted)
-							{
-								prompt_startup_mode();
-							}
-						}
-					}
-					clear_plc_reinit_req();
+					ads_communication.request_coordinate_refresh();
+					std::cout << "警告：PLC 自检完成后的坐标缓存同步失败，已排队重试；本拍不下发重同步参考。" << std::endl;
+				}
+				spacing_recovery.reset();
+				cancel_cooperative_delivery(true);
+				if (!restore_startup_v_limit())
+				{
+					std::cout << "警告：PLC 自检切换后恢复启动期速度限制参数失败。" << std::endl;
+				}
+				guidewire_mode = GuidewireMode::None;
+				axis6_crawl.enabled = false;
+				axis6_window_locked = false;
+				axis6_coop_ff_inited = false;
+				axis6_coop_prev_axis1_cmd_abs = 0.0;
+				startup.phase = StartupPhase::WaitForEnter;
+				startup.completed = false;
+				startup.prompted = false;
+				if (coordinates_refreshed && !freeze_active && !estop_hold_active &&
+					!ads_soft_hold_active && sync_all(30))
+				{
+					control_active = false;
+					std::cout << "PLC 自检已完成。" << std::endl;
+					prompt_startup_mode();
+				}
+				else
+				{
+					control_active = false;
 				}
 			}
 		}
+		last_self_check_done = self_check_done;
+
+		if (handle_reinit_req && !last_handle_reinit_req)
+		{
+			spacing_recovery.reset();
+			cancel_cooperative_delivery(true);
+			const bool coordinates_refreshed = ads_communication.refresh_coordinates();
+			if (!coordinates_refreshed) ads_communication.request_coordinate_refresh();
+			if (coordinates_refreshed && !freeze_active && !estop_hold_active &&
+				!ads_soft_hold_active && !startup.is_active() &&
+				sync_all(30))
+			{
+				control_active = startup.completed && (startup.phase == StartupPhase::Done);
+				if (!startup.completed && (!has_self_check_flag || self_check_done) && !startup.prompted)
+				{
+					prompt_startup_mode();
+				}
+			}
+		}
+		last_handle_reinit_req = handle_reinit_req;
 
 		// 8) 当启动已完成但控制未激活时，通过全量重同步恢复。
 		const bool motion_startup_active = startup.is_active();
 		startup_smoothing_bypass = motion_startup_active;
 		if (!control_active && !return_ads_fault_hold && !motion_startup_active &&
-			!freeze_active && !estop_hold_active && startup.completed)
+			!freeze_active && !estop_hold_active && !ads_soft_hold_active && startup.completed)
 		{
 			if (sync_all(20))
 			{
@@ -1698,28 +1904,12 @@ int main(int argc, char* argv[])
 				 !motion_startup_active &&
 				 !freeze_active &&
 				 !estop_hold_active &&
+				 !ads_soft_hold_active &&
 				 !startup.prompted &&
 				 (!has_self_check_flag || self_check_done))
 		{
 			prompt_startup_mode();
 		}
-		// 力感 CSV 元数据编码：
-		// mode_code: 0=导管, 1=独立导丝, 2=协同递送, 3=协同撤出
-		// reverse_code: 活动模式对应的正反向键状态(0/1)
-		// push_pull_code: +1/-1/0（活动模式线性增量方向）
-		// rot_sign_code: +1/-1/0（活动模式旋转关节增量符号）
-		int force_mode_code =
-			(guidewire_mode == GuidewireMode::None) ? 0 :
-			((guidewire_mode == GuidewireMode::Independent) ? 1 :
-				(cooperative_direction == CooperativeDirection::Retraction ? 3 : 2));
-		int force_reverse_code =
-			(guidewire_mode == GuidewireMode::None)
-			? (axis1_reverse_pressed ? 1 : 0)
-			: (axis6_effective_reverse_pressed ? 1 : 0);
-		int force_push_pull_code = 0;
-		int force_rot_sign_code = 0;
-		const double force_rot_sign_deadband_rad = 1e-4;
-
 		unsigned short cylinder1_cmd = cyl.cyl1_open;
 		unsigned short cylinder2_cmd = cyl.cyl2_clamp;
 		unsigned short cylinder3_cmd = cyl.cyl3_follow_release;
@@ -1744,19 +1934,12 @@ int main(int argc, char* argv[])
 		}
 
 		// 9) 根据当前顶层模式构建一帧 refer 和一组气缸指令。
-		if (!return_ads_fault_hold && !freeze_active && !estop_hold_active &&
+		if (!ads_soft_hold_active && !return_ads_fault_hold && !freeze_active && !estop_hold_active &&
 			(control_active || motion_startup_active) && read_plc_state())
 		{
 			load_pos_from_actual();
 			pos[1] = axis2_hold_rel;
 			pos[6] = axis7_hold_rel;
-
-			// 发布最新轴位置给高频日志线程读取（绝对坐标 mm）。
-			force_logger.publish_axis_snapshot(
-				plc_act_pos[0] + plc_init_pos[0],
-				plc_act_pos[1] + plc_init_pos[1],
-				plc_act_pos[5] + plc_init_pos[5],
-				plc_act_pos[6] + plc_init_pos[6]);
 
 			const DWORD now_ms = GetTickCount();
 			const double axis1_linear_filtered = axis1_handle_filter.axis0_filtered;
@@ -1824,7 +2007,6 @@ int main(int argc, char* argv[])
 				!axis6_soft_limit_hold;
 			auto tracking_reason_for = [&](bool forward_mode) -> TrackingInvalidReason
 			{
-				if (!tracking_logger.is_running()) return TrackingInvalidReason::NotLogging;
 				if (!forward_mode) return TrackingInvalidReason::NotForwardDelivery;
 				if (!control_active) return TrackingInvalidReason::ControlInactive;
 				if (motion_startup_active) return TrackingInvalidReason::StartupActive;
@@ -1922,40 +2104,14 @@ int main(int argc, char* argv[])
 				tracking_controller.disable_compensation();
 				std::cout << "主从位移补偿已关闭：已离开正向递送/换手恢复范围。" << std::endl;
 			}
-			const bool force_is_catheter_mode = (guidewire_mode == GuidewireMode::None);
-			const double active_linear_increment_mm =
-				force_is_catheter_mode ? axis1_linear_increment_mm : axis6_linear_increment_mm;
-			if (active_linear_increment_mm > 0.0)
-			{
-				force_push_pull_code = 1;
-			}
-			else if (active_linear_increment_mm < 0.0)
-			{
-				force_push_pull_code = -1;
-			}
-
-			const double axis1_rot_increment_rad = axis1_rot_filtered - axis1_prev_rot_filtered;
-			const double axis6_rot_increment_rad = axis6_rot_filtered - axis6_prev_rot_filtered;
-			const double active_rot_increment_rad =
-				force_is_catheter_mode ? axis1_rot_increment_rad : axis6_rot_increment_rad;
-			if (active_rot_increment_rad > force_rot_sign_deadband_rad)
-			{
-				force_rot_sign_code = 1;
-			}
-			else if (active_rot_increment_rad < -force_rot_sign_deadband_rad)
-			{
-				force_rot_sign_code = -1;
-			}
-
 			auto hold_axis1_mirror_axes_for_return = [&]()
 			{
 				pos[2] = axis1_return_hold_axis3_rel;
 				pos[4] = axis1_return_hold_axis5_rel;
 			};
 
-			// 错峰切缸：避免一对夹爪同周期同步翻转造成器械瞬间双开释放。
-			// t<stagger_ms 仅下发 close 侧；t>=stagger_ms 才下发 open 侧。
-			// 调用方需在阶段入口将 seq_t0 置为 now_ms。
+			// 顺序切缸接口：t<stagger_ms 仅下发 close 侧，之后再下发 open 侧。
+			// 当前换手参数为 0 ms（原值 50 ms），因此两侧在同一控制拍下发；调用方仍保留阶段入口时基。
 			auto staggered_pair = [&](unsigned short& close_cmd, unsigned short close_val,
 				unsigned short& open_cmd, unsigned short open_val,
 				DWORD seq_t0, DWORD stagger_ms)
@@ -2127,9 +2283,21 @@ int main(int argc, char* argv[])
 						{
 							std::cout << "axis6 已到达或越过换手边界，收到有效同向输入，重新触发换手。" << std::endl;
 						}
-						const double axis6_return_target_abs = axis6_reverse_mode
+						double axis6_return_target_abs = axis6_reverse_mode
 							? axis6_window_left_abs_now
 							: axis6_window_right_abs_now;
+						if (cooperative_axis6_mode && !axis6_reverse_mode)
+						{
+							// 协同递送保留动态触发边，但导丝换手不退满整个窗口，
+							// 给轴5移动和下一次导管联动快进同时保留两侧余量。
+							const double target_offset_from_window_left_mm =
+								cfg.cooperative_delivery_axis6_return_gap_from_axis5_mm -
+								cfg.axis6_window_min_gap_from_axis5_mm;
+							axis6_return_target_abs = clamp_double(
+								axis6_window_left_abs_now + target_offset_from_window_left_mm,
+								axis6_window_left_abs_now,
+								axis6_window_right_abs_now);
+						}
 						if (axis6_target_exceeds_soft_limit(axis6_return_target_abs))
 						{
 							engage_axis6_soft_limit_hold(
@@ -2481,6 +2649,7 @@ int main(int argc, char* argv[])
 					if (sync_all(30))
 					{
 						control_active = true;
+						plc_restart_recovery_latched = false;
 						std::cout << (startup.recovery_mode ? "中断恢复启动已完成。" : "启动准备流程已完成。") << std::endl;
 					}
 					else
@@ -2671,6 +2840,10 @@ int main(int argc, char* argv[])
 				// - axis6 在导管模式 Follow 阶段保持不动
 				// - axis1 触发快退时，axis6 按反向等位移联动，并限制在轴5相对窗口内
 				const bool cooperative_mode = (guidewire_mode == GuidewireMode::Cooperative);
+				const bool cooperative_delivery_mode =
+					cooperative_mode && !cooperative_retraction_active;
+				const bool axis1_return_couples_axis6 =
+					!cooperative_mode || cooperative_delivery_mode;
 				// 协同回退只允许一条链路拥有 PLC 计划动作。若运行态在异常边沿进入
 				// 非 Follow，相同周期内优先判定 axis1，避免两个 return_cmd 并发下发。
 				if (cooperative_mode && cooperative_return_owner == CooperativeReturnOwner::None)
@@ -2688,20 +2861,23 @@ int main(int argc, char* argv[])
 					cooperative_mode && cooperative_return_owner == CooperativeReturnOwner::Axis6;
 				double axis6_catheter_window_start_abs = axis6_abs;
 				double axis6_catheter_window_end_abs = axis6_abs;
-				if (!cooperative_mode)
+				if (axis1_return_couples_axis6)
 				{
-					// 导管模式下窗口随轴5移动，仅用于约束轴1快退时的轴6联动目标。
+					// 普通导管与协同递送都按轴5实际位置约束轴1回退时的轴6联动目标。
 					motion_sync::calculate_axis6_window_from_axis5(
 						ctx,
 						axis6_catheter_window_start_abs,
 						axis6_catheter_window_end_abs);
-					axis6_crawl.start_abs = axis6_catheter_window_start_abs;
-					axis6_crawl.end_abs = axis6_catheter_window_end_abs;
-					axis6_crawl.window_active = is_within_range(
-						axis6_abs,
-						axis6_crawl.min_abs(),
-						axis6_crawl.max_abs(),
-						cfg.crawl_arrive_tol_mm);
+					if (!cooperative_mode)
+					{
+						axis6_crawl.start_abs = axis6_catheter_window_start_abs;
+						axis6_crawl.end_abs = axis6_catheter_window_end_abs;
+						axis6_crawl.window_active = is_within_range(
+							axis6_abs,
+							axis6_crawl.min_abs(),
+							axis6_crawl.max_abs(),
+							cfg.crawl_arrive_tol_mm);
+					}
 				}
 				const bool axis1_now_in_window = is_within_range(axis1_abs, axis1_min_abs, axis1_max_abs, cfg.crawl_arrive_tol_mm);
 				if (!cooperative_axis1_locked && !axis1_crawl.window_active && axis1_now_in_window)
@@ -2743,16 +2919,25 @@ int main(int argc, char* argv[])
 					if (axis1_post_return_lead_armed && !axis1_post_return_lead_active)
 					{
 						const double configured_lead_mm = cfg.axis1_post_return_lead_mm;
+						const bool handoff_smoothing_ready =
+							(now_ms - axis1_post_return_lead_arm_t0_ms) >=
+							cfg.axis1_post_return_lead_handoff_settle_ms;
 						if (axis3_delivery_stop_active || axis1_delivery_stop_latched ||
 							std::abs(configured_lead_mm) <= 1e-6)
 						{
 							// 先行不得绕过原有轴3投送停止位；零先行量等价于取消本次武装。
 							reset_axis1_post_return_lead();
 						}
+						else if (!handoff_smoothing_ready)
+						{
+							// 回退完成拍仍处于快速旁路；短暂保持实际位置，让 PLC 的均值和轨迹链重新接管。
+							// 期间每拍都会刷新手柄差分基准，因此持续推动不会积压成目标跳变。
+							axis1_follow_cmd_abs = axis1_abs;
+						}
 						else if (axis1_directional_increment_mm < -cfg.linear_increment_noise_deadband_mm)
 						{
 							const double lead_target_abs = clamp_double(
-								axis1_follow_cmd_abs - configured_lead_mm,
+								axis1_abs - configured_lead_mm,
 								axis1_window_left_abs_now,
 								axis1_window_right_abs_now);
 
@@ -2771,6 +2956,8 @@ int main(int argc, char* argv[])
 								axis1_post_return_lead_armed = false;
 								axis1_post_return_lead_active = true;
 								axis1_post_return_lead_target_abs = lead_target_abs;
+								axis1_post_return_lead_arrive_pending = false;
+								axis1_post_return_lead_arrive_t0_ms = 0;
 								std::cout << "轴1 回退后先行已触发："
 									<< configured_lead_mm << " mm。" << std::endl;
 							}
@@ -2781,8 +2968,21 @@ int main(int argc, char* argv[])
 					{
 						pos[0] = axis1_post_return_lead_target_abs - plc_init_pos[0];
 						axis1_follow_cmd_abs = axis1_post_return_lead_target_abs;
-						if (std::abs(axis1_abs - axis1_post_return_lead_target_abs) <=
-							cfg.crawl_arrive_tol_mm)
+						const bool lead_at_target =
+							std::abs(axis1_abs - axis1_post_return_lead_target_abs) <=
+							cfg.axis1_post_return_lead_arrive_tol_mm;
+						if (!lead_at_target)
+						{
+							axis1_post_return_lead_arrive_pending = false;
+							axis1_post_return_lead_arrive_t0_ms = 0;
+						}
+						else if (!axis1_post_return_lead_arrive_pending)
+						{
+							axis1_post_return_lead_arrive_pending = true;
+							axis1_post_return_lead_arrive_t0_ms = now_ms;
+						}
+						else if ((now_ms - axis1_post_return_lead_arrive_t0_ms) >=
+							cfg.axis1_post_return_lead_arrive_settle_ms)
 						{
 							if (sync_axis1(3))
 							{
@@ -2959,7 +3159,7 @@ int main(int argc, char* argv[])
 								double axis6_coupled_target_raw_abs = axis6_abs;
 								double candidate_axis6_coupled_target_abs = axis6_abs;
 								bool axis6_coupled_target_safe = true;
-								if (!cooperative_mode)
+								if (axis1_return_couples_axis6)
 								{
 									// 在切缸、进入 SwitchWait、下发 PLC 回退之前先验证
 									// axis1 回退引起的 axis6 联动终点，防止下一次换手越过 670 mm 软限位。
@@ -2996,9 +3196,9 @@ int main(int argc, char* argv[])
 								axis1_return_hold_axis3_rel = plc_act_pos[2];
 								axis1_return_hold_axis5_rel = plc_act_pos[4];
 								axis6_coupled_settle_rel = plc_act_pos[5];
-								if (!cooperative_mode)
+								if (axis1_return_couples_axis6)
 								{
-									// 导管模式：axis6 与 axis1 快退位移镜像反向，目标受轴5相对窗口限制。
+									// 普通导管与协同递送：axis6 与 axis1 回退位移镜像反向快进。
 									axis6_coupled_target_abs = candidate_axis6_coupled_target_abs;
 									if (std::abs(axis6_coupled_target_abs - axis6_coupled_target_raw_abs) >
 										cfg.crawl_arrive_tol_mm)
@@ -3035,7 +3235,7 @@ int main(int argc, char* argv[])
 								staggered_pair(cylinder1_cmd, cyl.cyl1_clamp,
 									cylinder2_cmd, cyl.cyl2_open,
 									axis1_crawl.cyl_seq_t0, cfg.axis1_cylinder_interstep_wait_ms);
-								if (!cooperative_mode)
+								if (axis6_coupled_active)
 								{
 									staggered_pair(cylinder3_cmd, cyl.cyl3_clamp,
 										cylinder4_cmd, cyl.cyl4_open,
@@ -3255,9 +3455,25 @@ int main(int argc, char* argv[])
 									axis6_coupled_done = false;
 									axis6_coupled_error = false;
 									axis6_coupled_error_id = 0;
-									if (!sync_axis1(3))
+									const bool cooperative_axis1_return =
+										cooperative_mode && cooperative_return_owner == CooperativeReturnOwner::Axis1;
+									const bool synced = cooperative_axis1_return
+										? sync_cooperative_guidewire(3, false)
+										: sync_axis1(3);
+									if (!synced)
 									{
 										std::cout << "轴6 协同快进报错后重同步失败。" << std::endl;
+										if (cooperative_axis1_return)
+										{
+											cancel_cooperative_delivery(true);
+											return_ads_fault_hold = true;
+											control_active = false;
+											clear_force_output();
+										}
+									}
+									else if (cooperative_axis1_return)
+									{
+										cooperative_return_owner = CooperativeReturnOwner::None;
 									}
 									axis1_crawl.phase = CrawlState::Phase::Follow;
 									axis1_crawl.cyl_seq_stage = 0;
@@ -3364,6 +3580,9 @@ int main(int argc, char* argv[])
 							axis1_post_return_lead_armed = true;
 							axis1_post_return_lead_active = false;
 							axis1_post_return_lead_target_abs = 0.0;
+							axis1_post_return_lead_arm_t0_ms = now_ms;
+							axis1_post_return_lead_arrive_pending = false;
+							axis1_post_return_lead_arrive_t0_ms = 0;
 							std::cout << "轴1 计划回退完成：已武装回退后先行 "
 								<< cfg.axis1_post_return_lead_mm << " mm。" << std::endl;
 						}
@@ -3371,6 +3590,9 @@ int main(int argc, char* argv[])
 						{
 							reset_axis1_post_return_lead();
 						}
+						// 回退状态已经结束，本拍即撤销 PLC 快速旁路；下一拍不得继续沿用回退直通链路。
+						axis1_fast_return = false;
+						axis6_fast_retract = false;
 						axis1_crawl.phase = CrawlState::Phase::Follow;
 						axis1_crawl.cyl_seq_stage = 0;
 						axis1_crawl.plc_move_requested = false;
@@ -3386,13 +3608,16 @@ int main(int argc, char* argv[])
 				{
 					if (cooperative_return_owner == CooperativeReturnOwner::Axis1)
 					{
-						// 导管回退期间导丝链路不运行状态机，也不接受线性/旋转手柄输入。
-						// 保持导丝侧正常 Follow 夹爪状态，等待导管侧恢复后统一重同步。
+						// 导管换手期间不再运行 axis6 自身状态机，也不接受线性/旋转手柄输入。
+						// 协同递送的 axis6 联动快进由 axis1 状态机统一下发，不能在此覆盖。
 						axis6_coop_ff_inited = false;
-						pos[5] = plc_act_pos[5];
 						pos[6] = axis7_hold_rel;
-						cylinder3_cmd = cyl.cyl3_open;
-						cylinder4_cmd = cyl.cyl4_clamp;
+						if (!axis6_coupled_active)
+						{
+							pos[5] = plc_act_pos[5];
+							cylinder3_cmd = cyl.cyl3_open;
+							cylinder4_cmd = cyl.cyl4_clamp;
+						}
 					}
 					else
 					{
@@ -3514,13 +3739,11 @@ int main(int argc, char* argv[])
 			axis6_prev_abs_for_trigger = axis6_abs;
 			axis1_prev_abs_valid = true;
 			axis6_prev_abs_valid = true;
-			write_refer();
 		}
 		else
 		{
 			TrackingInvalidReason inactive_reason = TrackingInvalidReason::NotForwardDelivery;
-			if (!tracking_logger.is_running()) inactive_reason = TrackingInvalidReason::NotLogging;
-			else if (return_ads_fault_hold) inactive_reason = TrackingInvalidReason::AdsReturnFault;
+			if (return_ads_fault_hold) inactive_reason = TrackingInvalidReason::AdsReturnFault;
 			else if (motion_startup_active) inactive_reason = TrackingInvalidReason::StartupActive;
 			else if (freeze_active) inactive_reason = TrackingInvalidReason::Paused;
 			else if (estop_hold_active) inactive_reason = TrackingInvalidReason::PlcHold;
@@ -3579,30 +3802,21 @@ int main(int argc, char* argv[])
 			}
 		}
 
-		bool axis4_manual_busy_now = false;
-		bool axis4_manual_error_now = false;
-		unsigned long axis4_manual_error_id_now = 0;
-		if ((loop_count % 20) == 0)
+		const bool axis4_manual_error_now = ads_events.axis4_manual_error;
+		const unsigned long axis4_manual_error_id_now = ads_events.axis4_manual_error_id;
+		if (axis4_manual_error_now &&
+			(!axis4_manual_error_prev || axis4_manual_error_id_now != axis4_manual_error_id_prev))
 		{
-			bool axis4_diag_ok = true;
-			axis4_diag_ok = ads.ADSRead(AdsSymbol::axis4_manual_busy, sizeof(axis4_manual_busy_now), &axis4_manual_busy_now) && axis4_diag_ok;
-			axis4_diag_ok = ads.ADSRead(AdsSymbol::axis4_manual_error, sizeof(axis4_manual_error_now), &axis4_manual_error_now) && axis4_diag_ok;
-			axis4_diag_ok = ads.ADSRead(AdsSymbol::axis4_manual_error_id, sizeof(axis4_manual_error_id_now), &axis4_manual_error_id_now) && axis4_diag_ok;
-			if (axis4_diag_ok)
-			{
-				if (axis4_manual_error_now &&
-					(!axis4_manual_error_prev || axis4_manual_error_id_now != axis4_manual_error_id_prev))
-				{
-					std::cout << "轴4 手动控制报错，错误码: " << axis4_manual_error_id_now << std::endl;
-				}
-				axis4_manual_error_prev = axis4_manual_error_now;
-				axis4_manual_error_id_prev = axis4_manual_error_id_now;
-			}
+			std::cout << "轴4 手动控制报错，错误码: " << axis4_manual_error_id_now << std::endl;
 		}
+		axis4_manual_error_prev = axis4_manual_error_now;
+		axis4_manual_error_id_prev = axis4_manual_error_id_now;
 
-		// 10) 仅在运动激活时驱动气缸；快速回退标志始终会写入。
+		// 10) 构建本拍离散输出；与 refer 一起交给 100 Hz 通信线程。
 		bool cylinder5_req = formal_control_stage ? pause_pressed : false;
-		if (!freeze_active && (control_active || motion_startup_active))
+		const bool cylinder_output_enabled = !ads_soft_hold_active && !freeze_active &&
+			!estop_hold_active && (control_active || motion_startup_active);
+		if (cylinder_output_enabled)
 		{
 			if (!spacing_recovery.active() && !axis6_soft_limit_hold)
 			{
@@ -3617,170 +3831,177 @@ int main(int argc, char* argv[])
 				apply_cylinder_manual_mode(cylinder_manual_mode[2], cylinder3_cmd, cyl.cyl3_open, cyl.cyl3_clamp);
 				apply_cylinder_manual_mode(cylinder_manual_mode[3], cylinder4_cmd, cyl.cyl4_open, cyl.cyl4_clamp);
 			}
-			ads.ADSWrite(AdsSymbol::cylinder1_value, sizeof(cylinder1_cmd), &cylinder1_cmd);
-			ads.ADSWrite(AdsSymbol::cylinder2_value, sizeof(cylinder2_cmd), &cylinder2_cmd);
-			ads.ADSWrite(AdsSymbol::cylinder3_value, sizeof(cylinder3_cmd), &cylinder3_cmd);
-			ads.ADSWrite(AdsSymbol::cylinder4_value, sizeof(cylinder4_cmd), &cylinder4_cmd);
-			// 电缸5写 BOOL 请求，由 PLC handle 周期映射为 0/2000。
-			ads.ADSWrite(AdsSymbol::cylinder5_press_req, sizeof(cylinder5_req), &cylinder5_req);
 		}
 
-		write_axis4_manual_requests(axis4_manual_forward_req, axis4_manual_reverse_req);
-		ads.ADSWrite(AdsSymbol::startup_smoothing_bypass, sizeof(startup_smoothing_bypass), &startup_smoothing_bypass);
-		ads.ADSWrite(AdsSymbol::axis1_fast_return, sizeof(axis1_fast_return), &axis1_fast_return); // 轴1快退平滑旁路
-		ads.ADSWrite(AdsSymbol::axis6_fast_retract, sizeof(axis6_fast_retract), &axis6_fast_retract); // 轴6快退平滑旁路
-
-		// 力传感器采样独立于旧 CSV 开关，避免 force_log.enabled=false 阻断力反馈。
-		const DWORD force_log_now_ms = GetTickCount();
-		const bool tracking_log_active = tracking_logger.is_running();
-		const bool force_sampling_active = force_log_started || ff.enabled || tracking_log_active;
-		// 仅为主从实验记录提供力样本时保持 20 Hz；旧高频记录或力反馈仍沿用原采样节拍。
-		const DWORD force_sampling_period_ms = (force_log_started || ff.enabled)
-			? force_log.period_ms
-			: 50;
-		const bool should_sample_force =
-			force_sampling_active &&
-			((force_sampling_period_ms == 0) ||
-				(force_sample_last_sample_ms == 0) ||
-				((force_log_now_ms - force_sample_last_sample_ms) >= force_sampling_period_ms));
-		if (!force_sampling_active)
+		// 记录器直接消费 100 Hz ADS 快照序号；无效快照仍保留时间槽并由写入器归一化为 NaN。
+		experiment_recorder.update_ads_communication_stats(ads_stats);
+		experiment_recorder.poll_health();
+		const std::int64_t recorder_now_qpc = experiment_recorder.clock().now_qpc();
+		const DWORD force_sample_now_ms = GetTickCount();
+		const bool force_data_consumer_active = experiment_recorder.is_recording() || ff.enabled ||
+			tracking_controller.compensation_enabled() || clean_force_monitor_enabled || ft_exp.active();
+		if (ctx.force_sample_source == ForceSampleSource::ADS)
 		{
-			force_sample.valid = false;
-		}
-		if (should_sample_force)
-		{
-			// 采样节拍按 period_ms 统一推进，读失败也不打乱节拍。
-			force_sample_last_sample_ms = force_log_now_ms;
-			ForceSampleFrame sampled_frame;
-			const bool ads_sample_ok = read_force_sample(sampled_frame);
-			bool ready_to_log = false;
-			double log_ft1_value = 0.0;
-			double log_fn1_value = 0.0;
-
-			if (ctx.force_sample_source == ForceSampleSource::TCP_DAQ)
+			if (has_new_ads_snapshot)
 			{
-				double tcp_raw_v[6] = { 0 };
-				std::uint64_t tcp_ts = 0;
-				if (tcp_force_daq.get_latest_raw(tcp_raw_v, tcp_ts))
+				ForceSampleFrame sampled_frame{};
+				sampled_frame.ft_1_value = ads_snapshot.ft_1_value;
+				sampled_frame.fn_1_value = ads_snapshot.fn_1_value;
+				sampled_frame.fn_2_value = ads_snapshot.fn_2_value;
+				sampled_frame.ft_2_value = ads_snapshot.ft_2_value;
+				sampled_frame.ft_1_value_v = static_cast<double>(ads_snapshot.ft_1_value) / 1000.0;
+				sampled_frame.fn_1_value_v = static_cast<double>(ads_snapshot.fn_1_value) / 1000.0;
+				sampled_frame.axis1_pos_rel = ads_snapshot.act_pos_rel[0];
+				sampled_frame.axis2_pos_rel = ads_snapshot.act_pos_rel[1];
+				sampled_frame.tick_ms = force_sample_now_ms;
+				sampled_frame.qpc_ticks = ads_snapshot.qpc_ticks;
+				sampled_frame.valid = ads_snapshot.force_valid;
+				force_sample = sampled_frame;
+				force_sample_ads_sequence = ads_snapshot.attempt_sequence;
+			}
+			else if (ads_soft_hold_active)
+			{
+				force_sample.valid = false;
+			}
+		}
+		else
+		{
+			DWORD force_sampling_period_ms = 20;
+			if (tracking_controller.compensation_enabled() && !ff.enabled &&
+				!clean_force_monitor_enabled && !ft_exp.active() && !experiment_recorder.is_recording())
+			{
+				force_sampling_period_ms = 50;
+			}
+			const bool should_sample_force = force_data_consumer_active &&
+				(has_new_ads_snapshot || force_sample_last_sample_ms == 0 ||
+				 (force_sample_now_ms - force_sample_last_sample_ms) >= force_sampling_period_ms);
+			if (should_sample_force)
+			{
+				force_sample_last_sample_ms = force_sample_now_ms;
+				ForceSampleFrame sampled_frame{};
+				double tcp_raw_v[6] = {};
+				std::uint64_t tcp_tick_ms = 0;
+				std::int64_t tcp_qpc_ticks = 0;
+				bool sample_ok = false;
+				if (tcp_force_daq.get_latest_raw(tcp_raw_v, tcp_tick_ms, &tcp_qpc_ticks))
 				{
-					force_sample = ads_sample_ok ? sampled_frame : ForceSampleFrame{};
-					if (!ads_sample_ok)
+					const std::int64_t max_age_ticks = experiment_recorder.clock().frequency() / 2;
+					if (tcp_qpc_ticks > 0 && recorder_now_qpc - tcp_qpc_ticks <= max_age_ticks)
 					{
-						force_sample.axis1_pos_rel = plc_act_pos[0];
-						force_sample.tick_ms = force_log_now_ms;
+						sampled_frame.fn_1_value_v = tcp_raw_v[0];
+						sampled_frame.ft_1_value_v = tcp_raw_v[1];
+						sampled_frame.axis1_pos_rel = plc_act_pos[0];
+						sampled_frame.axis2_pos_rel = plc_act_pos[1];
+						sampled_frame.tick_ms = static_cast<DWORD>(tcp_tick_ms);
+						sampled_frame.qpc_ticks = tcp_qpc_ticks;
+						sampled_frame.valid = true;
+						sample_ok = true;
 					}
-					force_sample.axis2_pos_rel = plc_act_pos[1];
-					force_sample.fn_1_value_v = tcp_raw_v[0];
-					force_sample.ft_1_value_v = tcp_raw_v[1];
-					force_sample.valid = true;
-					log_ft1_value = force_sample.ft_1_value_v;
-					log_fn1_value = force_sample.fn_1_value_v;
-					ready_to_log = true;
-					force_sample_diag_reason.clear();
+				}
+				force_sample = sampled_frame;
+				force_sample.valid = sample_ok;
+				force_sample_ads_sequence = 0;
+			}
+		}
+
+		if (force_data_consumer_active && !force_sample.valid)
+		{
+			const std::string reason = ctx.force_sample_source == ForceSampleSource::TCP_DAQ
+				? "力传感器告警：TCP_DAQ 尚无新鲜有效帧。"
+				: "力传感器告警：ADS 力快照无效。";
+			if (force_sample_diag_reason != reason) std::cout << reason << std::endl;
+			force_sample_diag_reason = reason;
+		}
+		else
+		{
+			force_sample_diag_reason.clear();
+		}
+
+		const double csv_nan = std::numeric_limits<double>::quiet_NaN();
+		const bool clean_force_valid = force_sample.valid && cal_state.zeroed;
+		const CleanForce clean_force = clean_force_valid
+			? calculate_clean_force(force_sample.fn_1_value_v, force_sample.ft_1_value_v, cal_state)
+			: CleanForce{};
+		if (experiment_recorder.is_recording())
+		{
+			const std::int64_t max_handle_delta_ticks =
+				std::max<std::int64_t>(1, experiment_recorder.clock().frequency() / 100);
+			for (const AdsFastSnapshot& record_snapshot : drained_ads_snapshots)
+			{
+				ForceCsvRow force_row{};
+				force_row.ads_snapshot_sequence = record_snapshot.attempt_sequence;
+				force_row.source_qpc_ticks = record_snapshot.qpc_ticks;
+				if (ctx.force_sample_source == ForceSampleSource::ADS)
+				{
+					force_row.sample_valid = record_snapshot.force_valid;
+					force_row.fn_1_raw_v = static_cast<double>(record_snapshot.fn_1_value) / 1000.0;
+					force_row.ft_1_raw_v = static_cast<double>(record_snapshot.ft_1_value) / 1000.0;
 				}
 				else
 				{
-					force_sample.valid = false;
-					const std::string reason = "力传感器告警：当前采样源为 TCP_DAQ，但尚无采集卡有效帧。";
-					if (force_sample_diag_reason != reason)
-					{
-						std::cout << reason << std::endl;
-					}
-					force_sample_diag_reason = reason;
+					const std::int64_t delta = force_sample.qpc_ticks >= record_snapshot.qpc_ticks
+						? force_sample.qpc_ticks - record_snapshot.qpc_ticks
+						: record_snapshot.qpc_ticks - force_sample.qpc_ticks;
+					force_row.sample_valid = force_sample.valid && delta <= max_handle_delta_ticks;
+					force_row.fn_1_raw_v = force_sample.fn_1_value_v;
+					force_row.ft_1_raw_v = force_sample.ft_1_value_v;
 				}
-			}
-			else if (ads_sample_ok)
-			{
-				force_sample = sampled_frame;
-				force_sample.axis2_pos_rel = plc_act_pos[1];
-				log_ft1_value = force_sample.ft_1_value_v;
-				log_fn1_value = force_sample.fn_1_value_v;
-				ready_to_log = true;
-				// ADS 高速日志没有独立采样线程；将统一单位后的本拍样本送入旧写入器。
-				if (force_logger.is_running())
-				{
-					double ads_v[6] = { force_sample.fn_1_value_v, force_sample.ft_1_value_v, 0.0, 0.0, 0.0, 0.0 };
-					force_logger.on_sensor_sample(force_sample.tick_ms, ads_v);
-				}
-				force_sample_diag_reason.clear();
-			}
-			else
-			{
-				force_sample = ForceSampleFrame{};
-				force_sample.tick_ms = force_log_now_ms;
-				const std::string reason = "力传感器告警：ft_1/fn_1/fn_2/ft_2 与 axis1_pos_rel 的 ADSReadSum 读取失败。";
-				if (force_sample_diag_reason != reason)
-				{
-					std::cout << reason << std::endl;
-				}
-				force_sample_diag_reason = reason;
-			}
+				force_row.calibrated_valid = force_row.sample_valid && cal_state.zeroed;
+				const CleanForce row_clean_force = force_row.calibrated_valid
+					? calculate_clean_force(force_row.fn_1_raw_v, force_row.ft_1_raw_v, cal_state)
+					: CleanForce{};
+				force_row.fn_1_zero_v = force_row.calibrated_valid ? cal_state.f_zero : csv_nan;
+				force_row.ft_1_zero_v = force_row.calibrated_valid ? cal_state.ft_zero : csv_nan;
+				force_row.clean_force_n = force_row.calibrated_valid ? row_clean_force.force_n : csv_nan;
+				force_row.clean_handle_torque_nm = force_row.calibrated_valid
+					? row_clean_force.handle_torque_nm : csv_nan;
+				(void)experiment_recorder.enqueue_force(force_row);
 
-			if (force_log.enabled && ready_to_log)
-			{
-				force_log.last_sample_ms = force_log_now_ms;
-				force_log.append_sample(
-					force_log_now_ms,
-					log_ft1_value,
-					log_fn1_value,
-					force_sample.fn_2_value,
-					force_sample.ft_2_value,
-					force_mode_code,
-					force_reverse_code,
-					force_push_pull_code,
-					force_rot_sign_code,
-					force_sample.axis1_pos_rel);
+				// 100 Hz ADS 序号的偶数帧形成稳定 50 Hz 运动表，不做历史突发补写。
+				if ((record_snapshot.attempt_sequence & 1ULL) != 0ULL) continue;
+				MotionCsvRow motion_row{};
+				motion_row.ads_snapshot_sequence = record_snapshot.attempt_sequence;
+				motion_row.source_qpc_ticks = record_snapshot.qpc_ticks;
+				motion_row.position_valid = record_snapshot.position_valid;
+				for (int axis = 0; axis < 7; ++axis)
+				{
+					motion_row.axis_from_left_mm[axis] = record_snapshot.act_pos_from_left[axis];
+				}
+				const HandleRecordSnapshot* nearest_handle = nullptr;
+				std::int64_t nearest_delta = std::numeric_limits<std::int64_t>::max();
+				for (const HandleRecordSnapshot& candidate : handle_record_history)
+				{
+					const std::int64_t delta = candidate.qpc_ticks >= record_snapshot.qpc_ticks
+						? candidate.qpc_ticks - record_snapshot.qpc_ticks
+						: record_snapshot.qpc_ticks - candidate.qpc_ticks;
+					if (delta < nearest_delta)
+					{
+						nearest_delta = delta;
+						nearest_handle = &candidate;
+					}
+				}
+				if (nearest_handle != nullptr && nearest_delta <= max_handle_delta_ticks)
+				{
+					motion_row.axis1_handle_valid = nearest_handle->axis1_valid;
+					motion_row.axis1_handle_linear_raw = nearest_handle->axis1_linear_raw;
+					motion_row.axis1_handle_linear_filtered = nearest_handle->axis1_linear_filtered;
+					motion_row.axis1_handle_rotation_raw = nearest_handle->axis1_rotation_raw;
+					motion_row.axis1_handle_rotation_filtered = nearest_handle->axis1_rotation_filtered;
+					motion_row.axis6_handle_valid = nearest_handle->axis6_valid;
+					motion_row.axis6_handle_linear_raw = nearest_handle->axis6_linear_raw;
+					motion_row.axis6_handle_linear_filtered = nearest_handle->axis6_linear_filtered;
+					motion_row.axis6_handle_rotation_raw = nearest_handle->axis6_rotation_raw;
+					motion_row.axis6_handle_rotation_filtered = nearest_handle->axis6_rotation_filtered;
+				}
+				(void)experiment_recorder.enqueue_motion(motion_row);
 			}
 		}
 
-		// 主从实验不依赖力反馈开关，但 ADS 力输入失效时关闭补偿，禁止在无健康采样的状态继续放大手柄位移。
-		if (tracking_logger.is_running() && !force_sample.valid && tracking_controller.compensation_enabled())
+		// PI 与磁盘记录无关；仅在 PI 自身运行时保留 20 Hz 力健康门控。
+		if (tracking_controller.compensation_enabled() && !force_sample.valid)
 		{
 			tracking_controller.disable_compensation();
 			std::cout << "主从位移补偿已关闭：当前没有有效力采样。" << std::endl;
-		}
-		if (tracking_logger.is_running() &&
-			(tracking_log_last_sample_ms == 0 || (force_log_now_ms - tracking_log_last_sample_ms) >= 50))
-		{
-			tracking_log_last_sample_ms = force_log_now_ms;
-			DeliveryTrackingLogger::Row tracking_row{};
-			tracking_row.tick_ms = force_log_now_ms;
-			tracking_row.session_id = tracking_logger.session_id();
-			tracking_row.guidewire_mode = static_cast<int>(guidewire_mode);
-			tracking_row.axis1_phase = static_cast<int>(axis1_crawl.phase);
-			tracking_row.axis6_phase = static_cast<int>(axis6_crawl.phase);
-			tracking_row.cylinder_cmd[0] = cylinder1_cmd;
-			tracking_row.cylinder_cmd[1] = cylinder2_cmd;
-			tracking_row.cylinder_cmd[2] = cylinder3_cmd;
-			tracking_row.cylinder_cmd[3] = cylinder4_cmd;
-			tracking_row.compensation_enabled = tracking_controller.compensation_enabled();
-			tracking_row.force_sample_valid = force_sample.valid;
-			tracking_row.calibration_zeroed = cal_state.zeroed;
-			tracking_row.freeze_active = freeze_active;
-			tracking_row.plc_hold_active = estop_hold_active;
-			tracking_row.ads_return_fault = return_ads_fault_hold;
-			tracking_row.spacing_recovery_active = spacing_recovery.active() || spacing_recovery.requested;
-			tracking_row.force_transition_active = ft_exp.active();
-			tracking_row.manual_cylinder_override = tracking_manual_cylinder_override;
-			tracking_row.fn_1_raw_v = force_sample.fn_1_value_v;
-			tracking_row.ft_1_raw_v = force_sample.ft_1_value_v;
-			tracking_row.fn_1_zero_v = cal_state.f_zero;
-			tracking_row.ft_1_zero_v = cal_state.ft_zero;
-			if (force_sample.valid && cal_state.zeroed)
-			{
-				const CalibratedForce tracking_force = calibrate_force(
-					force_sample.fn_1_value_v,
-					force_sample.ft_1_value_v,
-					force_sample.axis2_pos_rel,
-					cal_cfg,
-					cal_state);
-				tracking_row.calibrated_force_n = tracking_force.f_feedback_n;
-				tracking_row.calibrated_torque_nm = tracking_force.t_feedback_nm;
-			}
-			tracking_row.logger_dropped = tracking_logger.dropped_count();
-			tracking_row.axis1 = tracking_controller.snapshot(DeliveryTrackingAxis::Axis1);
-			tracking_row.axis6 = tracking_controller.snapshot(DeliveryTrackingAxis::Axis6);
-			tracking_logger.enqueue(tracking_row);
 		}
 
 		// 力反馈阻断原因仅在状态变化时输出一次，避免控制台被周期性等待提示淹没。
@@ -3824,20 +4045,53 @@ int main(int argc, char* argv[])
 				}
 				if (ft_exp.wants_v_limit_override())
 				{
-					// ft_exp 内部维护 start 时的 v_limit 快照，主循环不需要每拍读 PLC。
+					// ft_exp 内部维护 start 时的 v_limit 快照；只在覆写值变化时写一次。
 					double v_limit_local[7];
 					ft_exp.fill_v_limit_override(v_limit_local);
-					plc_io::write_v_limit(ctx, v_limit_local);
+					if (!ft_v_limit_last_valid ||
+						std::memcmp(ft_v_limit_last, v_limit_local, sizeof(ft_v_limit_last)) != 0)
+					{
+						if (plc_io::write_v_limit(ctx, v_limit_local))
+						{
+							std::memcpy(ft_v_limit_last, v_limit_local, sizeof(ft_v_limit_last));
+							ft_v_limit_last_valid = true;
+						}
+					}
+				}
+				else
+				{
+					ft_v_limit_last_valid = false;
 				}
 			}
 		}
-		// 实验由 active → 非 active（Done/Abort）的边沿：关闭专用 CSV 会话，flush 落盘。
-		if (ft_exp_was_active && !ft_exp.active() && ft_logger.is_running())
+		if (!ft_exp.active() || !ft_exp.wants_v_limit_override()) ft_v_limit_last_valid = false;
+		// 实验由 active -> 非 active（Done/Abort）的边沿：仅关闭当前会话内的专用 CSV。
+		if (ft_exp_was_active && !ft_exp.active() && experiment_recorder.force_transition_log_running())
 		{
-			ft_logger.stop_session();
+			experiment_recorder.stop_force_transition_log();
 			std::cout << (ft_exp.aborted() ? "力过渡实验已异常终止，CSV 已落盘。"
 				: "力过渡实验已完成，CSV 已落盘。") << std::endl;
 		}
+
+		// refer、快退、气缸、axis4 与平滑旁路由同一份命令快照发布。
+		// 放在力过渡 tick 之后，确保实验本拍产生的 refer/快退请求能够实际下发。
+		AdsOutputCommand ads_output{};
+		ads_output.motion_enabled = ads_cycle_valid && !ads_soft_hold_active &&
+			!return_ads_fault_hold && !freeze_active && !estop_hold_active &&
+			(control_active || motion_startup_active);
+		for (int axis = 0; axis < 7; ++axis) ads_output.refer[axis] = pos[axis];
+		ads_output.axis1_fast_return = ads_output.motion_enabled && axis1_fast_return;
+		ads_output.axis6_fast_retract = ads_output.motion_enabled && axis6_fast_retract;
+		ads_output.cylinder[0] = cylinder1_cmd;
+		ads_output.cylinder[1] = cylinder2_cmd;
+		ads_output.cylinder[2] = cylinder3_cmd;
+		ads_output.cylinder[3] = cylinder4_cmd;
+		ads_output.cylinder_valid = cylinder_output_enabled;
+		ads_output.cylinder5_press_req = cylinder_output_enabled && cylinder5_req;
+		ads_output.axis4_forward_req = ads_cycle_valid && axis4_manual_forward_req;
+		ads_output.axis4_reverse_req = ads_cycle_valid && axis4_manual_reverse_req;
+		ads_output.startup_smoothing_bypass = ads_output.motion_enabled && startup_smoothing_bypass;
+		ads_communication.publish_output(ads_output);
 
 		process_force_feedback(
 			ff,
@@ -3855,38 +4109,28 @@ int main(int argc, char* argv[])
 			cal_cfg,
 			cal_state);
 
-		// 力过渡决定性预实验（论文 §6.1）：在 process_force_feedback 之后采样，
-		// 把"实验当前接管阶段、实际 axis1 位置、标定后力、原始电压、相位上下文"打包入队。
-		// 仅在实验 active 且 logger 运行时入队；其他情况由 ForceLogger 自行处理。
-		if (ft_exp.active() && ft_logger.is_running())
+		// 力过渡专用表只保存复现实验所需的精简字段，纯净力与统一 force.csv 语义一致。
+		if (ft_exp.active() && experiment_recorder.force_transition_log_running())
 		{
-			ForceTransitionLogger::Row r{};
+			ForceTransitionCsvRow r{};
+			const std::int64_t transition_qpc = force_sample.qpc_ticks != 0
+				? force_sample.qpc_ticks
+				: experiment_recorder.clock().now_qpc();
+			r.force_snapshot_sequence = force_sample_ads_sequence;
+			r.source_qpc_ticks = transition_qpc;
+			r.valid = clean_force_valid;
 			r.trial_id = ft_exp.current_trial_id();
 			r.velocity_level = ft_exp.current_velocity_level();
 			r.repeat_in_level = ft_exp.current_repeat_in_level();
 			r.phase_code = static_cast<int>(ft_exp.current_phase());
-			r.tick_ms = GetTickCount();
 			// GetTickCount 49 天回卷，但单次实验最长几十分钟，回卷期间差值仍正确（DWORD 自然回绕）。
-			r.dt_ms_from_phase_start = static_cast<std::uint64_t>(
-				static_cast<std::uint32_t>(r.tick_ms) - ft_exp.current_phase_t0_ms());
-			r.axis1_act_pos_mm = plc_act_pos[0];
-			r.axis1_refer_mm = pos[0];
-			r.axis1_v_limit_used = plc_v_limit[0];
-			r.fn_1_raw_v = force_sample.fn_1_value_v;
-			r.ft_1_raw_v = force_sample.ft_1_value_v;
-			r.fn_1_zero_v = cal_state.f_zero;
-			r.ft_1_zero_v = cal_state.ft_zero;
-			r.f_feedback_n = ff.force_582_theory_f;
-			r.t_feedback_nm = ff.force_582_theory_n;
-			r.ff_enabled = ff.enabled;
-			r.cal_zeroed = cal_state.zeroed;
-			r.freeze_active = freeze_active;
-			r.fast_active = axis1_fast_return;
-			r.guidewire_mode = static_cast<int>(guidewire_mode);
-			r.axis1_reverse = axis1_reverse_pressed;
-			r.cyl1_cmd = cylinder1_cmd;
-			r.cyl2_cmd = cylinder2_cmd;
-			ft_logger.enqueue(r);
+			r.phase_elapsed_ms = static_cast<std::uint64_t>(
+				GetTickCount() - ft_exp.current_phase_t0_ms());
+			r.v_ratio = ft_exp.current_v_ratio();
+			r.axis1_from_left_mm = plc_act_pos[0] + plc_init_pos[0] - plc_leftlimit[0];
+			r.clean_force_n = clean_force_valid ? clean_force.force_n : csv_nan;
+			r.clean_handle_torque_nm = clean_force_valid ? clean_force.handle_torque_nm : csv_nan;
+			experiment_recorder.enqueue_force_transition(r);
 		}
 
 
@@ -3925,8 +4169,18 @@ int main(int argc, char* argv[])
 		axis1_prev_rot_filtered = axis1_handle_filter.axis1_filtered;
 		axis6_prev_rot_filtered = axis6_handle_filter.axis1_filtered;
 
-		// 可视化管道：推送状态快照 + 轮询 UI 命令。
+		// 可视化状态限制为约 30 Hz，命令轮询仍每个控制拍执行。
+		LARGE_INTEGER vis_now_qpc{};
+		QueryPerformanceCounter(&vis_now_qpc);
+		const std::int64_t vis_period_ticks = std::max<std::int64_t>(1, vis_qpc_frequency.QuadPart / 30);
+		if (next_vis_publish_qpc == 0) next_vis_publish_qpc = vis_now_qpc.QuadPart;
+		if (vis_now_qpc.QuadPart >= next_vis_publish_qpc)
 		{
+			next_vis_publish_qpc += vis_period_ticks;
+			if (vis_now_qpc.QuadPart - next_vis_publish_qpc > vis_period_ticks)
+			{
+				next_vis_publish_qpc = vis_now_qpc.QuadPart + vis_period_ticks;
+			}
 			VisState vs{};
 			for (int i = 0; i < 7; ++i)
 			{
@@ -3951,7 +4205,6 @@ int main(int argc, char* argv[])
 			vs.cal_zeroed = cal_state.zeroed;
 			vs.axis1_reverse = axis1_reverse_pressed;
 			vs.axis6_reverse = axis6_effective_reverse_pressed;
-			vs.force_log_running = force_logger.is_running();
 			vs.startup_waiting = (!startup.completed && startup.phase == StartupPhase::WaitForEnter);
 			vs.startup_completed = startup.completed;
 			vs.ft_1_v = force_sample.ft_1_value_v;
@@ -3982,15 +4235,47 @@ int main(int argc, char* argv[])
 				tracking_controller.snapshot(DeliveryTrackingAxis::Axis1);
 			const DeliveryTrackingAxisSnapshot axis6_tracking_snapshot =
 				tracking_controller.snapshot(DeliveryTrackingAxis::Axis6);
-			vs.tracking_log_running = tracking_logger.is_running();
 			vs.tracking_compensation_enabled = tracking_controller.compensation_enabled();
 			vs.axis1_tracking_error_mm = axis1_tracking_snapshot.tracking_error_mm;
 			vs.axis6_tracking_error_mm = axis6_tracking_snapshot.tracking_error_mm;
 			vs.axis1_compensation_gain = axis1_tracking_snapshot.compensation_gain;
 			vs.axis6_compensation_gain = axis6_tracking_snapshot.compensation_gain;
-			vs.tracking_log_dropped = tracking_logger.dropped_count();
 			vs.cooperative_direction = static_cast<int>(cooperative_direction);
 			vs.axis6_soft_limit_hold = axis6_soft_limit_hold;
+			const ExperimentRecorderSnapshot recorder_snapshot = experiment_recorder.snapshot();
+			vs.recording_state = static_cast<int>(recorder_snapshot.state);
+			vs.recording_error = static_cast<int>(recorder_snapshot.error);
+			vs.recording_elapsed_us = recorder_snapshot.elapsed_us;
+			vs.force_writer_dropped = recorder_snapshot.force_dropped;
+			vs.motion_writer_dropped = recorder_snapshot.motion_dropped;
+			vs.force_schedule_missed = recorder_snapshot.force_missed;
+			vs.motion_schedule_missed = recorder_snapshot.motion_missed;
+			vs.force_sample_valid = force_sample.valid;
+			vs.clean_force_valid = clean_force_valid;
+			vs.clean_force_n = clean_force_valid ? clean_force.force_n : csv_nan;
+			vs.clean_handle_torque_nm = clean_force_valid ? clean_force.handle_torque_nm : csv_nan;
+			vs.camera_state = static_cast<int>(recorder_snapshot.camera.state);
+			vs.camera_input_format = static_cast<int>(recorder_snapshot.camera.input_format);
+			vs.camera_width = recorder_snapshot.camera.width;
+			vs.camera_height = recorder_snapshot.camera.height;
+			vs.camera_fps_numerator = recorder_snapshot.camera.fps_numerator;
+			vs.camera_fps_denominator = recorder_snapshot.camera.fps_denominator;
+			vs.camera_preview_enabled = recorder_snapshot.camera.preview_enabled;
+			vs.camera_recording = recorder_snapshot.camera.recording;
+			vs.camera_recording_elapsed_us = recorder_snapshot.camera.recording_elapsed_us;
+			vs.camera_frame_count = recorder_snapshot.camera.frame_count;
+			vs.camera_dropped_frames = recorder_snapshot.camera.dropped_frames;
+			vs.camera_error_code = recorder_snapshot.camera.error_code;
+			vs.physical_button_event_counter = physical_button_event_counter;
+			vs.physical_button_event_code = physical_button_event_code;
+			vs.ads_state = static_cast<int>(ads_stats.state);
+			vs.ads_actual_hz = ads_stats.actual_hz;
+			vs.ads_snapshot_age_us = ads_stats.latest_snapshot_age_us;
+			vs.ads_rtt_us = ads_stats.latest_rtt_us;
+			vs.ads_failed_cycles = ads_stats.failed_cycles;
+			vs.ads_reconnect_count = ads_stats.reconnect_count;
+			vs.plc_restart_count = ads_stats.plc_restart_count;
+			vs.host_comm_timeout = ads_events.host_comm_timeout;
 			vis_server.push_state(vs);
 		}
 
@@ -4028,7 +4313,7 @@ int main(int argc, char* argv[])
 					break;
 				}
 				case VisCommandType::RequestModeSwitch:
-					if (single_handle_mode)
+					if (single_handle_mode && !ads_soft_hold_active)
 						single_handle_requested_mode = static_cast<GuidewireMode>(vcmd.param1);
 					break;
 				case VisCommandType::ZeroForceSensor:
@@ -4044,59 +4329,24 @@ int main(int argc, char* argv[])
 					break;
 				case VisCommandType::SetReverseMode:
 				{
+					if (ads_soft_hold_active)
+					{
+						std::cout << "UI：ADS 软保持或重连期间已忽略模式切换。" << std::endl;
+						break;
+					}
 					if (cooperative_return_owner != CooperativeReturnOwner::None)
 					{
 						std::cout << "UI：模式切换已忽略，协同计划回退尚未完成。" << std::endl;
 						break;
 					}
-					if (spacing_recovery.active() || spacing_recovery.requested)
-					{
-						std::cout << "UI：模式切换已忽略，请先退出屈曲恢复。" << std::endl;
-						break;
-					}
 					// param1: 0=catheter mode+direction, 1=guidewire mode+direction
 					// param2: 0=forward(递送), 1=reverse(撤出)
-					GuidewireMode target_mode = (vcmd.param1 == 0) ? GuidewireMode::None : GuidewireMode::Independent;
-					if (single_handle_mode)
-						single_handle_requested_mode = target_mode;
-					// 任何普通模式选择均明确退出协同方向请求。
-					cooperative_direction_requested = CooperativeDirection::None;
-					clear_cylinder_manual_overrides("UI 模式切换");
-					vis_reverse_override_active = true;
-					vis_reverse_override_target = vcmd.param1;
-					vis_reverse_override_value = (vcmd.param2 != 0);
+					const ModeSelection selection = vcmd.param1 == 0
+						? (vcmd.param2 != 0 ? ModeSelection::CatheterRetraction : ModeSelection::CatheterDelivery)
+						: (vcmd.param2 != 0 ? ModeSelection::GuidewireRetraction : ModeSelection::GuidewireDelivery);
+					request_mode_selection(selection, "UI 模式按钮");
 					break;
 				}
-				case VisCommandType::ToggleForceLog:
-					if (force_logger.is_running())
-					{
-						tcp_force_daq.set_on_sample(nullptr);
-						force_logger.stop();
-						std::cout << "高频力数据记录已停止。" << std::endl;
-					}
-					else
-					{
-						if (force_logger.start("."))
-						{
-							force_logger.publish_force_zero(cal_state.f_zero, cal_state.ft_zero);
-							if (ctx.force_sample_source == ForceSampleSource::TCP_DAQ)
-							{
-								tcp_force_daq.set_on_sample([&](std::uint64_t tick_ms, const double v[6]) {
-									force_logger.on_sensor_sample(tick_ms, v);
-								});
-							}
-							else
-							{
-								tcp_force_daq.set_on_sample(nullptr);
-							}
-							std::cout << "高频力数据记录已启动。" << std::endl;
-						}
-					}
-					break;
-				case VisCommandType::SetTrackingLog:
-					// 记录会话由进程启动和退出统一管理，避免换手研究数据被 UI 误停。
-					std::cout << "主从位移实验记录已由程序自动管理，忽略手动开始/停止请求。" << std::endl;
-					break;
 				case VisCommandType::SetTrackingCompensation:
 					if (vcmd.param1 == 0)
 					{
@@ -4120,11 +4370,44 @@ int main(int argc, char* argv[])
 							tracking_axis = DeliveryTrackingAxis::Axis6;
 							forward_tracking_mode = true;
 						}
-						if (!tracking_logger.is_running())
+						const std::int64_t gate_now_qpc = experiment_recorder.clock().now_qpc();
+						const std::int64_t gate_max_age = experiment_recorder.clock().frequency() / 2;
+						const bool force_sample_fresh =
+							force_sample.valid &&
+							force_sample.qpc_ticks > 0 &&
+							gate_now_qpc >= force_sample.qpc_ticks &&
+							gate_now_qpc - force_sample.qpc_ticks <= gate_max_age;
+						if (!force_sample_fresh)
 						{
-							std::cout << "主从位移补偿开启被拒绝：自动记录会话未运行，请检查 CSV 文件创建权限。" << std::endl;
+							ForceSampleFrame gate_sample{};
+							bool gate_sample_ok = false;
+							if (ctx.force_sample_source == ForceSampleSource::TCP_DAQ)
+							{
+								double tcp_raw_v[6] = {};
+								std::uint64_t tcp_tick_ms = 0;
+								std::int64_t tcp_qpc_ticks = 0;
+								if (tcp_force_daq.get_latest_raw(tcp_raw_v, tcp_tick_ms, &tcp_qpc_ticks) &&
+									tcp_qpc_ticks > 0 && gate_now_qpc >= tcp_qpc_ticks &&
+									gate_now_qpc - tcp_qpc_ticks <= gate_max_age)
+								{
+									gate_sample.fn_1_value_v = tcp_raw_v[0];
+									gate_sample.ft_1_value_v = tcp_raw_v[1];
+									gate_sample.axis1_pos_rel = plc_act_pos[0];
+									gate_sample.axis2_pos_rel = plc_act_pos[1];
+									gate_sample.tick_ms = static_cast<DWORD>(tcp_tick_ms);
+									gate_sample.qpc_ticks = tcp_qpc_ticks;
+									gate_sample.valid = true;
+									gate_sample_ok = true;
+								}
+							}
+							else
+							{
+								gate_sample_ok = read_force_sample(gate_sample);
+							}
+							force_sample = gate_sample;
+							force_sample.valid = gate_sample_ok;
 						}
-						else if (!forward_tracking_mode || !force_sample.valid)
+						if (!forward_tracking_mode || !force_sample.valid)
 						{
 							std::cout << "主从位移补偿开启被拒绝：需处于正向 Follow 递送段且 ADS 力采样有效。" << std::endl;
 						}
@@ -4147,6 +4430,43 @@ int main(int argc, char* argv[])
 					{
 						std::cout << "主从位移 PI 参数已忽略：补偿开启时不可修改，或数值超出安全范围。" << std::endl;
 					}
+					break;
+				case VisCommandType::StartExperimentRecording:
+				{
+					const ExperimentRecorderSnapshot before_start = experiment_recorder.snapshot();
+					if (before_start.state != ExperimentRecordingState::Idle &&
+						before_start.state != ExperimentRecordingState::Error)
+					{
+						break;
+					}
+					ExperimentStartInfo start_info{};
+					start_info.axis1_handle_serial = axis1_input_handle != nullptr
+						? axis1_input_handle->serial()
+						: 0;
+					start_info.axis6_handle_serial = axis6_input_handle != nullptr
+						? axis6_input_handle->serial()
+						: 0;
+					start_info.single_handle_mode = single_handle_mode;
+					if (experiment_recorder.start(vcmd.payload_utf8, start_info))
+					{
+						std::cout << "UI：统一实验记录已启动。" << std::endl;
+					}
+					else
+					{
+						const ExperimentRecorderSnapshot failed_snapshot = experiment_recorder.snapshot();
+						std::cout << "UI：统一实验记录启动失败，错误码："
+							<< static_cast<int>(failed_snapshot.error) << "。" << std::endl;
+					}
+					break;
+				}
+				case VisCommandType::StopExperimentRecording:
+					experiment_recorder.stop_async("user_stop");
+					break;
+				case VisCommandType::SetCameraPreview:
+					experiment_recorder.set_camera_preview(vcmd.param1 != 0);
+					break;
+				case VisCommandType::SetCleanForceMonitor:
+					clean_force_monitor_enabled = vcmd.param1 != 0;
 					break;
 				case VisCommandType::SetAxis1PostReturnLead:
 				{
@@ -4188,6 +4508,11 @@ int main(int argc, char* argv[])
 					break;
 				case VisCommandType::ExecuteStartup:
 				{
+					if (plc_restart_recovery_latched && !cal_state.zeroed)
+					{
+						std::cout << "UI：PLC 重启后必须先重新力感调零，启动准备已忽略。" << std::endl;
+						break;
+					}
 					bool valid = true;
 					if (pending_startup.axis1_from_left_mm < 5.0 || pending_startup.axis1_from_left_mm > 95.0) valid = false;
 					if (pending_startup.axis3_from_left_mm < 10.0 || pending_startup.axis3_from_left_mm > 650.0) valid = false;
@@ -4205,7 +4530,8 @@ int main(int argc, char* argv[])
 						break;
 					}
 					if (!startup.completed && startup.phase == StartupPhase::WaitForEnter &&
-						!freeze_active && !estop_hold_active)
+						!freeze_active && !estop_hold_active && !ads_soft_hold_active &&
+						(!has_self_check_flag || self_check_done))
 					{
 						startup.final_axis1_from_left_mm = pending_startup.axis1_from_left_mm;
 						startup.final_axis3_from_left_mm = pending_startup.axis3_from_left_mm;
@@ -4218,7 +4544,6 @@ int main(int argc, char* argv[])
 						{
 							clear_cylinder_manual_overrides("启动准备");
 							control_active = false;
-							ensure_force_log_started();
 							std::cout << "启动准备流程已开始（UI 参数）。" << std::endl;
 						}
 					}
@@ -4226,10 +4551,16 @@ int main(int argc, char* argv[])
 				}
 				case VisCommandType::SelectDirectControl:
 				{
+					if (plc_restart_recovery_latched && !cal_state.zeroed)
+					{
+						std::cout << "UI：PLC 重启后必须先重新力感调零，直接控制已忽略。" << std::endl;
+						break;
+					}
 					if (!startup.completed &&
 						startup.phase == StartupPhase::WaitForEnter &&
 						!freeze_active &&
 						!estop_hold_active &&
+						!ads_soft_hold_active &&
 						(!has_self_check_flag || self_check_done))
 					{
 						if (restore_startup_v_limit() &&
@@ -4242,7 +4573,7 @@ int main(int argc, char* argv[])
 							startup.completed = true;
 							startup.prompted = false;
 							control_active = true;
-							ensure_force_log_started();
+							plc_restart_recovery_latched = false;
 							std::cout << "已进入直接控制（UI 触发）。" << std::endl;
 						}
 					}
@@ -4266,6 +4597,11 @@ int main(int argc, char* argv[])
 					ft_exp.set_param_b(vcmd.param1, vcmd.param2);
 					break;
 				case VisCommandType::SetSpacingRecovery:
+					if (vcmd.param1 != 0 && ads_soft_hold_active)
+					{
+						std::cout << "UI：ADS 软保持或重连期间已忽略屈曲恢复请求。" << std::endl;
+						break;
+					}
 					if (vcmd.param1 != 0 && cooperative_return_owner != CooperativeReturnOwner::None)
 					{
 						std::cout << "UI：屈曲恢复已忽略，协同计划回退尚未完成。" << std::endl;
@@ -4274,6 +4610,7 @@ int main(int argc, char* argv[])
 					if (vcmd.param1 != 0)
 					{
 						cancel_cooperative_delivery(true);
+						pending_mode_selection = ModeSelection::None;
 					}
 					spacing_recovery.requested = (vcmd.param1 != 0);
 					break;
@@ -4287,21 +4624,28 @@ int main(int argc, char* argv[])
 					const char* mode_name = cooperative_direction_text(requested_direction);
 					if (vcmd.param1 != 0)
 					{
-						if (!dual_handle_ready)
+						if (ads_soft_hold_active)
+						{
+							std::cout << "UI：ADS 软保持或重连期间已忽略协同模式切换。" << std::endl;
+						}
+						else if (!dual_handle_ready)
 						{
 							std::cout << "UI：" << mode_name
 								<< "已忽略，程序启动时未成功连接两只手柄。" << std::endl;
 						}
-						else if (spacing_recovery.active() || spacing_recovery.requested ||
-							cooperative_return_owner != CooperativeReturnOwner::None)
+						else if (cooperative_return_owner != CooperativeReturnOwner::None)
 						{
 							std::cout << "UI：" << mode_name
-								<< "已忽略，当前有恢复流程或协同换手在执行。" << std::endl;
+								<< "已忽略，当前协同换手仍在执行。" << std::endl;
 						}
 						else
 						{
-							// 入口被拒绝或方向切换失败时，主循环会以实际激活方向校正 WPF 选中项。
-							cooperative_direction_requested = requested_direction;
+							const ModeSelection selection =
+								requested_direction == CooperativeDirection::Retraction
+								? ModeSelection::CooperativeRetraction
+								: ModeSelection::CooperativeDelivery;
+							// 恢复中先退出并重同步；正常状态下立即提交协同入口请求。
+							request_mode_selection(selection, "UI 协同模式按钮");
 						}
 					}
 					else if (cooperative_return_owner != CooperativeReturnOwner::None)
@@ -4328,27 +4672,31 @@ int main(int argc, char* argv[])
 							cal_state.zeroed &&
 							!freeze_active &&
 							!estop_hold_active &&
+							!ads_soft_hold_active &&
 							!axis6_soft_limit_hold &&
 							guidewire_mode == GuidewireMode::None &&
 							!spacing_recovery.active() && !spacing_recovery.requested &&
 							startup.completed;
 						if (!prerequisites_ok)
 						{
-							std::cout << "UI：力过渡实验启动被拒绝：前置条件未满足（需 控制激活 + 已标零 + 非暂停 + 非急停 + 导管模式 + 启动完成）。" << std::endl;
-						}
-						else if (!ft_logger.is_running() && !ft_logger.start_session("."))
-						{
-							std::cout << "UI：力过渡实验启动被拒绝：CSV 文件创建失败。" << std::endl;
-						}
-						else if (!ft_exp.start(ctx, ft_exp.pending_cfg(), &ft_logger))
-						{
-							std::cout << "UI：力过渡实验启动被拒绝：" << ft_exp.last_error() << std::endl;
-							ft_logger.stop_session();
+							std::cout << "UI：力过渡实验启动被拒绝：前置条件未满足（需 控制激活 + 已标零 + ADS新鲜 + 非暂停 + 非急停 + 导管模式 + 启动完成）。" << std::endl;
 						}
 						else
 						{
-							cooperative_direction_requested = CooperativeDirection::None;
-							std::cout << "UI：力过渡实验已启动。" << std::endl;
+							const bool transition_log_started = experiment_recorder.is_recording()
+								&& experiment_recorder.start_force_transition_log();
+							if (!ft_exp.start(ctx, ft_exp.pending_cfg()))
+							{
+								std::cout << "UI：力过渡实验启动被拒绝：" << ft_exp.last_error() << std::endl;
+								if (transition_log_started) experiment_recorder.stop_force_transition_log();
+							}
+							else
+							{
+								cooperative_direction_requested = CooperativeDirection::None;
+								std::cout << "UI：力过渡实验已启动"
+									<< (transition_log_started ? "，专用 CSV 写入当前会话。" : "（当前无统一记录会话，不写专用 CSV）。")
+									<< std::endl;
+							}
 						}
 					}
 					break;
@@ -4360,9 +4708,9 @@ int main(int argc, char* argv[])
 						ft_exp.abort(ctx, "UI stop");
 						std::cout << "UI：力过渡实验已停止。" << std::endl;
 					}
-					if (ft_logger.is_running())
+					if (experiment_recorder.force_transition_log_running())
 					{
-						ft_logger.stop_session();
+						experiment_recorder.stop_force_transition_log();
 					}
 					break;
 				}
@@ -4373,14 +4721,20 @@ int main(int argc, char* argv[])
 		}
 	}
 
-	startup_smoothing_bypass = false;
-	ads.ADSWrite(AdsSymbol::startup_smoothing_bypass, sizeof(startup_smoothing_bypass), &startup_smoothing_bypass);
+	AdsOutputCommand shutdown_output{};
+	shutdown_output.motion_enabled = false;
+	shutdown_output.cylinder_valid = false;
+	shutdown_output.cylinder5_press_req = false;
+	shutdown_output.axis4_forward_req = false;
+	shutdown_output.axis4_reverse_req = false;
+	shutdown_output.startup_smoothing_bypass = false;
+	ads_communication.publish_output(shutdown_output);
+	AdsFastSnapshot shutdown_snapshot{};
+	(void)ads_communication.wait_for_snapshot(ads_snapshot_sequence, 50, shutdown_snapshot);
 	clear_force_output();
-	tracking_controller.stop_session();
-	tracking_logger.stop_session();
-	force_log.close();
+	experiment_recorder.stop_and_wait("program_exit");
 	tcp_force_daq.stop();
-	force_logger.stop();
+	ads_communication.stop();
 	vis_server.stop();
 	handle_axis1.close();
 	handle_axis6.close();

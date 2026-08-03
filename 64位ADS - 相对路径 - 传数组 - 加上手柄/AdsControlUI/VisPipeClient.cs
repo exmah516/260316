@@ -2,6 +2,7 @@ using System;
 using System.IO;
 using System.IO.Pipes;
 using System.Runtime.InteropServices;
+using System.Text;
 using System.Threading;
 
 namespace AdsControlUI
@@ -10,13 +11,18 @@ namespace AdsControlUI
     {
         private const string PipeName = "ADS_Control_Vis";
         // 必须与 C++ VisState 的 static_assert 一致；新旧管道协议不可混用。
-        private const int VisStateWireSize = 328;
+		private const int VisStateWireSize = 499;
+        private const uint CommandMagic = 0x31434D56;
+        private const ushort CommandVersion = 1;
+        private const ushort CommandHeaderSize = 24;
+        private const int MaxCommandPayloadBytes = 1024;
         private NamedPipeClientStream _pipe;
         private Thread _readThread;
         private volatile bool _stopRequested;
         private readonly object _stateLock = new object();
         private VisState _latestState;
         private bool _hasState;
+        private readonly object _writeLock = new object();
 
         public event Action<VisState> StateReceived;
         public bool IsConnected => _pipe?.IsConnected == true;
@@ -46,15 +52,37 @@ namespace AdsControlUI
             }
         }
 
-        public void SendCommand(VisCommandType type, int param1 = 0, int param2 = 0)
+        public void SendCommand(VisCommandType type, int param1 = 0, int param2 = 0, string payloadUtf8 = null)
         {
             if (_pipe == null || !_pipe.IsConnected) return;
-            var cmd = new VisCommand { type = type, param1 = param1, param2 = param2 };
-            byte[] buf = StructToBytes(cmd);
+            byte[] payload = string.IsNullOrEmpty(payloadUtf8)
+                ? Array.Empty<byte>()
+                : Encoding.UTF8.GetBytes(payloadUtf8);
+            if (payload.Length > MaxCommandPayloadBytes)
+                throw new ArgumentException("命令 UTF-8 负载超过协议上限。", nameof(payloadUtf8));
+
+            byte[] buf;
+            using (var stream = new MemoryStream(CommandHeaderSize + payload.Length))
+            using (var writer = new BinaryWriter(stream, Encoding.UTF8, true))
+            {
+                writer.Write(CommandMagic);
+                writer.Write(CommandVersion);
+                writer.Write(CommandHeaderSize);
+                writer.Write((int)type);
+                writer.Write(param1);
+                writer.Write(param2);
+                writer.Write((uint)payload.Length);
+                writer.Write(payload);
+                writer.Flush();
+                buf = stream.ToArray();
+            }
             try
             {
-                _pipe.Write(buf, 0, buf.Length);
-                _pipe.Flush();
+                lock (_writeLock)
+                {
+                    _pipe.Write(buf, 0, buf.Length);
+                    _pipe.Flush();
+                }
             }
             catch { }
         }
@@ -111,23 +139,6 @@ namespace AdsControlUI
 
                 if (!_stopRequested) Thread.Sleep(500);
             }
-        }
-
-        private static byte[] StructToBytes<T>(T obj) where T : struct
-        {
-            int size = Marshal.SizeOf<T>();
-            byte[] buf = new byte[size];
-            IntPtr ptr = Marshal.AllocHGlobal(size);
-            try
-            {
-                Marshal.StructureToPtr(obj, ptr, false);
-                Marshal.Copy(ptr, buf, 0, size);
-            }
-            finally
-            {
-                Marshal.FreeHGlobal(ptr);
-            }
-            return buf;
         }
 
         private static T BytesToStruct<T>(byte[] buf) where T : struct

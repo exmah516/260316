@@ -17,7 +17,6 @@ namespace plc_io
     // 前置声明：避免重新 #include 整个 plc_io.h（force_transition_experiment.cpp 内会 include）。
 }
 
-class ForceTransitionLogger;
 
 enum class FtExpPhase : int
 {
@@ -59,7 +58,7 @@ public:
 
     // C# 通过 SetFtExpParamA/B 灌入参数，落到 pending_cfg_；StartForceTransitionExperiment 触发本函数。
     // 返回 false 表示前置检查未通过，状态机不变（仍 Idle）。失败原因通过 last_error_ 暴露。
-    bool start(AppContext& ctx, const ForceTransitionConfig& cfg, ForceTransitionLogger* logger);
+    bool start(AppContext& ctx, const ForceTransitionConfig& cfg);
 
     // UI 停止键 / 急停 / 任何边沿失败 → 安全收尾，状态机回 Idle。
     void abort(AppContext& ctx, const char* reason);
@@ -96,7 +95,7 @@ public:
     int current_repeat_in_level() const { return repeat_in_level_; }
     double current_v_ratio() const { return current_v_ratio_; }
     double current_axis1_target() const { return axis1_target_pos_; }
-    // 当前 phase 起始 tick，用于 logger 计算 dt_ms_from_phase_start。
+    // 当前 phase 起始 tick，用于统一记录器计算 phase_elapsed_ms。
     std::uint32_t current_phase_t0_ms() const { return phase_t0_ms_; }
 
     const char* last_error() const { return last_error_; }
@@ -144,7 +143,6 @@ private:
 
     bool plan_return_requested_ = false;
 
-    ForceTransitionLogger* logger_ = nullptr;
 
     // 软态边沿的连续掉拍计数（避免一拍抖动误终止）。
     int cal_zeroed_drop_count_ = 0;

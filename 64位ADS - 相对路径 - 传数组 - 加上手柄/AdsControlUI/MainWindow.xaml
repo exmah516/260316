@@ -10,6 +10,8 @@
         <local:BoolToColorConverter x:Key="BoolToGreenRed"   TrueColor="#22C55E" FalseColor="#CBD5E1"/>
         <local:BoolToColorConverter x:Key="BoolToYellowGray" TrueColor="#F59E0B" FalseColor="#CBD5E1"/>
         <local:BoolToColorConverter x:Key="BoolToRedGray"    TrueColor="#EF4444" FalseColor="#CBD5E1"/>
+		<local:BoolToColorConverter x:Key="BoolToAdsState"   TrueColor="#22C55E" FalseColor="#EF4444"/>
+		<local:BoolToColorConverter x:Key="BoolToAdsDetail"  TrueColor="#475569" FalseColor="#EF4444"/>
     </Window.Resources>
 
     <Grid Margin="16">
@@ -21,12 +23,16 @@
         <!-- 状态条 -->
         <Border Grid.Row="0" Style="{StaticResource CardBorder}" Padding="14,10" Margin="0,0,0,12">
             <Grid>
+				<Grid.RowDefinitions>
+					<RowDefinition Height="Auto"/>
+					<RowDefinition Height="Auto"/>
+				</Grid.RowDefinitions>
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="*"/>
                     <ColumnDefinition Width="Auto"/>
                 </Grid.ColumnDefinitions>
 
-                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                <StackPanel Grid.Row="0" Orientation="Horizontal" VerticalAlignment="Center">
                     <Border Style="{StaticResource StatusPill}">
                         <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
                             <Ellipse Width="10" Height="10"
@@ -71,7 +77,7 @@
                     </Border>
                 </StackPanel>
 
-                <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                <StackPanel Grid.Row="0" Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
                     <TextBlock Text="{Binding ModeText, StringFormat='模式 · {0}'}"
                                FontWeight="SemiBold" FontSize="13"
                                Foreground="{StaticResource AccentDeepBrush}" Margin="0,0,14,0"/>
@@ -81,6 +87,26 @@
                                    FontWeight="SemiBold"/>
                     </Border>
                 </StackPanel>
+
+				<Border Grid.Row="1" Grid.ColumnSpan="2"
+						BorderBrush="{StaticResource BorderBrush}" BorderThickness="0,1,0,0"
+						Margin="0,8,0,0" Padding="0,8,0,0">
+					<WrapPanel VerticalAlignment="Center">
+						<StackPanel Orientation="Horizontal" Margin="0,0,18,2">
+							<Ellipse Width="9" Height="9"
+									 Fill="{Binding AdsHealthy, Converter={StaticResource BoolToAdsState}}"/>
+							<TextBlock Text="{Binding AdsStateText}"
+									   Margin="7,0,0,0" FontWeight="SemiBold"
+									   Foreground="{Binding AdsHealthy, Converter={StaticResource BoolToAdsState}}"/>
+						</StackPanel>
+						<TextBlock Text="{Binding AdsDiagnosticsText}" Margin="0,0,18,2"
+								   Style="{StaticResource CaptionText}"
+								   Foreground="{Binding AdsHealthy, Converter={StaticResource BoolToAdsDetail}}"/>
+						<TextBlock Text="{Binding AdsCounterText}" Margin="0,0,0,2"
+								   Style="{StaticResource CaptionText}"
+								   Foreground="{Binding AdsHealthy, Converter={StaticResource BoolToAdsDetail}}"/>
+					</WrapPanel>
+				</Border>
             </Grid>
         </Border>
 
@@ -186,6 +212,54 @@
                           HorizontalScrollBarVisibility="Disabled">
                 <StackPanel>
 
+                    <!-- 统一实验记录 -->
+                    <GroupBox Header="实验记录">
+                        <StackPanel Margin="2">
+                            <TextBlock Text="实验名称" Style="{StaticResource FieldLabelText}" Margin="0,0,0,4"/>
+                            <TextBox x:Name="TbExperimentName"
+                                     MaxLength="64"
+                                     IsEnabled="{Binding ExperimentNameEditable}"
+                                     MinHeight="34"
+                                     Padding="8,5"
+                                     Margin="0,0,0,8"/>
+                            <WrapPanel Margin="0,0,0,8">
+                                <Button Content="开始实验记录"
+                                        Click="StartExperimentRecording_Click"
+                                        IsEnabled="{Binding CanStartExperimentRecording}"
+                                        Style="{StaticResource PrimaryButton}"
+                                        Padding="14,8" Margin="0,0,8,4"/>
+                                <Button Content="停止实验记录"
+                                        Click="StopExperimentRecording_Click"
+                                        IsEnabled="{Binding CanStopExperimentRecording}"
+                                        Padding="14,8" Margin="0,0,8,4"/>
+                                <Button Content="相机预览"
+                                        Click="ShowCameraPreview_Click"
+                                        IsEnabled="{Binding CanOpenCameraPreview}"
+                                        Padding="14,8" Margin="0,0,8,4"/>
+                            </WrapPanel>
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Grid.Column="0" Text="{Binding RecordingStateText}"
+                                           FontWeight="SemiBold" VerticalAlignment="Center"/>
+                                <TextBlock Grid.Column="1" Text="{Binding RecordingLossText}"
+                                           Style="{StaticResource CaptionText}" Margin="12,0" VerticalAlignment="Center"
+                                           TextTrimming="CharacterEllipsis"/>
+                                <TextBlock Grid.Column="2" Text="{Binding RecordingElapsedText}"
+                                           Style="{StaticResource DataValueText}" FontWeight="SemiBold"/>
+                            </Grid>
+                            <TextBlock Text="{Binding CameraStatusText}"
+                                       Style="{StaticResource CaptionText}" Margin="0,6,0,0" TextWrapping="Wrap"/>
+                            <TextBlock Text="{Binding CameraParameterText}"
+                                       Style="{StaticResource CaptionText}" Margin="0,2,0,0" TextWrapping="Wrap"/>
+                            <TextBlock Text="{Binding RecordingErrorText}"
+                                       Style="{StaticResource ErrorText}" Margin="0,4,0,0" TextWrapping="Wrap"/>
+                        </StackPanel>
+                    </GroupBox>
+
                     <!-- 电缸 -->
                     <GroupBox Header="电缸控制" IsEnabled="{Binding SpacingRecoveryInactive}">
                         <UniformGrid Columns="2" Margin="2">
@@ -221,10 +295,14 @@
                                          Click="ModeCooperativeRetraction_Click" IsChecked="{Binding ModeCooperativeRetractionSelected, Mode=OneWay}"
                                          IsEnabled="{Binding CooperativeModeEnabled}"
                                          Margin="3" MinHeight="40"/>
-                            <TextBlock Text="{Binding CooperativeStatusText}"
-                                       Style="{StaticResource CaptionText}"
-                                       Margin="6,0,6,4"
-                                       TextWrapping="Wrap"/>
+							<TextBlock Text="{Binding CooperativeStatusText}"
+									   Style="{StaticResource CaptionText}"
+									   Margin="6,0,6,4"
+									   TextWrapping="Wrap"/>
+							<TextBlock Text="{Binding PhysicalButtonNoticeText}"
+									   Style="{StaticResource ErrorText}"
+									   FontSize="11" Margin="6,0,6,4"
+									   TextWrapping="Wrap"/>
                             <Grid Margin="3,6,3,3">
                                 <Grid.ColumnDefinitions>
                                     <ColumnDefinition Width="Auto"/>
@@ -268,13 +346,12 @@
                             <WrapPanel>
                                 <Button Content="零点采集"   Click="Zero_Click"      Margin="0,0,8,6" Padding="12,7"/>
                                 <Button Content="力反馈开关" Click="FfToggle_Click"  Margin="0,0,8,6" Padding="12,7"/>
-                                <Button Content="显示实时力" Click="ShowForce_Click" Margin="0,0,8,6" Padding="12,7"/>
+                                <Button Content="实际反馈窗口" Click="ShowForce_Click" Margin="0,0,8,6" Padding="12,7"/>
+                                <Button Content="纯净力感窗口" Click="ShowCleanForce_Click" Margin="0,0,8,6" Padding="12,7"/>
                                 <Button Content="力过渡实验" Click="ShowFtExp_Click" Margin="0,0,8,6" Padding="12,7"/>
                                 <ToggleButton x:Name="GravityCompCheckBox" Content="重力补偿"
                                               IsChecked="{Binding GravityCompEnabled, Mode=OneWay}"
                                               Click="GravityComp_Click" Margin="0,0,8,6" Padding="12,7"/>
-                                <ToggleButton Content="数据记录" IsChecked="{Binding ForceLogRunning, Mode=OneWay}"
-                                              Click="ForceLog_Click" Margin="0,0,8,6" Padding="12,7"/>
                             </WrapPanel>
                             <TextBlock x:Name="ForcePlotError" Style="{StaticResource ErrorText}" Margin="0,0,0,8"/>
 
@@ -291,26 +368,26 @@
                                     </Grid.RowDefinitions>
 
                                     <StackPanel Grid.Row="0" Grid.Column="0" Margin="0,0,8,8">
-                                        <TextBlock Text="实际力 F" Style="{StaticResource CaptionText}" Margin="0,0,0,2"/>
+                                        <TextBlock Text="实际下发轴向力" Style="{StaticResource CaptionText}" Margin="0,0,0,2"/>
                                         <TextBlock Text="{Binding Force582F, StringFormat='{}{0:F3} N'}"
                                                    Style="{StaticResource DataValueText}" FontSize="16" FontWeight="SemiBold"
                                                    Foreground="{StaticResource SeriesForceBrush}"/>
                                     </StackPanel>
                                     <StackPanel Grid.Row="0" Grid.Column="1" Margin="8,0,0,8">
-                                        <TextBlock Text="实际力矩 T" Style="{StaticResource CaptionText}" Margin="0,0,0,2"/>
+                                        <TextBlock Text="实际下发力矩" Style="{StaticResource CaptionText}" Margin="0,0,0,2"/>
                                         <TextBlock Text="{Binding Force582N, StringFormat='{}{0:F5} N·m'}"
                                                    Style="{StaticResource DataValueText}" FontSize="16" FontWeight="SemiBold"
                                                    Foreground="{StaticResource SeriesTorqueBrush}"/>
                                     </StackPanel>
 
                                     <StackPanel Grid.Row="1" Grid.Column="0" Margin="0,0,8,4">
-                                        <TextBlock Text="理论力 F" Style="{StaticResource CaptionText}" Margin="0,0,0,2"/>
+                                        <TextBlock Text="反馈目标轴向力" Style="{StaticResource CaptionText}" Margin="0,0,0,2"/>
                                         <TextBlock Text="{Binding Force582TheoryF, StringFormat='{}{0:F3} N'}"
                                                    Style="{StaticResource DataValueText}"
                                                    Foreground="{StaticResource TextSecondaryBrush}"/>
                                     </StackPanel>
                                     <StackPanel Grid.Row="1" Grid.Column="1" Margin="8,0,0,4">
-                                        <TextBlock Text="理论力矩 T" Style="{StaticResource CaptionText}" Margin="0,0,0,2"/>
+                                        <TextBlock Text="反馈目标力矩" Style="{StaticResource CaptionText}" Margin="0,0,0,2"/>
                                         <TextBlock Text="{Binding Force582TheoryN, StringFormat='{}{0:F5} N·m'}"
                                                    Style="{StaticResource DataValueText}"
                                                    Foreground="{StaticResource TextSecondaryBrush}"/>
@@ -324,8 +401,8 @@
                         </StackPanel>
                     </GroupBox>
 
-                    <!-- 主从位移实验 -->
-                    <GroupBox Header="主从位移实验">
+                    <!-- 主从位移补偿 -->
+                    <GroupBox Header="主从位移补偿">
                         <StackPanel Margin="2">
                             <WrapPanel Margin="0,0,0,6">
                                 <ToggleButton Content="位移补偿"
@@ -358,15 +435,15 @@
                                 <TextBlock Grid.Row="0" Grid.Column="4" Text="欠账上界 mm" Style="{StaticResource FieldLabelText}" HorizontalAlignment="Center"/>
 
                                 <TextBlock Grid.Row="1" Grid.Column="0" Text="轴1" Style="{StaticResource FieldLabelText}"/>
-                                <TextBox Grid.Row="1" Grid.Column="1" x:Name="TbTrackAxis1Kp" Text="0" Margin="3" MinWidth="54"/>
-                                <TextBox Grid.Row="1" Grid.Column="2" x:Name="TbTrackAxis1Ki" Text="0" Margin="3" MinWidth="54"/>
-                                <TextBox Grid.Row="1" Grid.Column="3" x:Name="TbTrackAxis1Gain" Text="1.10" Margin="3" MinWidth="54"/>
+								<TextBox Grid.Row="1" Grid.Column="1" x:Name="TbTrackAxis1Kp" Text="0.5" Margin="3" MinWidth="54"/>
+								<TextBox Grid.Row="1" Grid.Column="2" x:Name="TbTrackAxis1Ki" Text="2" Margin="3" MinWidth="54"/>
+								<TextBox Grid.Row="1" Grid.Column="3" x:Name="TbTrackAxis1Gain" Text="2" Margin="3" MinWidth="54"/>
                                 <TextBox Grid.Row="1" Grid.Column="4" x:Name="TbTrackAxis1Error" Text="20.00" Margin="3" MinWidth="54"/>
 
                                 <TextBlock Grid.Row="2" Grid.Column="0" Text="轴6" Style="{StaticResource FieldLabelText}"/>
-                                <TextBox Grid.Row="2" Grid.Column="1" x:Name="TbTrackAxis6Kp" Text="0" Margin="3" MinWidth="54"/>
-                                <TextBox Grid.Row="2" Grid.Column="2" x:Name="TbTrackAxis6Ki" Text="0" Margin="3" MinWidth="54"/>
-                                <TextBox Grid.Row="2" Grid.Column="3" x:Name="TbTrackAxis6Gain" Text="1.10" Margin="3" MinWidth="54"/>
+								<TextBox Grid.Row="2" Grid.Column="1" x:Name="TbTrackAxis6Kp" Text="0.5" Margin="3" MinWidth="54"/>
+								<TextBox Grid.Row="2" Grid.Column="2" x:Name="TbTrackAxis6Ki" Text="2" Margin="3" MinWidth="54"/>
+								<TextBox Grid.Row="2" Grid.Column="3" x:Name="TbTrackAxis6Gain" Text="2" Margin="3" MinWidth="54"/>
                                 <TextBox Grid.Row="2" Grid.Column="4" x:Name="TbTrackAxis6Error" Text="20.00" Margin="3" MinWidth="54"/>
                             </Grid>
                             <StackPanel Orientation="Horizontal" Margin="0,4,0,0">

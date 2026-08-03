@@ -6,13 +6,11 @@
 
 #include "Handle.h"
 #include <ADSComm1.h>
-#include <fstream>
+#include <cstdint>
 #include <string>
 #include <windows.h>
 
 void setup_console_utf8();
-std::string build_force_log_filename();
-std::string build_force_log_timestamp();
 double clamp_double(double value, double low, double high);
 bool is_within_range(double value, double low, double high, double tol = 0.0);
 void get_average_handle_pose(Handle& handle, int samples, double& axis0, double& axis1);
@@ -27,6 +25,7 @@ void get_average_dual_pos(
 void copy_positions(const double* src, double* dst, int count);
 
 class TcpForceDaqClient;
+class AdsCommunicationService;
 
 struct AxisReturnAdsSymbols
 {
@@ -105,6 +104,8 @@ struct ControlConfig
 	double axis6_window_size_mm = 20.0;
 	// 轴6窗口以轴5当前位置为基准，左边界至少领先轴5该距离。
 	double axis6_window_min_gap_from_axis5_mm = 1.0;
+	// 协同递送中轴6自身触发换手后，只快退到该轴5相对间距，不退到窗口最右端。
+	double cooperative_delivery_axis6_return_gap_from_axis5_mm = 15.0;
 	// 标准启动中间夹持阶段的轴5/6间距；与运行时20 mm窗口宽度相互独立。
 	double axis56_ready_gap_mm = 15.0;
 	double axis3_delivery_stop_from_left_mm = 20.0;
@@ -114,12 +115,16 @@ struct ControlConfig
 	// 正值表示递送方向（axis1 绝对坐标减小），负值表示反向；UI 与内部均限制在 [-10, 10] mm。
 	double axis1_post_return_lead_mm = 1.0;
 	double axis1_post_return_lead_limit_mm = 10.0;
+	// 回退旁路撤销后先让 PLC 正常平滑链稳定，再接受持续推动产生的先行触发。
+	DWORD axis1_post_return_lead_handoff_settle_ms = 40;
+	double axis1_post_return_lead_arrive_tol_mm = 0.01;
+	DWORD axis1_post_return_lead_arrive_settle_ms = 30;
 	// axis6 距自身左限位的上位机内部软限位。达到预测越限条件后仅锁止上位机链路，
 	// 不改变 PLC/NC 内已有的硬限位与安全逻辑。
 	double axis6_soft_limit_from_left_mm = 670.0;
 
 	// 手动间距恢复：582 手柄仅驱动轴3/5/6向远离左限位方向等位移移动。
-	double spacing_recovery_speed_limit_mm_s = 20.0;
+	double spacing_recovery_speed_limit_mm_s = 40.0;
 	double spacing_recovery_axis3_max_from_left_mm = 650.0;
 	double spacing_recovery_axis5_max_from_left_mm = 670.0;
 	double spacing_recovery_axis6_max_from_left_mm = 670.0;
@@ -138,23 +143,22 @@ struct ControlConfig
 	// 正反切换一次性触发保护距离（离开该距离后重新允许触发）。
 	double reverse_switch_trigger_guard_mm = 2.0;
 
-	// PLC 规划快速回退参数。
-	double axis1_return_velocity_mm_s = 200.0;
-	double axis1_return_acc_mm_s2 = 2400.0;
-	double axis1_return_dec_mm_s2 = 2400.0;
-	double axis1_return_jerk_mm_s3 = 35000.0;
-	// 快退前总等待 = interstep + pre_move：t=0 下发"将合"侧、t=interstep 下发"将开"侧、再等 pre_move 让"将开"侧物理到位。
-	DWORD axis1_pre_move_cylinder_wait_ms = 100;
-	// 错峰切缸：t=0 close 侧下发，t=interstep open 侧才下发。
-	DWORD axis1_cylinder_interstep_wait_ms = 50;
-	DWORD axis1_post_return_cylinder_wait_ms = 100;
-	double axis6_return_velocity_mm_s = 200.0;
-	double axis6_return_acc_mm_s2 = 2400.0;
-	double axis6_return_dec_mm_s2 = 2400.0;
-	double axis6_return_jerk_mm_s3 = 35000.0;
-	DWORD axis6_pre_move_cylinder_wait_ms = 100;
-	DWORD axis6_cylinder_interstep_wait_ms = 50;
-	DWORD axis6_post_return_cylinder_wait_ms = 100;
+	// PLC 规划快速回退参数：速度、加减速度和 jerk 均为原值的 2 倍。
+	double axis1_return_velocity_mm_s = 400.0; // 原值 200 mm/s
+	double axis1_return_acc_mm_s2 = 4800.0; // 原值 2400 mm/s^2
+	double axis1_return_dec_mm_s2 = 4800.0; // 原值 2400 mm/s^2
+	double axis1_return_jerk_mm_s3 = 70000.0; // 原值 35000 mm/s^3
+	// 自动换手取消固定延时，但仍保留 PLC Busy/Done/Error 确认和 ADS 重同步。
+	DWORD axis1_pre_move_cylinder_wait_ms = 0; // 原值 100 ms
+	DWORD axis1_cylinder_interstep_wait_ms = 0; // 原值 50 ms
+	DWORD axis1_post_return_cylinder_wait_ms = 0; // 原值 100 ms
+	double axis6_return_velocity_mm_s = 400.0; // 原值 200 mm/s
+	double axis6_return_acc_mm_s2 = 4800.0; // 原值 2400 mm/s^2
+	double axis6_return_dec_mm_s2 = 4800.0; // 原值 2400 mm/s^2
+	double axis6_return_jerk_mm_s3 = 70000.0; // 原值 35000 mm/s^3
+	DWORD axis6_pre_move_cylinder_wait_ms = 0; // 原值 100 ms
+	DWORD axis6_cylinder_interstep_wait_ms = 0; // 原值 50 ms
+	DWORD axis6_post_return_cylinder_wait_ms = 0; // 原值 100 ms
 
 	// 手柄低通滤波。
 	double linear_handle_alpha = 0.25;
@@ -168,9 +172,6 @@ struct ControlConfig
 	unsigned short tcp_force_daq_port = 502;
 	// 可选：指定 ITCP 从哪块本机网卡出去；留空时由 Windows 路由表决定。
 	const char* tcp_force_daq_local_ip = "";
-	// 力感记录周期：0=每循环记录；>0=按毫秒周期记录。
-	DWORD force_log_period_ms = 0;
-
 	// 启动准备阶段目标。
 	DWORD startup_clamp_settle_delay_ms = 300;
 	DWORD startup_recovery_stage_delay_ms = 2000;
@@ -401,6 +402,7 @@ struct ForceSampleFrame
 	double axis1_pos_rel = 0.0;
 	bool valid = false;
 	DWORD tick_ms = 0;
+	std::int64_t qpc_ticks = 0;
 };
 
 struct ForceOutputCmd
@@ -409,35 +411,6 @@ struct ForceOutputCmd
 	double force_582_n = 0.0;
 	double force_587_f = 0.0;
 	double force_587_n = 0.0;
-};
-
-struct ForceLogState
-{
-	// 力感记录与采样使能；period_ms=0 表示每个主循环都记录。
-	bool enabled = false;
-	DWORD period_ms = 0;
-	DWORD last_sample_ms = 0;
-	DWORD last_buffer_flush_ms = 0;
-	std::ofstream file;
-	std::string filename;
-	std::string line_buffer;
-	size_t buffered_lines = 0;
-
-	bool open_file(const std::string& output_name);
-	bool should_sample(DWORD now_ms) const;
-	void append_sample(
-		DWORD now_ms,
-		double ft1_value,
-		double fn1_value,
-		short fn2_value,
-		short ft2_value,
-		int mode_code,
-		int reverse_code,
-		int push_pull_code,
-		int rot_sign_code,
-		double axis1_pos_rel);
-	void flush(bool force_flush);
-	void close();
 };
 
 struct StartupState
@@ -486,6 +459,7 @@ struct AppContext
 {
 	// 外设与通信对象。
 	CADSComm* ads = nullptr;
+	AdsCommunicationService* ads_service = nullptr;
 	Handle* axis1_input_handle = nullptr;
 	Handle* axis6_input_handle = nullptr;
 	Handle* handle_axis1 = nullptr;
@@ -505,8 +479,9 @@ struct AppContext
 	double* plc_init_pos = nullptr;
 	double* plc_leftlimit = nullptr;
 	double* plc_act_pos_from_left = nullptr;
-	double* plc_refer_from_left = nullptr;
 	double* plc_v_limit = nullptr;
+	std::uint64_t plc_snapshot_sequence = 0;
+	std::int64_t plc_snapshot_qpc_ticks = 0;
 
 	// 模式与状态机。
 	GuidewireMode* guidewire_mode = nullptr;
@@ -514,7 +489,6 @@ struct AppContext
 	CrawlState* axis6_crawl = nullptr;
 	StartupState* startup = nullptr;
 	ForceFeedbackState* ff = nullptr;
-	ForceLogState* force_log = nullptr;
 
 	// 常规导管/导丝基线状态。
 	double* axis3_base_rel = nullptr;

@@ -64,7 +64,7 @@
 //    接受 double 而不是 short。但这是可选优化，不影响基本功能。
 //
 // 3) 如果你想在 CSV 日志中同时记录原始值和补偿后值，
-//    可以在 ForceLogState 的写入行中追加列：
+//    如需保存处理器中间量，应显式扩展统一 force.csv 的 Row 和 schema：
 //      force_processor.output.fn_1,
 //      force_processor.output.conf_fn_1,
 //      force_processor.filter_fn_1.zero_estimate

@@ -1,0 +1,87 @@
+<Window x:Class="AdsControlUI.CleanForceWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="纯净力感" Height="520" Width="860"
+        MinHeight="390" MinWidth="640"
+        WindowStartupLocation="CenterOwner">
+    <Grid Margin="14">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <Grid Grid.Row="0" Margin="0,0,0,10">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="Auto"/>
+            </Grid.ColumnDefinitions>
+            <WrapPanel>
+                <Border Style="{StaticResource StatusPill}">
+                    <StackPanel Orientation="Horizontal">
+                        <Rectangle Width="16" Height="3" Fill="#DC2626" VerticalAlignment="Center"/>
+                        <TextBlock Text="纯净轴向力 / 左轴" Style="{StaticResource PillLabel}"/>
+                    </StackPanel>
+                </Border>
+                <Border Style="{StaticResource StatusPill}">
+                    <StackPanel Orientation="Horizontal">
+                        <Rectangle Width="16" Height="3" Fill="#0284C7" VerticalAlignment="Center"/>
+                        <TextBlock Text="纯净手柄侧力矩 / 右轴" Style="{StaticResource PillLabel}"/>
+                    </StackPanel>
+                </Border>
+            </WrapPanel>
+            <Border Grid.Column="1" Style="{StaticResource StatusPill}"
+                    Background="{StaticResource AccentSoftBrush}" BorderBrush="{StaticResource AccentBrush}">
+                <TextBlock x:Name="StatusText" Style="{StaticResource CaptionText}"
+                           Foreground="{StaticResource AccentDeepBrush}" FontWeight="SemiBold"/>
+            </Border>
+        </Grid>
+
+        <Border Grid.Row="1" BorderBrush="{StaticResource BorderBrush}" BorderThickness="1"
+                Background="{StaticResource SurfaceBrush}" CornerRadius="6">
+            <Grid>
+                <Canvas x:Name="PlotCanvas" SizeChanged="PlotCanvas_SizeChanged">
+                    <Polyline x:Name="ForceLine" Stroke="#DC2626" StrokeThickness="2"/>
+                    <Polyline x:Name="TorqueLine" Stroke="#0284C7" StrokeThickness="2"/>
+                    <TextBlock x:Name="ForceMaxText" Foreground="#DC2626" FontSize="11"/>
+                    <TextBlock x:Name="ForceMinText" Foreground="#DC2626" FontSize="11"/>
+                    <TextBlock x:Name="TorqueMaxText" Foreground="#0284C7" FontSize="11"/>
+                    <TextBlock x:Name="TorqueMinText" Foreground="#0284C7" FontSize="11"/>
+                    <TextBlock x:Name="XAxisText" Text="t / s" Style="{StaticResource CaptionText}"/>
+                </Canvas>
+                <Border x:Name="EmptyOverlay" Background="#F8FAFCEE" CornerRadius="6" IsHitTestVisible="False">
+                    <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center" Margin="24">
+                        <TextBlock x:Name="EmptyTitleText" Text="等待零点采集"
+                                   Style="{StaticResource WindowTitleText}" HorizontalAlignment="Center"/>
+                        <TextBlock x:Name="EmptyHintText" Text="纯净力将在零点有效后显示"
+                                   Style="{StaticResource CaptionText}" HorizontalAlignment="Center"
+                                   Margin="0,8,0,0"/>
+                    </StackPanel>
+                </Border>
+            </Grid>
+        </Border>
+
+        <Border Grid.Row="2" Style="{StaticResource CardBorder}" Margin="0,10,0,0" Padding="12,10">
+            <UniformGrid Columns="4">
+                <StackPanel Margin="0,0,12,0">
+                    <TextBlock Text="Fn 原始电压 (V)" Style="{StaticResource CaptionText}"/>
+                    <TextBlock x:Name="FnRawText" Style="{StaticResource DataValueText}" FontSize="15" Text="—"/>
+                </StackPanel>
+                <StackPanel Margin="0,0,12,0">
+                    <TextBlock Text="Ft 原始电压 (V)" Style="{StaticResource CaptionText}"/>
+                    <TextBlock x:Name="FtRawText" Style="{StaticResource DataValueText}" FontSize="15" Text="—"/>
+                </StackPanel>
+                <StackPanel Margin="0,0,12,0">
+                    <TextBlock Text="纯净轴向力 (N)" Style="{StaticResource CaptionText}"/>
+                    <TextBlock x:Name="CleanForceText" Foreground="#DC2626"
+                               Style="{StaticResource DataValueText}" FontSize="15" FontWeight="SemiBold" Text="—"/>
+                </StackPanel>
+                <StackPanel>
+                    <TextBlock Text="纯净手柄侧力矩 (N·m)" Style="{StaticResource CaptionText}"/>
+                    <TextBlock x:Name="CleanTorqueText" Foreground="#0284C7"
+                               Style="{StaticResource DataValueText}" FontSize="15" FontWeight="SemiBold" Text="—"/>
+                </StackPanel>
+            </UniformGrid>
+        </Border>
+    </Grid>
+</Window>

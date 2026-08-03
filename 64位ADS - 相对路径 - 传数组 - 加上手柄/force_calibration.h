@@ -44,6 +44,28 @@ struct CalibratedForce
 	double t_feedback_nm = 0.0;
 };
 
+struct CleanForce
+{
+	double force_n = 0.0;
+	double handle_torque_nm = 0.0;
+};
+
+// 纯净力只应用传感器零点与两条标定比例，不进入反馈处理链。
+inline CleanForce calculate_clean_force(
+	double fn_raw_v,
+	double ft_raw_v,
+	const ForceCalibrationState& state)
+{
+	CleanForce out;
+	if (!state.zeroed)
+	{
+		return out;
+	}
+	out.force_n = 1.913504 * (fn_raw_v - state.f_zero);
+	out.handle_torque_nm = 18.440851 * (ft_raw_v - state.ft_zero) * (3.0 / 37.0) * 0.001;
+	return out;
+}
+
 inline CalibratedForce calibrate_force(
 	double f_sensor,
 	double ft_sensor,

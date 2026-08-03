@@ -86,7 +86,7 @@
     <ClCompile>
       <WarningLevel>Level3</WarningLevel>
       <SDLCheck>true</SDLCheck>
-      <PreprocessorDefinitions>WIN32;_DEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>WIN32;_DEBUG;_CONSOLE;NOMINMAX;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions>
       <AdditionalIncludeDirectories>.\ADS\Include;.\手柄\include;.\手柄;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
@@ -102,7 +102,7 @@
       <FunctionLevelLinking>true</FunctionLevelLinking>
       <IntrinsicFunctions>true</IntrinsicFunctions>
       <SDLCheck>true</SDLCheck>
-      <PreprocessorDefinitions>WIN32;NDEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>WIN32;NDEBUG;_CONSOLE;NOMINMAX;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions>
       <AdditionalIncludeDirectories>.\ADS\Include;.\手柄\include;.\手柄;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
@@ -118,7 +118,7 @@
     <ClCompile>
       <WarningLevel>Level3</WarningLevel>
       <SDLCheck>true</SDLCheck>
-      <PreprocessorDefinitions>_DEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>_DEBUG;_CONSOLE;NOMINMAX;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <AdditionalIncludeDirectories>.\ADS\Include;.\手柄\include;.\手柄;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions>
@@ -136,7 +136,7 @@
       <FunctionLevelLinking>true</FunctionLevelLinking>
       <IntrinsicFunctions>true</IntrinsicFunctions>
       <SDLCheck>true</SDLCheck>
-      <PreprocessorDefinitions>NDEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>NDEBUG;_CONSOLE;NOMINMAX;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions>
       <AdditionalIncludeDirectories>.\ADS\Include;.\手柄\include;.\手柄;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
@@ -152,17 +152,18 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="control_types.cpp" />
+    <ClCompile Include="action4_camera.cpp" />
+    <ClCompile Include="experiment_recorder.cpp" />
     <ClCompile Include="tcp_force_daq.cpp" />
-    <ClCompile Include="force_logger.cpp" />
     <ClCompile Include="vis_server.cpp" />
+    <ClCompile Include="ads_communication.cpp" />
     <ClCompile Include="plc_io.cpp" />
     <ClCompile Include="motion_sync.cpp" />
     <ClCompile Include="guidewire_mode.cpp" />
     <ClCompile Include="force_feedback.cpp" />
     <ClCompile Include="force_transition_experiment.cpp" />
-    <ClCompile Include="force_transition_logger.cpp" />
+    <ClCompile Include="sensor_calibration_experiment.cpp" />
     <ClCompile Include="delivery_tracking.cpp" />
-    <ClCompile Include="delivery_tracking_logger.cpp" />
     <ClCompile Include="startup_sequence.cpp" />
     <ClCompile Include="main.cpp">
       <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">false</ExcludedFromBuild>
@@ -180,18 +181,20 @@
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="control_types.h" />
+    <ClInclude Include="action4_camera.h" />
+    <ClInclude Include="async_csv_writer.h" />
+    <ClInclude Include="experiment_recorder.h" />
     <ClInclude Include="tcp_force_daq.h" />
-    <ClInclude Include="force_logger.h" />
     <ClInclude Include="force_calibration.h" />
     <ClInclude Include="vis_server.h" />
+    <ClInclude Include="ads_communication.h" />
     <ClInclude Include="plc_io.h" />
     <ClInclude Include="motion_sync.h" />
     <ClInclude Include="guidewire_mode.h" />
     <ClInclude Include="force_feedback.h" />
     <ClInclude Include="force_transition_experiment.h" />
-    <ClInclude Include="force_transition_logger.h" />
+    <ClInclude Include="sensor_calibration_experiment.h" />
     <ClInclude Include="delivery_tracking.h" />
-    <ClInclude Include="delivery_tracking_logger.h" />
     <ClInclude Include="startup_sequence.h" />
     <ClInclude Include="ADS\Include\ADSComm1.h" />
     <ClInclude Include="ADS\Include\TcAdsAPI.h" />
@@ -202,4 +205,9 @@
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
   </ImportGroup>
+  <Target Name="CopyRuntimeDependencies" AfterTargets="Build" Condition="'$(Platform)'=='x64'">
+    <Copy SourceFiles="$(ProjectDir)FLCatheter.dll;$(ProjectDir)ADS\x64\TcAdsDll.dll"
+          DestinationFolder="$(OutDir)"
+          SkipUnchangedFiles="true" />
+  </Target>
 </Project>

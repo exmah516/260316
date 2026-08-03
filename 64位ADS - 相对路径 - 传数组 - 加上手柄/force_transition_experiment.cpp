@@ -11,7 +11,6 @@
 
 #include "force_transition_experiment.h"
 
-#include "force_transition_logger.h"
 #include "plc_io.h"
 
 #include <algorithm>
@@ -38,7 +37,7 @@ double clamp01(double v, double lo, double hi)
 
 ForceTransitionExperiment::ForceTransitionExperiment() = default;
 
-bool ForceTransitionExperiment::start(AppContext& ctx, const ForceTransitionConfig& cfg, ForceTransitionLogger* logger)
+bool ForceTransitionExperiment::start(AppContext& ctx, const ForceTransitionConfig& cfg)
 {
     last_error_ = "";
     if (phase_ != FtExpPhase::Idle && phase_ != FtExpPhase::Done && phase_ != FtExpPhase::Abort)
@@ -115,7 +114,6 @@ bool ForceTransitionExperiment::start(AppContext& ctx, const ForceTransitionConf
     v_limit_override_active_ = false;
     fast_return_request_ = false;
     plan_return_requested_ = false;
-    logger_ = logger;
     cal_zeroed_drop_count_ = 0;
 
     enter_phase(FtExpPhase::ArmWait, 0);
@@ -270,8 +268,6 @@ bool ForceTransitionExperiment::tick(
             axis1_target_pos_ = active_cfg_.push_target_mm;
             enter_phase(FtExpPhase::PushForward, now_tick_ms);
             ++global_trial_id_;
-            if (logger_ != nullptr)
-                logger_->mark_trial_started(global_trial_id_, velocity_level_, repeat_in_level_, current_v_ratio_);
         }
         break;
     }
@@ -366,8 +362,6 @@ bool ForceTransitionExperiment::tick(
         }
         v_limit_override_active_ = false;
         axis1_refer_cmd_ = axis1_abs;
-        if (logger_ != nullptr)
-            logger_->mark_trial_finished(global_trial_id_);
         enter_phase(FtExpPhase::SettleHold, now_tick_ms);
         break;
     }

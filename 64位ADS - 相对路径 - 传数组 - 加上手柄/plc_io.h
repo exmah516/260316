@@ -36,9 +36,14 @@ namespace AdsSymbol
 	extern const char* axis4_fwd_req;
 	extern const char* axis4_rev_req;
 	extern const char* axis4_manual_busy;
+	extern const char* axis4_manual_done;
 	extern const char* axis4_manual_error;
 	extern const char* axis4_manual_error_id;
 	extern const char* gen_state;
+	extern const char* host_session_id;
+	extern const char* host_heartbeat_sequence;
+	extern const char* host_recover_req;
+	extern const char* host_comm_timeout;
 	extern const char* app_name;
 
 	extern const AxisReturnAdsSymbols axis1_return;
@@ -56,6 +61,8 @@ namespace plc_io
 	bool write_v_limit(AppContext& ctx, const double* values);
 	bool read_startup_loading_ready(AppContext& ctx, bool& ready);
 	bool write_startup_loading_ready(AppContext& ctx, bool ready);
+	bool write_cylinder_values(AppContext& ctx, const unsigned short values[4]);
+	bool write_startup_smoothing_bypass(AppContext& ctx, bool enabled);
 	void load_pos_from_actual(AppContext& ctx);
 
 	bool read_axis_return_status(AppContext& ctx, const AxisReturnAdsSymbols& symbols, AxisReturnStatus& status);

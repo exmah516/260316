@@ -104,7 +104,7 @@ void TcpForceDaqClient::stop()
 	running_.store(false);
 }
 
-bool TcpForceDaqClient::get_latest_raw(double out_v[6], std::uint64_t& timestamp_ms) const
+bool TcpForceDaqClient::get_latest_raw(double out_v[6], std::uint64_t& timestamp_ms, std::int64_t* qpc_ticks) const
 {
 	std::lock_guard<std::mutex> lock(frame_mutex_);
 	if (!has_frame_)
@@ -116,6 +116,10 @@ bool TcpForceDaqClient::get_latest_raw(double out_v[6], std::uint64_t& timestamp
 		out_v[i] = latest_v_[i];
 	}
 	timestamp_ms = latest_tick_ms_;
+	if (qpc_ticks != nullptr)
+	{
+		*qpc_ticks = latest_qpc_ticks_;
+	}
 	return true;
 }
 
@@ -129,12 +133,6 @@ bool TcpForceDaqClient::get_latest_ft1_fn1(double& out_ft1, double& out_fn1, std
 	out_fn1 = raw_v[0];
 	out_ft1 = raw_v[1];
 	return true;
-}
-
-void TcpForceDaqClient::set_on_sample(SampleCallback cb)
-{
-	std::lock_guard<std::mutex> lock(callback_mutex_);
-	on_sample_ = std::move(cb);
 }
 
 void TcpForceDaqClient::worker_loop(std::string ip, unsigned short port, std::string local_ip)
@@ -212,6 +210,8 @@ void TcpForceDaqClient::worker_loop(std::string ip, unsigned short port, std::st
 			}
 
 			const std::uint64_t sample_tick_ms = static_cast<std::uint64_t>(GetTickCount64());
+			LARGE_INTEGER sample_qpc{};
+			QueryPerformanceCounter(&sample_qpc);
 			{
 				std::lock_guard<std::mutex> lock(frame_mutex_);
 				for (int i = 0; i < kChannelCount; ++i)
@@ -219,17 +219,8 @@ void TcpForceDaqClient::worker_loop(std::string ip, unsigned short port, std::st
 					latest_v_[i] = parsed_v[i];
 				}
 				latest_tick_ms_ = sample_tick_ms;
+				latest_qpc_ticks_ = sample_qpc.QuadPart;
 				has_frame_ = true;
-			}
-
-			SampleCallback cb_local;
-			{
-				std::lock_guard<std::mutex> cb_lock(callback_mutex_);
-				cb_local = on_sample_;
-			}
-			if (cb_local)
-			{
-				cb_local(sample_tick_ms, parsed_v);
 			}
 		}
 

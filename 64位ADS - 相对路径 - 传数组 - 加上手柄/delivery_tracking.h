@@ -10,11 +10,10 @@ enum class DeliveryTrackingAxis : int
 	Axis6 = 1
 };
 
-// CSV 使用数值编码，避免中文运行时文本影响后续数据分析脚本。
+// 状态码保持稳定，供主循环门控与 WPF 状态显示使用。
 enum class TrackingInvalidReason : int
 {
 	None = 0,
-	NotLogging = 1,
 	NotForwardDelivery = 2,
 	ControlInactive = 3,
 	StartupActive = 4,
@@ -43,20 +42,20 @@ enum class TrackingParameterField : int
 
 struct DeliveryTrackingParameters
 {
-	// Kp 单位为 1/mm，Ki 单位为 1/(mm*s)。默认 0，必须经实验整定后才会产生补偿。
-	double kp = 0.0;
-	double ki = 0.0;
-	double max_gain = 1.10;
+	// Kp 单位为 1/mm，Ki 单位为 1/(mm*s)。默认值与 WPF 输入框一致。
+	double kp = 0.5;
+	double ki = 2.0;
+	double max_gain = 2.0;
 	// 换手前向欠账的硬上界。超过上界的原始手柄位移仍记日志，但不会再进入补偿队列。
 	double max_error_mm = 20.0;
 };
 
-// 每拍状态快照，同时供 UI 和 20 Hz CSV 记录使用。
+// 每拍状态快照供控制器内部累计与 UI 显示使用，不访问磁盘。
 struct DeliveryTrackingAxisSnapshot
 {
 	bool segment_active = false;
 	bool grip_assumed = false;
-	int invalid_reason = static_cast<int>(TrackingInvalidReason::NotLogging);
+	int invalid_reason = static_cast<int>(TrackingInvalidReason::NotForwardDelivery);
 	std::uint64_t segment_id = 0;
 
 	double handle_raw = 0.0;
@@ -94,10 +93,6 @@ public:
 	static constexpr std::uint32_t kGripSettleMs = 150;
 
 	DeliveryTrackingController();
-
-	void start_session();
-	void stop_session();
-	bool session_active() const { return session_active_; }
 
 	bool set_parameter(TrackingParameterField field, double value);
 	const DeliveryTrackingParameters& parameters(DeliveryTrackingAxis axis) const;
@@ -171,8 +166,8 @@ private:
 	};
 
 	static constexpr double kMaxUiKp = 1.0;
-	static constexpr double kMaxUiKi = 1.0;
-	static constexpr double kMaxUiGain = 1.50;
+	static constexpr double kMaxUiKi = 100.0;
+	static constexpr double kMaxUiGain = 5.0;
 	static constexpr double kMaxUiErrorMm = 20.0;
 	static constexpr double kMaxIntegralMmS = 20.0;
 	static constexpr double kMaxCompensationStepMm = 0.25;
@@ -191,7 +186,6 @@ private:
 
 	AxisRuntime axis_[2];
 	DeliveryTrackingParameters parameters_[2];
-	bool session_active_ = false;
 	bool compensation_enabled_ = false;
 	std::uint64_t next_segment_id_ = 0;
 };

@@ -25,7 +25,6 @@ namespace AdsControlUI
         [MarshalAs(UnmanagedType.I1)] public bool cal_zeroed;
         [MarshalAs(UnmanagedType.I1)] public bool axis1_reverse;
         [MarshalAs(UnmanagedType.I1)] public bool axis6_reverse;
-        [MarshalAs(UnmanagedType.I1)] public bool force_log_running;
         [MarshalAs(UnmanagedType.I1)] public bool startup_waiting;
         [MarshalAs(UnmanagedType.I1)] public bool startup_completed;
         public double ft_1_v;
@@ -55,19 +54,54 @@ namespace AdsControlUI
         // 协同递送状态。
         [MarshalAs(UnmanagedType.I1)] public bool dual_handle_ready;
         public int cooperative_return_owner;
-        // 主从位移实验状态。必须与 C++ VisState 末尾字段完全一致。
-        [MarshalAs(UnmanagedType.I1)] public bool tracking_log_running;
+        // 主从位移补偿只发布控制状态，不再持有磁盘会话状态。
         [MarshalAs(UnmanagedType.I1)] public bool tracking_compensation_enabled;
         public double axis1_tracking_error_mm;
         public double axis6_tracking_error_mm;
         public double axis1_compensation_gain;
         public double axis6_compensation_gain;
-        public ulong tracking_log_dropped;
         // 协同方向：0=None，1=Delivery，2=Retraction。必须与 C++ VisState 末尾字段一致。
         public int cooperative_direction;
         // axis6 当前软限位阻断状态。必须与 C++ VisState 末尾字段一致。
         [MarshalAs(UnmanagedType.I1)] public bool axis6_soft_limit_hold;
-    }
+
+        // 统一实验记录、纯净力与 Action 4 状态。必须与 C++ VisState 顺序完全一致。
+        public int recording_state;
+        public int recording_error;
+        public ulong recording_elapsed_us;
+        public ulong force_writer_dropped;
+        public ulong motion_writer_dropped;
+        public ulong force_schedule_missed;
+        public ulong motion_schedule_missed;
+        [MarshalAs(UnmanagedType.I1)] public bool force_sample_valid;
+        [MarshalAs(UnmanagedType.I1)] public bool clean_force_valid;
+        public double clean_force_n;
+        public double clean_handle_torque_nm;
+        public int camera_state;
+        public int camera_input_format;
+        public int camera_width;
+        public int camera_height;
+        public int camera_fps_numerator;
+        public int camera_fps_denominator;
+        [MarshalAs(UnmanagedType.I1)] public bool camera_preview_enabled;
+        [MarshalAs(UnmanagedType.I1)] public bool camera_recording;
+        public ulong camera_recording_elapsed_us;
+		public ulong camera_frame_count;
+		public ulong camera_dropped_frames;
+		public int camera_error_code;
+		// 物理 B0/B6 有效按下沿事件。必须与 C++ VisState 末尾字段一致。
+		public uint physical_button_event_counter;
+		public int physical_button_event_code;
+		// ADS 通信诊断。必须与 C++ VisState 末尾字段顺序完全一致。
+		public int ads_state;
+		public double ads_actual_hz;
+		public ulong ads_snapshot_age_us;
+		public ulong ads_rtt_us;
+		public ulong ads_failed_cycles;
+		public ulong ads_reconnect_count;
+		public ulong plc_restart_count;
+		[MarshalAs(UnmanagedType.I1)] public bool host_comm_timeout;
+	}
 
     public enum VisCommandType : int
     {
@@ -78,7 +112,7 @@ namespace AdsControlUI
         ZeroForceSensor = 4,
         ToggleForceFeedback = 5,
         SetReverseMode = 6,
-        ToggleForceLog = 7,
+        // 7 为已删除的旧力记录命令，保留数值空洞。
         SetStartupAxisPos = 8,
         SetStartupAxisDeg = 9,
         SetStartupSpeed = 10,
@@ -92,18 +126,14 @@ namespace AdsControlUI
         SetFtExpParamB = 17,
         SetSpacingRecovery = 18,
         SetCooperativeDelivery = 19,
-        SetTrackingLog = 20,
+        // 20 为已删除的旧位移记录命令，保留数值空洞。
         SetTrackingCompensation = 21,
         SetTrackingCompensationParam = 22,
         SetCooperativeRetraction = 23,
         SetAxis1PostReturnLead = 24,
-    }
-
-    [StructLayout(LayoutKind.Sequential, Pack = 1)]
-    public struct VisCommand
-    {
-        public VisCommandType type;
-        public int param1;
-        public int param2;
+        StartExperimentRecording = 25,
+        StopExperimentRecording = 26,
+        SetCameraPreview = 27,
+        SetCleanForceMonitor = 28,
     }
 }

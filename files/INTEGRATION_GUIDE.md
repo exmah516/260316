@@ -1,5 +1,7 @@
 # 血管介入机器人 Qt 界面 — 接入指南
 
+> **历史原型文档**：本文描述未投入当前主链路的 Qt/ControlEngine 方案，不适用于现有 WPF + VisPipe + `AdsCommunicationService`。当前程序由独立通信线程执行 100 Hz Sum Read/Sum Write，控制/UI 线程不得照抄本文的逐轮 ADS 调用。请以 `../64位ADS - 相对路径 - 传数组 - 加上手柄/项目架构总览.md` 和 `ADS通讯说明.md` 为准。
+
 ## 项目结构
 
 ```
@@ -232,7 +234,7 @@ PLC 实际位置变化
 
 ```
 力传感器产生信号
-  → PLC G.fn_value / G.ft_value
+  → PLC G.fn_1_value / G.ft_1_value
     → ControlEngine::tick() ADS 读取, 滤波, 映射
       → 实时: publishState() → ForcePlotWidget 曲线
       → 录制: pushForceSample() → ForceRecorder → CSV 文件

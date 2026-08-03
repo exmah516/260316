@@ -36,18 +36,15 @@ namespace
 
 	bool write_recovery_grip_commands(AppContext& ctx)
 	{
-		unsigned short cylinder1_cmd = ctx.cyl->cyl1_open;
-		unsigned short cylinder2_cmd = ctx.cyl->cyl2_clamp;
-		unsigned short cylinder3_cmd = ctx.cyl->cyl3_open;
-		unsigned short cylinder4_cmd = ctx.cyl->cyl4_clamp;
-
 		// 先闭合承载侧，再打开相对侧，避免切换瞬间出现两侧同时松开的状态。
-		bool write_ok = true;
-		write_ok = ctx.ads->ADSWrite(AdsSymbol::cylinder2_value, sizeof(cylinder2_cmd), &cylinder2_cmd) && write_ok;
-		write_ok = ctx.ads->ADSWrite(AdsSymbol::cylinder4_value, sizeof(cylinder4_cmd), &cylinder4_cmd) && write_ok;
-		write_ok = ctx.ads->ADSWrite(AdsSymbol::cylinder1_value, sizeof(cylinder1_cmd), &cylinder1_cmd) && write_ok;
-		write_ok = ctx.ads->ADSWrite(AdsSymbol::cylinder3_value, sizeof(cylinder3_cmd), &cylinder3_cmd) && write_ok;
-		return write_ok;
+		// plc_io 内部按 2、4、1、3 的顺序组成同一次 Sum Write。
+		const unsigned short commands[4] = {
+			ctx.cyl->cyl1_open,
+			ctx.cyl->cyl2_clamp,
+			ctx.cyl->cyl3_open,
+			ctx.cyl->cyl4_clamp
+		};
+		return plc_io::write_cylinder_values(ctx, commands);
 	}
 }
 
@@ -189,10 +186,7 @@ namespace startup_sequence
 
 		// 首帧 refer 之前先通知 PLC 旁路旧轨迹缓存，保证恢复启动不会追随上次进程的参考历史。
 		*ctx.startup_smoothing_bypass = true;
-		if (!ctx.ads->ADSWrite(
-			AdsSymbol::startup_smoothing_bypass,
-			sizeof(*ctx.startup_smoothing_bypass),
-			ctx.startup_smoothing_bypass))
+		if (!plc_io::write_startup_smoothing_bypass(ctx, true))
 		{
 			*ctx.startup_smoothing_bypass = false;
 			if (!restore_startup_v_limit(ctx))
@@ -205,10 +199,7 @@ namespace startup_sequence
 		if (!plc_io::write_refer(ctx))
 		{
 			*ctx.startup_smoothing_bypass = false;
-			ctx.ads->ADSWrite(
-				AdsSymbol::startup_smoothing_bypass,
-				sizeof(*ctx.startup_smoothing_bypass),
-				ctx.startup_smoothing_bypass);
+			(void)plc_io::write_startup_smoothing_bypass(ctx, false);
 			if (ctx.startup->v_limit_scaled && !restore_startup_v_limit(ctx))
 			{
 				std::cout << "警告：启动首帧 refer 写入失败，且启动期速度上限恢复失败；保留恢复标志以便后续重试。" << std::endl;

@@ -36,6 +36,14 @@ VAR_GLOBAL
 	// 急停/掉使能冻结：用于通知上位机停止写 refer，并在恢复时触发重同步
 	estop_hold_req		: BOOL := FALSE;
 
+	// ADS 上位机心跳看门狗：上位机保持会话号不变并递增心跳序号。
+	// 超时后必须先恢复心跳，再置 host_recover_req；PLC 停稳后清除请求并启动重初始化。
+	// host_comm_timeout=FALSE 表示请求已受理，handle_reinit_done=TRUE 表示重初始化完成。
+	host_session_id			: UDINT := 0;
+	host_heartbeat_sequence	: UDINT := 0;
+	host_recover_req		: BOOL := FALSE;
+	host_comm_timeout		: BOOL := TRUE;
+
 	axis6_fast_retract	: BOOL := FALSE;
 	axis1_fast_return	: BOOL := FALSE;
 	startup_smoothing_bypass : BOOL := FALSE;
