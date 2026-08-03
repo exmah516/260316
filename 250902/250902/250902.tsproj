@@ -3450,7 +3450,7 @@ External Setpoint Generation:
 		</Motion>
 		<Plc>
 			<Project GUID="{DD2ED881-765C-44ED-90B1-8AE0D6051941}" Name="Untitled2" PrjFilePath="Untitled2\Untitled2.plcproj" TmcFilePath="Untitled2\Untitled2.tmc" ReloadTmc="true" AmsPort="851" FileArchiveSettings="#x000e" SymbolicMapping="true">
-				<Instance Id="#x08502000" TcSmClass="TComPlcObjDef" KeepUnrestoredLinks="2" TmcPath="Untitled2\Untitled2.tmc" TmcHash="{B32F37B4-3D21-4886-D613-628E0559A6C3}">
+				<Instance Id="#x08502000" TcSmClass="TComPlcObjDef" KeepUnrestoredLinks="2" TmcPath="Untitled2\Untitled2.tmc" TmcHash="{A77C14D4-93EA-AC05-A92C-71A82B39BE66}">
 					<Name>Untitled2 Instance</Name>
 					<CLSID ClassFactory="TcPlc30">{08500001-0000-0000-F000-000000000064}</CLSID>
 					<Vars VarGrpType="1">
@@ -3551,11 +3551,6 @@ External Setpoint Generation:
 							<Type GUID="{96B75FEB-2D84-43BE-A3EC-D9A681F27D52}" Namespace="MC">PLCTONC_AXIS_REF</Type>
 						</Var>
 						<Var>
-							<Name>G.cylinder1_value</Name>
-							<Comment><![CDATA[ 电缸1控制值 (安装在夹持机构上)]]></Comment>
-							<Type>WORD</Type>
-						</Var>
-						<Var>
 							<Name>G.arm_axis[1].PlcToNc</Name>
 							<Type GUID="{96B75FEB-2D84-43BE-A3EC-D9A681F27D52}" Namespace="MC">PLCTONC_AXIS_REF</Type>
 						</Var>
@@ -3576,13 +3571,8 @@ External Setpoint Generation:
 							<Type GUID="{96B75FEB-2D84-43BE-A3EC-D9A681F27D52}" Namespace="MC">PLCTONC_AXIS_REF</Type>
 						</Var>
 						<Var>
-							<Name>G.cylinder2_value</Name>
-							<Comment><![CDATA[ 电缸2控制值 (安装在轴1机构上)]]></Comment>
-							<Type>WORD</Type>
-						</Var>
-						<Var>
-							<Name>G.cylinder3_value</Name>
-							<Comment><![CDATA[ 电缸3控制值 (安装在轴5机构上)]]></Comment>
+							<Name>G.cylinder1_value</Name>
+							<Comment><![CDATA[ 电缸1控制值 (安装在夹持机构上)]]></Comment>
 							<Type>WORD</Type>
 						</Var>
 						<Var>
@@ -3593,6 +3583,16 @@ External Setpoint Generation:
 						<Var>
 							<Name>G.cylinder5_value</Name>
 							<Comment><![CDATA[ 电缸5控制值 (安装在轴3机构上控制y阀)]]></Comment>
+							<Type>WORD</Type>
+						</Var>
+						<Var>
+							<Name>G.cylinder2_value</Name>
+							<Comment><![CDATA[ 电缸2控制值 (安装在轴1机构上)]]></Comment>
+							<Type>WORD</Type>
+						</Var>
+						<Var>
+							<Name>G.cylinder3_value</Name>
+							<Comment><![CDATA[ 电缸3控制值 (安装在轴5机构上)]]></Comment>
 							<Type>WORD</Type>
 						</Var>
 					</Vars>
@@ -7326,10 +7326,14 @@ External Setpoint Generation:
 		</OwnerA>
 		<OwnerA Name="TIPC^Untitled2^Untitled2 Instance">
 			<OwnerB Name="TIID^Device 5 (EtherCAT)^Box 7 (EtherCat-control-node)">
+				<Link VarA="PlcTask Inputs^G.fn_2_value" VarB="Data Inputs^Data_4"/>
+				<Link VarA="PlcTask Inputs^G.ft_2_value" VarB="Data Inputs^Data_3"/>
 				<Link VarA="PlcTask Outputs^G.cylinder3_value" VarB="Outputs^Value_1"/>
 				<Link VarA="PlcTask Outputs^G.cylinder4_value" VarB="Outputs^Value_2"/>
 			</OwnerB>
 			<OwnerB Name="TIID^Device 5 (EtherCAT)^Box 8 (EtherCat-control-node)">
+				<Link VarA="PlcTask Inputs^G.fn_1_value" VarB="Data Inputs^Data_4"/>
+				<Link VarA="PlcTask Inputs^G.ft_1_value" VarB="Data Inputs^Data_3"/>
 				<Link VarA="PlcTask Outputs^G.cylinder1_value" VarB="Outputs^Value_1"/>
 				<Link VarA="PlcTask Outputs^G.cylinder2_value" VarB="Outputs^Value_2"/>
 				<Link VarA="PlcTask Outputs^G.cylinder5_value" VarB="Outputs^Value_3"/>
