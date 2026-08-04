@@ -702,6 +702,12 @@ void AdsCommunicationService::run()
 		snapshot.attempt_sequence = ++attempt_sequence_;
 		const bool read_ok = read_fast_snapshot(snapshot, handles_fresh);
 		handles_fresh = false;
+		if (read_ok && snapshot.host_comm_timeout)
+		{
+			// 新进程首次写入会话号后，PLC 可能才锁存通信超时。
+			// 每个有效快照都补发恢复请求，直到 PLC 完成停稳与重初始化握手。
+			watchdog_recovery_pending_.store(true, std::memory_order_release);
+		}
 		const bool write_ok = read_ok && !restart_reconnect_pending_
 			? write_output_cycle()
 			: false;

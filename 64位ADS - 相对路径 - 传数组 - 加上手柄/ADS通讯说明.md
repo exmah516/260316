@@ -3,15 +3,15 @@
 > 本文档梳理上位机与倍福 PLC 之间的 ADS 通讯实现：连接、符号表、读写封装、断线/重同步路径，以及与主循环的契约。
 > 修改 `ads_communication.cpp/.h`、`plc_io.cpp/.h`、`ADSComm.cpp`、`sensor_calibration_experiment.cpp/.h`、符号表、或新增 PLC 变量时，请同步在最末"变更日志"追加条目。
 
-更新时间：2026-08-03
+更新时间：2026-08-04
 适用工程：`64位ADS - 相对路径 - 传数组 - 加上手柄\ADS.sln`
-对应代码版本：2026-08-03 当前工作区（100 Hz ADS 通信服务、PLC 主机看门狗与 UI 诊断版）
+对应代码版本：2026-08-04 当前工作区（100 Hz 主链路、定位臂 20 Hz 独立 ADS 服务与 WPF 控制）
 
 ***
 
 ## 1. 角色与拓扑
 
-上位机作为 ADS Client，倍福 PLC（TwinCAT 3，端口 851）作为 ADS Server。正常模式由独立 `AdsCommunicationService` 以 QPC 绝对截止时间运行 100 Hz 通信周期：每周期一次 Sum Read 形成位置/力/通信状态统一快照，再以一次 Sum Write 下发心跳和本周期输出。`G.fn_1_value` / `G.ft_1_value` 保持 PLC 原始 `INT` 契约，C++ 统一按 `raw / 1000.0 = V` 换算；TCP 采集卡代码仅保留为人工切换的回退路径。
+上位机作为 ADS Client，倍福 PLC（TwinCAT 3，端口 851）作为 ADS Server。正常模式由独立 `AdsCommunicationService` 以 QPC 绝对截止时间运行 100 Hz 通信周期：每周期一次 Sum Read 形成位置/力/通信状态统一快照，再以一次 Sum Write 下发心跳和本周期输出。`G.fn_1_value` / `G.ft_1_value` 保持 PLC 原始 `INT` 契约，C++ 统一按 `raw / 1000.0 = V` 换算，再由 `force_calibration.h` 使用 2026-08-03 的 `F_direct` 斜率换算为 N；TCP 采集卡代码仅保留为人工切换的回退路径。
 
 ```
 [上位机 ADS.exe]
@@ -67,7 +67,7 @@
 | `fn_2_value` | `G.fn_2_value` | short | 读 | 第二组轴向力（仅 ADS 链路使用） |
 | `ft_2_value` | `G.ft_2_value` | short | 读 | 第二组扭矩（同上） |
 
-> 力反馈链路真正消费的是 `force_sample.fn_1_value_v` / `ft_1_value_v`。默认 ADS 分支在 `plc_io::read_force_sample` 内完成 `INT -> V` 换算；TCP_DAQ 模式才会覆盖这两路。ADS 读取同时返回 axis1/axis2 实际位置（`act_pos` 快照），见 [力反馈说明.md §2.2](力反馈说明.md#22-主循环采样maincpp-主循环步骤-15力采样节拍段)。
+> 力反馈链路真正消费的是 `force_sample.fn_1_value_v` / `ft_1_value_v`。默认 ADS 分支在 `plc_io::read_force_sample` 内完成 `INT -> V` 换算；`calibrate_force` 再分别按 `0.614437208097 N/V`、`0.703683250522 N/V` 做动态零点后的 `F_direct` 映射。TCP_DAQ 模式才会覆盖这两路。ADS 读取同时返回 axis1/axis2 实际位置（`act_pos` 快照），见 [力反馈说明.md §2.2](力反馈说明.md#22-主循环采样maincpp-主循环步骤-15力采样节拍段)。
 
 重新标定工具直接读取 PLC 原始 `short` 计数，不执行 `raw / 1000.0` 换算。工具内的固定映射为：传感器1 -> `G.ft_1_value`、传感器2 -> `G.fn_1_value`、传感器3 -> `G.fn_2_value`、传感器4 -> `G.ft_2_value`。每个采样时刻通过同一次 `ADSReadSum` 获取四路快照，避免四次独立读取造成通道时间错位。
 
@@ -148,9 +148,9 @@ PLC 看门狗超时时会置 `estop_hold_req`，清除快退、axis4 和计划�
 
 | PLC 符号 | 类型/长度 | 读写 | 上位机行为 |
 |---|---|---|---|
-| `G.arm_manual_enable` | bool | 写 | Qt 界面默认写 TRUE；关闭时同时清 jog 请求 |
-| `G.arm_enable_req` | bool[5] | 写 | 每轴“上电”按钮保持 TRUE/FALSE |
-| `G.arm_reset_req[i]` | bool | 写 | 每轴“复位”按钮写 TRUE；PLC 消费后自动清零，上位机不主动写 FALSE |
+| `G.arm_manual_enable` | bool | 写 | 定位臂总使能；PLC 默认 FALSE，必须先写 TRUE，关闭时 PLC 关闭所有定位臂 MC_Power 并清 jog/单轴上电请求 |
+| `G.arm_enable_req` | bool[5] | 写 | 每轴“上电”按钮保持 TRUE/FALSE；实际 MC_Power 使能还受 `G.arm_manual_enable` 门控 |
+| `G.arm_reset_req[i]` | bool | 写 | 每轴“复位”按钮写 TRUE；PLC 先停轴、再执行 MC_Reset，消费后自动清零，上位机不主动写 FALSE |
 | `G.arm_jog_pos_req` / `G.arm_jog_neg_req` | bool[5] | 写 | Jog+ / Jog- 按下写 TRUE、松开写 FALSE |
 | `G.arm_jog_velocity` / `G.arm_jog_acc` / `G.arm_jog_dec` / `G.arm_jog_jerk` | double[5] | 写 | UI 可编辑，默认 `5.0 / 50.0 / 50.0 / 500.0` |
 | `G.arm_power_output[i].Done/Error/ErrorID` | bool/bool/unsigned long | 读 | 显示每轴上电状态和错误码 |
@@ -262,7 +262,7 @@ clear_axis_return_request(symbols)
 | 首次失败软保持 | 第 1 个失败周期立即 | 停止发布运动有效命令、清力反馈并丢弃故障期间手柄增量，但暂不关闭连接 |
 | 硬超时与重连 | 距最后完整成功 100 ms | 关闭端口并按 `250/500/1000/2000 ms` 上限退避重连 |
 | OnChange Notifications | 状态变化触发 | 替代旧的主循环分频轮询；回调只更新内存状态 |
-| 定位臂 `G.arm_*` | Qt 通道按既有节拍 | 与本 C++ 7 轴 100 Hz 服务解耦，不扩展其快照或看门狗契约 |
+| 定位臂 `G.arm_*` | C++ `ArmManualAdsService` 独立 20 Hz | 命令仅在变化时 Sum Write，状态批量 Sum Read；与 7 轴 100 Hz 服务解耦。ADS 不健康、主机看门狗超时或程序退出时撤销总使能、单轴上电与点动请求。 |
 
 ### 6.1 WPF ADS 诊断
 
@@ -272,7 +272,7 @@ clear_axis_return_request(symbols)
 - 实时量：实际 Hz、数据龄、RTT；
 - 累计量：失败、重连、PLC 重启。
 
-只有命名管道已连接、`ads_state == Running` 且 `host_comm_timeout == false` 时，UI 才把 ADS 标为健康。当前 `VisState` 为 pack(1) 的 **499 字节**，C++ 与 WPF 必须成对更新。
+只有命名管道已连接、`ads_state == Running` 且 `host_comm_timeout == false` 时，UI 才把 ADS 标为健康。当前 `VisState` 为 pack(1) 的 **877 字节**，C++ 与 WPF 必须成对更新。
 
 ## 7. 失败/异常处理约定
 
@@ -300,7 +300,7 @@ clear_axis_return_request(symbols)
 
 ### 8.3 ADS 力输入映射需要现场确认
 
-当前默认 `force_sample_source == ADS`。`zero_force_sensor` 会同步读取一帧 ADS 样本后采零，不依赖 TCP worker 或力反馈开关。现场必须确认 `G.fn_1_value`（轴向力）和 `G.ft_1_value`（扭矩）均为有符号 `INT`，且同一放大器量纲满足 `1000 counts = 1 V`；符号或量程不一致会影响零点、标定与力反馈方向。
+当前默认 `force_sample_source == ADS`。`zero_force_sensor` 会同步读取一帧 ADS 样本后采零，不依赖力反馈开关；成功后立即清除旧的快退冻结反馈和手柄输出。现场必须确认 `G.fn_1_value`（轴向力）和 `G.ft_1_value`（切向力）均为有符号 `INT`，且满足 `1000 counts = 1 V`。装机零点通过 `p × (raw-raw_zero)` 消除，固定截距不再加入增量输出；符号或量程不一致仍会影响标定与反馈方向。TCP_DAQ 尚未证明与本次 ADS 标定同源，因此当前 TCP 模式明确拒绝采零和反馈输出。
 
 ### 8.4 坐标缓存刷新边界
 
@@ -318,13 +318,24 @@ clear_axis_return_request(symbols)
 
 ## 10. 变更日志
 
+### 2026-08-04 — 四路 ADS 电压进入双手柄力反馈
+- 作者：AI（Codex）。
+- 行为变化：ADS 四路 `INT16` 均在 `ForceSampleFrame` 中转换为电压；传感器2/1驱动导管582，传感器3/4驱动导丝587，一次ADS调零同步保存四路零点。
+- 边界：TCP采集卡仍只确认 `v[0]/v[1]`，不推测 `v[2]/v[3]` 的物理映射，因此继续拒绝TCP调零和本次F_direct反馈。
+- 运行限幅：按用户要求为轴向 `±5 N`、扭矩 `±20 N·mm`；该数值超过0–50g标定验证范围。
+
+### 2026-08-03 — 实机 F_direct 接入正常力反馈
+- 作者：AI（Codex）。
+- 行为变化：ADS/TCP 的 `INT -> V` 通讯契约不变；传感器2 `fn_1` 和传感器1 `ft_1` 在反馈层分别使用 `0.614437208097 N/V`、`0.703683250522 N/V`，装机调零后按电压差映射，截距抵消。
+- 零点与安全：原键盘/UI 调零入口保留，成功后立即清旧输出；公式只在本次 0～50 g 与报告 raw 范围内验证，反馈默认限幅同步收至50g量级。TCP 回退在完成同源验证和独立验收前拒绝采零。
+
 ### 2026-08-03 — 100 Hz ADS 快照、自动重连与 PLC 主机看门狗
 - 作者：AI（Codex）。
 - 涉及文件：`ads_communication.*`、`ADSComm.cpp`、`ADS/Include/ADSComm1.h`、`plc_io.*`、`main.cpp`、`experiment_recorder.*`、`vis_server.*`、`AdsControlUI`，以及 PLC `G.TcGVL` / `handle.TcPOU`。
 - 通信变化：正常模式改为独立 100 Hz QPC 通信线程；快速输入走 Sum Read、输出和心跳走 Sum Write，低频状态走 OnChange Notifications。第一次失败立即软保持，距最后完整成功 100 ms 后关闭端口并退避重连。
 - 恢复边界：同一 PLC 运行实例重连会重建位置/手柄基准并清瞬态；PLC 重启或应用重载会清力零点、关闭反馈/PI、退出控制，要求重新自检、调零和人工启动。
 - PLC 契约：新增 `G.host_session_id`、`G.host_heartbeat_sequence`、`G.host_recover_req`、`G.host_comm_timeout`，超时后 PLC 冻结外部参考并受控停止独立运动，再通过重初始化握手恢复。
-- 记录与 UI：`force.csv` 对齐 100 Hz 快照，`motion.csv` 为稳定 50 Hz；`session.json` 写 ADS/序号诊断，WPF 显示状态、实际频率、数据龄、RTT、失败、重连和 PLC 重启，`VisState` 更新为 499 字节。
+- 记录与 UI：`force.csv` 对齐 100 Hz 快照，`motion.csv` 为稳定 50 Hz；`session.json` 写 ADS/序号诊断，WPF 显示状态、实际频率、数据龄、RTT、失败、重连和 PLC 重启；该次 `VisState` 扩展为 499 字节，后续版本见 2026-08-04 的 877 字节协议。
 - 明确边界：不新增 PLC 环形缓冲或 `write_sequence`，不猜测 PDO 映射，不要求 Activate Configuration，连接/重连不替现场切换 PLC 到 RUN。
 
 ### 2026-08-03 — 新增四路传感器只读重新标定模式
@@ -359,6 +370,14 @@ clear_axis_return_request(symbols)
 - 行为变化：新增 `G.arm_*` ADS 符号绑定，Qt UI 提供定位臂 5 轴单轴上电、复位、Jog+、Jog-、点动参数编辑和状态显示。
 - 通讯策略：命令按变化写入，状态约 50ms 降频读取；原 7 轴 `G.refer/Act_pos/init_pos/return_cmd` 高频链路不扩展、不改语义。
 
+### 2026-08-04 — WPF 定位臂控制、axis4 点动与注射器轴预留
+- 作者：AI（Codex）。
+- 涉及文件：`arm_manual_ads_service.*`、`main.cpp`、`vis_server.*`、`AdsControlUI`，以及 PLC `G.TcGVL` / `MAIN.TcPOU` / `ArmManual.TcPOU` / `250902.tsproj`。
+- 行为变化：维护中的 WPF 界面新增定位臂五轴单轴上电、复位、按住 Jog-/Jog+、参数编辑和状态显示；总使能在 ADS 健康后自动请求，任一轴仍需单独上电。axis4 新增按住前进/后退按钮，C++ 继续保留既有反接线交换，因此 UI 物理语义不变。
+- 通讯与安全：定位臂读写移入独立 20 Hz ADS 工作线程，命令仅在变化时下发；WPF 按住点动时每 100 ms 续约，C++ 在 300 ms 未续约后自动停止。主机看门狗超时、ADS 不健康或程序退出时会清总使能、单轴上电和点动。原 7 轴 100 Hz `G.refer/return_cmd` 包没有新增字段。
+- 注射器：`G.inject_axis[1..2]` 仅链接 NC Axis 13/14（Drive 16/17），没有 `MC_Power`、运动命令或上位机 UI。
+- 本地协议：新增命令 29..34 和定位臂/axis4 状态，`VisState` 扩展为 pack(1) **877 字节**；C++ 与 WPF 必须同时更新并重启。Qt 定位臂界面保留为历史实现，不再作为维护入口。
+
 ### 2026-07-26 — 主从位移实验与 ADS 力采样首选迁移
 - 作者：AI（Codex）。
 - 涉及文件：`plc_io.cpp`、`control_types.h`、`main.cpp`、`delivery_tracking.*`、当时的独立记录模块（现已删除）、可视化管道与 WPF。
@@ -383,7 +402,7 @@ clear_axis_return_request(symbols)
 - 作者：AI（Codex）。
 - 涉及文件：`plc_io.cpp`、`main.cpp`、`experiment_recorder.*`。
 - 行为变化：该版本首次引入 ADS 调用前后 QPC 中点和统一记录；其独立时隙截取与位置补读策略现已由 2026-08-03 的统一快照队列替代。
-- 接口影响：当时没有修改 TwinCAT ADS 符号；本地管道布局后续已扩展为当前 499 字节版本。
+- 接口影响：当时没有修改 TwinCAT ADS 符号；本地管道布局后续先扩展到 499 字节，当前为 877 字节。
 
 ### 2026-07-28 — 轴3/5/6几何默认值与 axis6 窗口调整（无 ADS 符号变更）
 - 作者：AI（Codex）。

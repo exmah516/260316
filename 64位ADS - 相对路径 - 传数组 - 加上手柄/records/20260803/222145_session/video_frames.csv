@@ -1,0 +1,3 @@
+frame_index,source_timestamp_100ns,callback_elapsed_us,keyframe,discontinuity
+0,817263633000,1623134,1,0
+1,817263834333,1638190,1,0

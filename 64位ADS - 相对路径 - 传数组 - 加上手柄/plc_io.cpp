@@ -257,6 +257,8 @@ namespace plc_io
 			sample.axis2_pos_rel = snapshot.act_pos_rel[1];
 			sample.ft_1_value_v = static_cast<double>(sample.ft_1_value) / 1000.0;
 			sample.fn_1_value_v = static_cast<double>(sample.fn_1_value) / 1000.0;
+			sample.fn_2_value_v = static_cast<double>(sample.fn_2_value) / 1000.0;
+			sample.ft_2_value_v = static_cast<double>(sample.ft_2_value) / 1000.0;
 			sample.valid = true;
 			sample.tick_ms = GetTickCount();
 			sample.qpc_ticks = snapshot.qpc_ticks;
@@ -304,6 +306,8 @@ namespace plc_io
 		// PLC 原始输入约定 1000 counts = 1 V。所有后续标零、标定和日志统一使用伏特。
 		sample.ft_1_value_v = static_cast<double>(sample.ft_1_value) / 1000.0;
 		sample.fn_1_value_v = static_cast<double>(sample.fn_1_value) / 1000.0;
+		sample.fn_2_value_v = static_cast<double>(sample.fn_2_value) / 1000.0;
+		sample.ft_2_value_v = static_cast<double>(sample.ft_2_value) / 1000.0;
 		sample.valid = true;
 		sample.tick_ms = GetTickCount();
 		sample.qpc_ticks = qpc_before.QuadPart + (qpc_after.QuadPart - qpc_before.QuadPart) / 2;

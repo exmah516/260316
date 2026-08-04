@@ -101,6 +101,37 @@ namespace AdsControlUI
 		public ulong ads_reconnect_count;
 		public ulong plc_restart_count;
 		[MarshalAs(UnmanagedType.I1)] public bool host_comm_timeout;
+
+		// 定位臂独立低频 ADS 状态。必须与 C++ VisState 末尾顺序一致。
+		[MarshalAs(UnmanagedType.I1)] public bool arm_manual_enable;
+		[MarshalAs(UnmanagedType.ByValArray, SizeConst = 5, ArraySubType = UnmanagedType.I1)] public bool[] arm_enable_req;
+		[MarshalAs(UnmanagedType.ByValArray, SizeConst = 5, ArraySubType = UnmanagedType.I1)] public bool[] arm_power_done;
+		[MarshalAs(UnmanagedType.ByValArray, SizeConst = 5, ArraySubType = UnmanagedType.I1)] public bool[] arm_power_busy;
+		[MarshalAs(UnmanagedType.ByValArray, SizeConst = 5, ArraySubType = UnmanagedType.I1)] public bool[] arm_power_active;
+		[MarshalAs(UnmanagedType.ByValArray, SizeConst = 5, ArraySubType = UnmanagedType.I1)] public bool[] arm_power_error;
+		[MarshalAs(UnmanagedType.ByValArray, SizeConst = 5)] public uint[] arm_power_error_id;
+		[MarshalAs(UnmanagedType.ByValArray, SizeConst = 5, ArraySubType = UnmanagedType.I1)] public bool[] arm_reset_done;
+		[MarshalAs(UnmanagedType.ByValArray, SizeConst = 5, ArraySubType = UnmanagedType.I1)] public bool[] arm_reset_busy;
+		[MarshalAs(UnmanagedType.ByValArray, SizeConst = 5, ArraySubType = UnmanagedType.I1)] public bool[] arm_reset_active;
+		[MarshalAs(UnmanagedType.ByValArray, SizeConst = 5, ArraySubType = UnmanagedType.I1)] public bool[] arm_reset_error;
+		[MarshalAs(UnmanagedType.ByValArray, SizeConst = 5)] public uint[] arm_reset_error_id;
+		[MarshalAs(UnmanagedType.ByValArray, SizeConst = 5)] public double[] arm_act_pos;
+		[MarshalAs(UnmanagedType.ByValArray, SizeConst = 5)] public double[] arm_act_vel;
+		[MarshalAs(UnmanagedType.ByValArray, SizeConst = 5, ArraySubType = UnmanagedType.I1)] public bool[] arm_motion_busy;
+		[MarshalAs(UnmanagedType.ByValArray, SizeConst = 5, ArraySubType = UnmanagedType.I1)] public bool[] arm_motion_done;
+		[MarshalAs(UnmanagedType.ByValArray, SizeConst = 5, ArraySubType = UnmanagedType.I1)] public bool[] arm_motion_error;
+		[MarshalAs(UnmanagedType.ByValArray, SizeConst = 5)] public uint[] arm_motion_error_id;
+		[MarshalAs(UnmanagedType.ByValArray, SizeConst = 5)] public sbyte[] arm_cmd_dir;
+		[MarshalAs(UnmanagedType.ByValArray, SizeConst = 5, ArraySubType = UnmanagedType.I1)] public bool[] arm_cmd_conflict;
+		[MarshalAs(UnmanagedType.ByValArray, SizeConst = 5)] public double[] arm_jog_velocity;
+		[MarshalAs(UnmanagedType.ByValArray, SizeConst = 5)] public double[] arm_jog_acc;
+		[MarshalAs(UnmanagedType.ByValArray, SizeConst = 5)] public double[] arm_jog_dec;
+		[MarshalAs(UnmanagedType.ByValArray, SizeConst = 5)] public double[] arm_jog_jerk;
+
+		[MarshalAs(UnmanagedType.I1)] public bool axis4_manual_busy;
+		[MarshalAs(UnmanagedType.I1)] public bool axis4_manual_done;
+		[MarshalAs(UnmanagedType.I1)] public bool axis4_manual_error;
+		public uint axis4_manual_error_id;
 	}
 
     public enum VisCommandType : int
@@ -135,5 +166,11 @@ namespace AdsControlUI
         StopExperimentRecording = 26,
         SetCameraPreview = 27,
         SetCleanForceMonitor = 28,
+		SetArmManualEnable = 29,
+		SetArmAxisEnable = 30,
+		RequestArmAxisReset = 31,
+		SetArmAxisJog = 32,
+		SetArmJogParameter = 33,
+		SetAxis4ManualJog = 34,
     }
 }

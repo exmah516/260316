@@ -120,12 +120,14 @@ G.estop_hold_req / G.host_comm_timeout
 
 ### 6.1 纯净力
 
-`calculate_clean_force` 只做零点扣除和固定比例：
+`calculate_clean_force` 只做装机零点扣除和本次 `F_direct` 映射：
 
 ```text
-F = 1.913504 * (Fn - Fn0)
-T = 18.440851 * (Ft - Ft0) * (3 / 37) * 0.001
+F = 0.614437208097 * (Fn_V - Fn0_V)
+T = 0.703683250522 * (Ft_V - Ft0_V) * 3.0 * 0.001
 ```
+
+其中 `Fn_V/Ft_V = raw/1000.0`，因此分别等价于传感器2、传感器1的 `p × (raw-raw_zero)`；`F_direct` 固定截距在动态调零中抵消。输出单位分别为 N 和 N·m。
 
 它供 `force.csv`、力过渡专用表和“纯净力感”窗口使用，不受反馈开关或模式影响。
 
@@ -190,7 +192,7 @@ ADS 记录由 100 Hz 主机快照序号驱动：`force.csv` 每个尝试序号�
 
 ### 11.1 状态
 
-`VisState` 是 pack(1) 的 499 字节二进制结构。C++ 有 `static_assert`，C# 启动时检查固定 wire size。除运动、力反馈、PI、记录、相机和物理按钮字段外，末尾包含 ADS 状态、实际 Hz、最新快照数据龄、RTT、失败周期、重连次数、PLC 重启次数和 `host_comm_timeout`。
+`VisState` 是 pack(1) 的 877 字节二进制结构。C++ 有 `static_assert`，C# 启动时检查固定 wire size。除运动、力反馈、PI、记录、相机和物理按钮字段外，末尾还包含 ADS 状态、定位臂五轴的上电/复位/点动状态和参数，以及 axis4 手动点动状态。
 
 WPF 顶部把状态翻译为“ADS 正常 / 单拍软保持 / 重连中 / PLC 已重启”等文本，同时显示实时量和累计计数。只有本地管道连接、ADS 状态为 Running 且 PLC 主机看门狗未超时时才显示健康。
 
@@ -205,6 +207,12 @@ WPF 顶部把状态翻译为“ADS 正常 / 单拍软保持 / 重连中 / PLC �
 26 StopExperimentRecording
 27 SetCameraPreview
 28 SetCleanForceMonitor
+29 SetArmManualEnable
+30 SetArmAxisEnable
+31 RequestArmAxisReset
+32 SetArmAxisJog
+33 SetArmJogParameter
+34 SetAxis4ManualJog
 ```
 
 7 和 20 是删除旧日志功能留下的空洞，禁止重新编号或复用。协议细节见 [可视化界面架构说明.md](可视化界面架构说明.md)。

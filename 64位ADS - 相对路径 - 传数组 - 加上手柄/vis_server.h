@@ -104,9 +104,41 @@ struct VisState
 	std::uint64_t ads_reconnect_count;
 	std::uint64_t plc_restart_count;
 	bool host_comm_timeout;
+
+	// 定位臂独立低频 ADS 状态，末尾追加以保持既有字段偏移不变。
+	bool arm_manual_enable;
+	bool arm_enable_req[5];
+	bool arm_power_done[5];
+	bool arm_power_busy[5];
+	bool arm_power_active[5];
+	bool arm_power_error[5];
+	std::uint32_t arm_power_error_id[5];
+	bool arm_reset_done[5];
+	bool arm_reset_busy[5];
+	bool arm_reset_active[5];
+	bool arm_reset_error[5];
+	std::uint32_t arm_reset_error_id[5];
+	double arm_act_pos[5];
+	double arm_act_vel[5];
+	bool arm_motion_busy[5];
+	bool arm_motion_done[5];
+	bool arm_motion_error[5];
+	std::uint32_t arm_motion_error_id[5];
+	std::int8_t arm_cmd_dir[5];
+	bool arm_cmd_conflict[5];
+	double arm_jog_velocity[5];
+	double arm_jog_acc[5];
+	double arm_jog_dec[5];
+	double arm_jog_jerk[5];
+
+	// Axis4 手动点动状态来自既有 PLC Notification。
+	bool axis4_manual_busy;
+	bool axis4_manual_done;
+	bool axis4_manual_error;
+	std::uint32_t axis4_manual_error_id;
 };
 #pragma pack(pop)
-static_assert(sizeof(VisState) == 499, "VisState 管道布局发生变化，请同步更新 WPF 协议结构。");
+static_assert(sizeof(VisState) == 877, "VisState 管道布局发生变化，请同步更新 WPF 协议结构。");
 
 enum class VisCommandType : int
 {
@@ -140,6 +172,12 @@ enum class VisCommandType : int
 	StopExperimentRecording = 26,
 	SetCameraPreview = 27, // param1: 0=关闭，1=打开
 	SetCleanForceMonitor = 28, // param1: 0=关闭，1=打开
+	SetArmManualEnable = 29, // param1: 0=关闭，1=开启
+	SetArmAxisEnable = 30, // param1: 轴号1..5，param2: 0=断电，1=上电
+	RequestArmAxisReset = 31, // param1: 轴号1..5
+	SetArmAxisJog = 32, // param1: 轴号1..5，param2: -1/0/1
+	SetArmJogParameter = 33, // param1=(轴号-1)*4+参数号，param2=值×1000
+	SetAxis4ManualJog = 34, // param1: -1=后退，0=停止，1=前进（物理语义）
 };
 
 #pragma pack(push, 1)

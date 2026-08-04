@@ -4,7 +4,7 @@
 >
 > 新增/删除/修改 GVL 变量，或改变读写方向/语义，请同步更新本文档、`PLC项目说明.md §5`，以及上位机 `ADS通讯说明.md §3`。
 
-更新时间：2026-08-03
+更新时间：2026-08-04
 适用工程：`250902\Untitled2`（`GVLs\G.TcGVL`）
 对应代码版本：2026-08-03 工作区（100 Hz ADS 通信与主机看门狗）
 
@@ -56,6 +56,12 @@
 | `G.arm_motion_error_id[1..5]` | `ARRAY[1..5] OF UDINT` | PLC 写，上位机读 | 定位臂错误码，优先来自运动/上电/复位 FB |
 | `G.arm_cmd_dir[1..5]` | `ARRAY[1..5] OF SINT` | PLC 写，上位机读 | 当前命令方向：`-1` 反向、`0` 停止、`1` 正向 |
 | `G.arm_cmd_conflict[1..5]` | `ARRAY[1..5] OF BOOL` | PLC 写，上位机读 | 正反向同时请求时置 TRUE；若正在运动则先停止 |
+
+### 2.1.2 注射器轴预留引用
+
+| 变量 | 类型 | 方向 | 说明 |
+|---|---|---|---|
+| `G.inject_axis[1..2]` | `ARRAY[1..2] OF AXIS_REF` | PLC 内部 / TwinCAT 链接 | 分别链接 NC Axis 13/14（Drive 16/17）；MAIN 每周期只刷新引用。本轮没有 `MC_Power`、运动命令、ADS 运动符号或上位机 UI。 |
 
 ### 2.2 顶层控制变量
 
@@ -224,8 +230,8 @@ END_STRUCT
 | `G.axis4_fwd_req` / `G.axis4_rev_req` | `BOOL` | 同名 | 变化时写，失败重试 |
 | `G.axisN_return_cmd.Req` + `TargetAbs/Vel/Acc/Dec/Jerk` | `BOOL` + `LREAL×5` | `G.return_cmd[N]` | 触发时写，完成后清 Req |
 | `G.handle_reinit_req` | `BOOL` | 同名 | 读后清零（写 FALSE） |
-| `G.arm_manual_enable` | `BOOL` | 同名 | 定位臂手动点动总使能，按需写 |
-| `G.arm_enable_req` | `BOOL[5]` | `G.arm_enable_req[1..5]` | 定位臂上电请求，按需写 |
+| `G.arm_manual_enable` | `BOOL` | 同名 | 定位臂手动点动总使能，独立低频服务按需写 |
+| `G.arm_enable_req` | `BOOL[5]` | `G.arm_enable_req[1..5]` | 定位臂上电请求，独立低频服务按需写 |
 | `G.arm_reset_req` | `BOOL[5]` | `G.arm_reset_req[1..5]` | 定位臂复位请求，触发后由 PLC 消费清零 |
 | `G.arm_jog_pos_req` / `G.arm_jog_neg_req` | `BOOL[5]` | 同名 | 定位臂正/反向点动按钮请求，按下 TRUE、松开 FALSE |
 | `G.arm_jog_velocity/acc/dec/jerk` | `double[5]` | 同名 | 定位臂点动参数，默认值可按需覆盖 |
@@ -252,7 +258,7 @@ END_STRUCT
 | `G.arm_motion_busy/done/error/error_id` | `BOOL[5] / BOOL[5] / BOOL[5] / UDINT[5]` | 同名 | 定位臂点动状态，按需读 |
 | `G.arm_cmd_dir` / `G.arm_cmd_conflict` | `SINT[5] / BOOL[5]` | 同名 | 定位臂命令方向与正反向冲突状态，按需读 |
 
-新增定位臂符号采用按需通信策略：旧上位机继续只读写原 7 轴符号时，PLC 只是多暴露符号表，不会主动产生额外 ADS 流量；未来 UI 只有在显示或操作定位臂时再读写 `G.arm_*`。
+定位臂符号采用独立 20 Hz 的按需 ADS 服务：命令只在变化时写入，状态批量读取；该服务不扩展原 `G.refer/Act_pos/init_pos/return_cmd` 100 Hz 包。ADS 不健康或 `G.host_comm_timeout=TRUE` 时，服务与 PLC 都会撤销定位臂总使能、单轴上电和点动请求。
 
 ### 4.2 PLC 侧保证
 
@@ -261,7 +267,7 @@ END_STRUCT
 3. **`G.estop_hold_req` 在以下时刻强制为 TRUE**：`init`（上电期间）、`_err`、`_clear_err`（200ms 前）、`handle` 的 `NOT init_done` 阶段、`handle` 的 `hold_active` 阶段。上位机应当把此标志作为"禁止手柄推动"的门控。
 4. **`G.return_cmd[i].Req` 上位机写 TRUE 后，必须等到 Done/Error 其中之一置位，再写 FALSE**。不允许在 Busy 期间重写 TRUE（见 §3）。
 5. **`G.cylinder5_value` 上位机不应直接写**；通过 `G.cylinder5_press_req` 写布尔量，由 PLC 每周期映射。直接写 `cylinder5_value` 会在下一周期被 PLC 覆盖。
-6. **定位臂变量不参与原 `G.gen_state` 状态机**；`G.arm_manual_enable=FALSE` 或对应轴未上电时，`G.arm_jog_*` 请求不会产生运动。正反向同时为 TRUE 时 `G.arm_cmd_conflict[i]=TRUE`，PLC 停止该轴并拒绝启动新运动。
+6. **定位臂变量不参与原 `G.gen_state` 状态机**；`G.arm_manual_enable=FALSE` 或 `G.host_comm_timeout=TRUE` 时 PLC 会关闭所有定位臂 `MC_Power` 并清除单轴上电/点动请求，必须先写总使能 TRUE，再写对应 `G.arm_enable_req[i]=TRUE`。总使能或对应轴未上电时，`G.arm_jog_*` 请求不会产生运动。正反向同时为 TRUE 时 `G.arm_cmd_conflict[i]=TRUE`，PLC 停止该轴并拒绝启动新运动。
 7. **`G.startup_loading_ready` 不是位置反馈**：PLC 仅在本轮 SelfCheck 全部完成后置 TRUE。上位机还会核对 axis1/3/5/6 距左限位是否分别处于 `[96,280,430,580] ±2 mm`；任一条件不满足时改走中断恢复启动。旧 PLC 没有该符号时仅按实际位置兼容判定。
 8. **主机看门狗超时不是普通状态提示**：`host_heartbeat_sequence` 连续 100 ms 不变化时，PLC 锁存 `host_comm_timeout`，冻结外部参考，清快退、axis4 和平滑旁路请求，并对运行中的计划回退/axis4 运动执行受控停止；气缸保持最后状态。只有新鲜心跳、显式 `host_recover_req` 和停稳条件同时满足后才受理恢复。
 

@@ -11,12 +11,12 @@ namespace AdsControlUI
     {
         private const string PipeName = "ADS_Control_Vis";
         // 必须与 C++ VisState 的 static_assert 一致；新旧管道协议不可混用。
-		private const int VisStateWireSize = 499;
+		private const int VisStateWireSize = 877;
         private const uint CommandMagic = 0x31434D56;
         private const ushort CommandVersion = 1;
         private const ushort CommandHeaderSize = 24;
         private const int MaxCommandPayloadBytes = 1024;
-        private NamedPipeClientStream _pipe;
+        private volatile NamedPipeClientStream _pipe;
         private Thread _readThread;
         private volatile bool _stopRequested;
         private readonly object _stateLock = new object();
@@ -39,7 +39,7 @@ namespace AdsControlUI
         public void Stop()
         {
             _stopRequested = true;
-            try { _pipe?.Close(); } catch { }
+            DisconnectPipe(_pipe);
             _readThread?.Join(2000);
         }
 
@@ -52,9 +52,8 @@ namespace AdsControlUI
             }
         }
 
-        public void SendCommand(VisCommandType type, int param1 = 0, int param2 = 0, string payloadUtf8 = null)
+        public bool SendCommand(VisCommandType type, int param1 = 0, int param2 = 0, string payloadUtf8 = null)
         {
-            if (_pipe == null || !_pipe.IsConnected) return;
             byte[] payload = string.IsNullOrEmpty(payloadUtf8)
                 ? Array.Empty<byte>()
                 : Encoding.UTF8.GetBytes(payloadUtf8);
@@ -76,15 +75,25 @@ namespace AdsControlUI
                 writer.Flush();
                 buf = stream.ToArray();
             }
-            try
+            NamedPipeClientStream pipe;
+            lock (_writeLock)
             {
-                lock (_writeLock)
+                pipe = _pipe;
+                if (pipe == null || !pipe.IsConnected)
+                    return false;
+
+                try
                 {
-                    _pipe.Write(buf, 0, buf.Length);
-                    _pipe.Flush();
+                    pipe.Write(buf, 0, buf.Length);
+                    pipe.Flush();
+                    return true;
                 }
+                catch { }
             }
-            catch { }
+
+            // 写失败后立即使本连接失效，让读线程重建管道，避免 UI 仍把坏连接当作可用。
+            DisconnectPipe(pipe);
+            return false;
         }
 
         private void ReadLoop()
@@ -94,30 +103,41 @@ namespace AdsControlUI
 
             while (!_stopRequested)
             {
+                NamedPipeClientStream pipe = null;
                 try
                 {
-                    _pipe = new NamedPipeClientStream(".", PipeName, PipeDirection.InOut, PipeOptions.None);
-                    _pipe.Connect(1000);
-                    _pipe.ReadMode = PipeTransmissionMode.Message;
+                    pipe = new NamedPipeClientStream(".", PipeName, PipeDirection.InOut, PipeOptions.None);
+                    pipe.Connect(1000);
+                    pipe.ReadMode = PipeTransmissionMode.Message;
+                    if (_stopRequested)
+                    {
+                        try { pipe.Dispose(); } catch { }
+                        break;
+                    }
+                    lock (_writeLock)
+                    {
+                        _pipe = pipe;
+                    }
                 }
                 catch
                 {
+                    try { pipe?.Dispose(); } catch { }
                     Thread.Sleep(500);
                     continue;
                 }
 
                 try
                 {
-                    while (!_stopRequested && _pipe.IsConnected)
+                    while (!_stopRequested && pipe.IsConnected)
                     {
                         int bytesRead = 0;
                         int offset = 0;
                         do
                         {
-                            int n = _pipe.Read(buf, offset, buf.Length - offset);
+                            int n = pipe.Read(buf, offset, buf.Length - offset);
                             if (n == 0) throw new IOException("Pipe closed");
                             offset += n;
-                        } while (!_pipe.IsMessageComplete && offset < buf.Length);
+                        } while (!pipe.IsMessageComplete && offset < buf.Length);
 
                         bytesRead = offset;
                         if (bytesRead == stateSize)
@@ -134,11 +154,21 @@ namespace AdsControlUI
                 }
                 catch { }
 
-                try { _pipe?.Dispose(); } catch { }
-                _pipe = null;
+                DisconnectPipe(pipe);
 
                 if (!_stopRequested) Thread.Sleep(500);
             }
+        }
+
+        private void DisconnectPipe(NamedPipeClientStream pipe)
+        {
+            if (pipe == null) return;
+            lock (_writeLock)
+            {
+                if (ReferenceEquals(_pipe, pipe))
+                    _pipe = null;
+            }
+            try { pipe.Dispose(); } catch { }
         }
 
         private static T BytesToStruct<T>(byte[] buf) where T : struct

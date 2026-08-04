@@ -197,6 +197,7 @@ private:
 	std::wstring metadata_path_;
 	std::uint64_t force_sample_index_ = 0;
 	std::uint64_t motion_sample_index_ = 0;
+	std::atomic<std::uint64_t> stop_elapsed_us_{ 0 };
 	std::uint64_t force_first_ads_sequence_ = 0;
 	std::uint64_t force_last_ads_sequence_ = 0;
 	std::uint64_t motion_first_ads_sequence_ = 0;

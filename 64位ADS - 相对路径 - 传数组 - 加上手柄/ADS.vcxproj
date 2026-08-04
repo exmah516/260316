@@ -164,6 +164,7 @@
     <ClCompile Include="force_transition_experiment.cpp" />
     <ClCompile Include="sensor_calibration_experiment.cpp" />
     <ClCompile Include="delivery_tracking.cpp" />
+    <ClCompile Include="arm_manual_ads_service.cpp" />
     <ClCompile Include="startup_sequence.cpp" />
     <ClCompile Include="main.cpp">
       <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">false</ExcludedFromBuild>
@@ -195,6 +196,7 @@
     <ClInclude Include="force_transition_experiment.h" />
     <ClInclude Include="sensor_calibration_experiment.h" />
     <ClInclude Include="delivery_tracking.h" />
+    <ClInclude Include="arm_manual_ads_service.h" />
     <ClInclude Include="startup_sequence.h" />
     <ClInclude Include="ADS\Include\ADSComm1.h" />
     <ClInclude Include="ADS\Include\TcAdsAPI.h" />

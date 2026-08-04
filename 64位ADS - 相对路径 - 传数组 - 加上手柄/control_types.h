@@ -104,8 +104,8 @@ struct ControlConfig
 	double axis6_window_size_mm = 20.0;
 	// 轴6窗口以轴5当前位置为基准，左边界至少领先轴5该距离。
 	double axis6_window_min_gap_from_axis5_mm = 1.0;
-	// 协同递送中轴6自身触发换手后，只快退到该轴5相对间距，不退到窗口最右端。
-	double cooperative_delivery_axis6_return_gap_from_axis5_mm = 15.0;
+	// 协同模式双边换手目标分别从近端/远端窗口向内缩该距离。
+	double cooperative_axis6_reset_inset_mm = 5.0;
 	// 标准启动中间夹持阶段的轴5/6间距；与运行时20 mm窗口宽度相互独立。
 	double axis56_ready_gap_mm = 15.0;
 	double axis3_delivery_stop_from_left_mm = 20.0;
@@ -148,15 +148,15 @@ struct ControlConfig
 	double axis1_return_acc_mm_s2 = 4800.0; // 原值 2400 mm/s^2
 	double axis1_return_dec_mm_s2 = 4800.0; // 原值 2400 mm/s^2
 	double axis1_return_jerk_mm_s3 = 70000.0; // 原值 35000 mm/s^3
-	// 自动换手取消固定延时，但仍保留 PLC Busy/Done/Error 确认和 ADS 重同步。
-	DWORD axis1_pre_move_cylinder_wait_ms = 0; // 原值 100 ms
+	// 自动换手先同时下发电缸目标并稳定 50 ms，再启动电机轴；到位后不增加等待。
+	DWORD axis1_pre_move_cylinder_wait_ms = 50;
 	DWORD axis1_cylinder_interstep_wait_ms = 0; // 原值 50 ms
 	DWORD axis1_post_return_cylinder_wait_ms = 0; // 原值 100 ms
 	double axis6_return_velocity_mm_s = 400.0; // 原值 200 mm/s
 	double axis6_return_acc_mm_s2 = 4800.0; // 原值 2400 mm/s^2
 	double axis6_return_dec_mm_s2 = 4800.0; // 原值 2400 mm/s^2
 	double axis6_return_jerk_mm_s3 = 70000.0; // 原值 35000 mm/s^3
-	DWORD axis6_pre_move_cylinder_wait_ms = 0; // 原值 100 ms
+	DWORD axis6_pre_move_cylinder_wait_ms = 50;
 	DWORD axis6_cylinder_interstep_wait_ms = 0; // 原值 50 ms
 	DWORD axis6_post_return_cylinder_wait_ms = 0; // 原值 100 ms
 
@@ -353,6 +353,10 @@ struct ForceFeedbackState
 	bool freeze_582_active = false;
 	double freeze_582_f = 0.0;
 	double freeze_582_n = 0.0;
+	// 导丝快进/快退期间冻结 587 输出，避免模式回切时出现力反馈跳变。
+	bool freeze_587_active = false;
+	double freeze_587_f = 0.0;
+	double freeze_587_n = 0.0;
 	// 调试观测缓存。
 	short last_fn_1_raw = 0;
 	short last_ft_1_raw = 0;
@@ -372,6 +376,9 @@ struct ForceFeedbackState
 		freeze_582_active = false;
 		freeze_582_f = 0.0;
 		freeze_582_n = 0.0;
+		freeze_587_active = false;
+		freeze_587_f = 0.0;
+		freeze_587_n = 0.0;
 		last_fast_move = false;
 		last_mode = GuidewireMode::None;
 	}
@@ -387,6 +394,9 @@ struct ForceFeedbackState
 		freeze_582_active = false;
 		freeze_582_f = 0.0;
 		freeze_582_n = 0.0;
+		freeze_587_active = false;
+		freeze_587_f = 0.0;
+		freeze_587_n = 0.0;
 	}
 };
 
@@ -398,6 +408,8 @@ struct ForceSampleFrame
 	short ft_2_value = 0;
 	double fn_1_value_v = 0.0;
 	double ft_1_value_v = 0.0;
+	double fn_2_value_v = 0.0;
+	double ft_2_value_v = 0.0;
 	double axis2_pos_rel = 0.0;
 	double axis1_pos_rel = 0.0;
 	bool valid = false;

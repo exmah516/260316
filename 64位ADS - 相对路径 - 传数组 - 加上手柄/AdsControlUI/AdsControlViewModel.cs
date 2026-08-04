@@ -1,4 +1,5 @@
 using System;
+using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Runtime.CompilerServices;
 using System.Windows.Threading;
@@ -20,6 +21,10 @@ namespace AdsControlUI
 
         public AdsControlViewModel()
         {
+            ArmAxes = new ObservableCollection<ArmAxisControlModel>();
+            for (int axis = 1; axis <= 5; ++axis)
+                ArmAxes.Add(new ArmAxisControlModel(axis));
+
             _client.Start();
             _refreshTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(33) };
             _refreshTimer.Tick += (s, e) => RefreshFromPipe();
@@ -34,6 +39,12 @@ namespace AdsControlUI
 		private bool _prevConnected;
 		private VisState _prevState;
 		private string _physicalButtonNoticeText = "";
+		private const int StopExperimentMaxAttempts = 3;
+		private static readonly TimeSpan StopExperimentRetryInterval = TimeSpan.FromMilliseconds(350);
+		private bool _stopExperimentCommandPending;
+		private int _stopExperimentCommandAttempts;
+		private DateTime _nextStopExperimentRetryUtc;
+		private string _recordingCommandErrorText = "";
 
         private void RefreshFromPipe()
         {
@@ -48,6 +59,9 @@ namespace AdsControlUI
             }
 
 			_state = state;
+			UpdateArmAxes(state);
+			UpdateStopExperimentCommand(state, connected);
+			connected = _client.IsConnected;
 			if (!_hasUiSnapshot)
 			{
 				if (state.physical_button_event_counter != 0)
@@ -377,6 +391,68 @@ namespace AdsControlUI
 			OnPropertyChanged(nameof(AdsStateText));
 			OnPropertyChanged(nameof(AdsDiagnosticsText));
 			OnPropertyChanged(nameof(AdsCounterText));
+			NotifyManualControlProperties();
+		}
+
+		private void NotifyManualControlProperties()
+		{
+			OnPropertyChanged(nameof(ArmManualEnabled));
+			OnPropertyChanged(nameof(ArmManualAvailable));
+			OnPropertyChanged(nameof(ArmAxisControlsEnabled));
+			OnPropertyChanged(nameof(ArmManualStatusText));
+			OnPropertyChanged(nameof(Axis4ManualControlAllowed));
+			OnPropertyChanged(nameof(Axis4ManualStatusText));
+		}
+
+		private void UpdateArmAxes(VisState state)
+		{
+			for (int index = 0; index < ArmAxes.Count; ++index)
+				ArmAxes[index].UpdateFrom(state, index);
+		}
+
+		private void UpdateStopExperimentCommand(VisState state, bool connected)
+		{
+			if (state.recording_state != 2)
+			{
+				ResetStopExperimentCommand();
+				_recordingCommandErrorText = "";
+				return;
+			}
+
+			if (!connected)
+			{
+				if (_stopExperimentCommandPending)
+					_recordingCommandErrorText = "停止命令等待期间连接中断，请在重连后重试";
+				ResetStopExperimentCommand();
+				return;
+			}
+
+			if (!_stopExperimentCommandPending || DateTime.UtcNow < _nextStopExperimentRetryUtc)
+				return;
+
+			if (_stopExperimentCommandAttempts >= StopExperimentMaxAttempts)
+			{
+				ResetStopExperimentCommand();
+				_recordingCommandErrorText = "后端未确认停止命令，可再次点击“停止实验记录”";
+				return;
+			}
+
+			if (_client.SendCommand(VisCommandType.StopExperimentRecording))
+			{
+				_stopExperimentCommandAttempts++;
+				_nextStopExperimentRetryUtc = DateTime.UtcNow + StopExperimentRetryInterval;
+				return;
+			}
+
+			ResetStopExperimentCommand();
+			_recordingCommandErrorText = "停止命令发送失败，请等待连接恢复后重试";
+		}
+
+		private void ResetStopExperimentCommand()
+		{
+			_stopExperimentCommandPending = false;
+			_stopExperimentCommandAttempts = 0;
+			_nextStopExperimentRetryUtc = DateTime.MinValue;
 		}
 
         private static bool Changed(double a, double b, double eps) => Math.Abs(a - b) > eps;
@@ -449,6 +525,37 @@ namespace AdsControlUI
 
 		public string AdsCounterText =>
 			$"失败 {_state.ads_failed_cycles} · 重连 {_state.ads_reconnect_count} · PLC 重启 {_state.plc_restart_count}";
+		public ObservableCollection<ArmAxisControlModel> ArmAxes { get; }
+		public bool ArmManualEnabled => _state.arm_manual_enable;
+		public bool ArmManualAvailable => AdsHealthy;
+		public bool ArmAxisControlsEnabled => ArmManualAvailable && ArmManualEnabled;
+		public string ArmManualStatusText
+		{
+			get
+			{
+				if (!IsConnected) return "定位臂：上位机管道未连接";
+				if (!AdsHealthy) return $"定位臂：等待 ADS 正常（{AdsStateText}）";
+				return ArmManualEnabled
+					? "定位臂总使能已开启；各轴需单独上电后点动"
+					: "定位臂总使能已关闭";
+			}
+		}
+		public bool Axis4ManualControlAllowed =>
+			AdsHealthy && ControlActive && !FreezeActive && !EstopHold &&
+			!StartupWaiting && !SpacingRecoveryActive;
+		public string Axis4ManualStatusText
+		{
+			get
+			{
+				if (_state.axis4_manual_error)
+					return $"轴4点动错误 0x{_state.axis4_manual_error_id:X8}";
+				if (_state.axis4_manual_busy)
+					return "轴4正在点动";
+				if (_state.axis4_manual_done)
+					return "轴4点动完成";
+				return Axis4ManualControlAllowed ? "轴4点动待命" : "轴4点动当前被安全条件禁止";
+			}
+		}
         public double Axis1Pos => GetAxisPos(0);
         public double Axis2Pos => GetAxisPos(1);
         public double Axis3Pos => GetAxisPos(2);
@@ -614,7 +721,8 @@ namespace AdsControlUI
 
 		public int RecordingState => _state.recording_state;
 		public bool CanStartExperimentRecording => IsConnected && (RecordingState == 0 || RecordingState == 4);
-		public bool CanStopExperimentRecording => IsConnected && RecordingState == 2;
+		public bool CanStopExperimentRecording =>
+			IsConnected && RecordingState == 2 && !_stopExperimentCommandPending;
 		public bool ExperimentNameEditable => RecordingState == 0 || RecordingState == 4;
 		public bool CameraRecording => _state.camera_recording;
 		public bool CanOpenCameraPreview => IsConnected;
@@ -632,7 +740,7 @@ namespace AdsControlUI
 				switch (RecordingState)
 				{
 					case 1: return "正在启动";
-					case 2: return "记录中";
+					case 2: return _stopExperimentCommandPending ? "停止命令已发送，等待后端确认" : "记录中";
 					case 3: return "正在停止并封装";
 					case 4: return "启动失败";
 					default: return "空闲";
@@ -644,6 +752,8 @@ namespace AdsControlUI
 		{
 			get
 			{
+				if (!string.IsNullOrEmpty(_recordingCommandErrorText))
+					return _recordingCommandErrorText;
 				switch (_state.recording_error)
 				{
 					case 1: return "实验名称不是有效的 UTF-8 文本";
@@ -926,14 +1036,81 @@ namespace AdsControlUI
 				0,
 				experimentName ?? string.Empty);
 
-		public void StopExperimentRecording() =>
-			_client.SendCommand(VisCommandType.StopExperimentRecording);
+		public bool StopExperimentRecording()
+		{
+			if (!CanStopExperimentRecording)
+				return false;
+
+			_recordingCommandErrorText = "";
+			if (!_client.SendCommand(VisCommandType.StopExperimentRecording))
+			{
+				ResetStopExperimentCommand();
+				_recordingCommandErrorText = "停止命令发送失败，请等待连接恢复后重试";
+				NotifyExperimentProperties();
+				return false;
+			}
+
+			_stopExperimentCommandPending = true;
+			_stopExperimentCommandAttempts = 1;
+			_nextStopExperimentRetryUtc = DateTime.UtcNow + StopExperimentRetryInterval;
+			NotifyExperimentProperties();
+			return true;
+		}
 
 		public void SetCameraPreview(bool enabled) =>
 			_client.SendCommand(VisCommandType.SetCameraPreview, enabled ? 1 : 0);
 
 		public void SetCleanForceMonitor(bool enabled) =>
 			_client.SendCommand(VisCommandType.SetCleanForceMonitor, enabled ? 1 : 0);
+
+		public void SetArmManualEnable(bool enabled) =>
+			_client.SendCommand(VisCommandType.SetArmManualEnable, enabled ? 1 : 0);
+
+		public void SetArmAxisEnable(int axisNumber, bool enabled)
+		{
+			if (axisNumber < 1 || axisNumber > 5) return;
+			_client.SendCommand(VisCommandType.SetArmAxisEnable, axisNumber, enabled ? 1 : 0);
+		}
+
+		public void RequestArmAxisReset(int axisNumber)
+		{
+			if (axisNumber < 1 || axisNumber > 5) return;
+			_client.SendCommand(VisCommandType.RequestArmAxisReset, axisNumber);
+		}
+
+		public void SetArmAxisJog(int axisNumber, int direction)
+		{
+			if (axisNumber < 1 || axisNumber > 5 || direction < -1 || direction > 1) return;
+			_client.SendCommand(VisCommandType.SetArmAxisJog, axisNumber, direction);
+		}
+
+		public bool SetArmJogParameters(
+			int axisNumber, double velocity, double acceleration, double deceleration, double jerk)
+		{
+			if (axisNumber < 1 || axisNumber > 5) return false;
+			double[] values = { velocity, acceleration, deceleration, jerk };
+			bool success = true;
+			for (int parameter = 0; parameter < values.Length; ++parameter)
+			{
+				int fieldId = (axisNumber - 1) * 4 + parameter;
+				int fixedValue = (int)Math.Round(values[parameter] * 1000.0);
+				success &= _client.SendCommand(VisCommandType.SetArmJogParameter, fieldId, fixedValue);
+			}
+			return success;
+		}
+
+		public void SetAxis4ManualJog(int direction)
+		{
+			if (direction < -1 || direction > 1) return;
+			_client.SendCommand(VisCommandType.SetAxis4ManualJog, direction);
+		}
+
+		public void StopManualJogs()
+		{
+			SetAxis4ManualJog(0);
+			for (int axis = 1; axis <= 5; ++axis)
+				SetArmAxisJog(axis, 0);
+		}
 
         public event PropertyChangedEventHandler PropertyChanged;
         private void OnPropertyChanged([CallerMemberName] string name = null) =>
@@ -942,6 +1119,7 @@ namespace AdsControlUI
         public void Dispose()
         {
             _refreshTimer.Stop();
+			StopManualJogs();
             _client.Dispose();
         }
     }

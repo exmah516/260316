@@ -74,8 +74,8 @@ MAIN 是 PLC 唯一的顶层 `PROGRAM`，每个任务周期（1 ms）执行以�
 每周期执行逻辑：
 
 1. 调用 `G.arm_axis[i]()` 并刷新 `G.arm_act_pos[i] / G.arm_act_vel[i]`。
-2. 按 `G.arm_enable_req[i]` 调用 `MC_Power`，输出到 `G.arm_power_output[i]`。
-3. 对 `G.arm_reset_req[i]` 采用消费式命令：请求置位后触发 `MC_Reset`，完成或报错后 PLC 自动清 `G.arm_reset_req[i]`。
+2. 仅当 `G.arm_manual_enable=TRUE` 且 `G.arm_enable_req[i]=TRUE` 时调用 `MC_Power`，输出到 `G.arm_power_output[i]`；总使能关闭时 PLC 清除单轴使能和点动请求，避免继承旧会话命令。
+3. 对 `G.arm_reset_req[i]` 采用消费式命令：请求置位后先撤销点动并执行 `MC_Stop`，轴停稳后才触发 `MC_Reset`；完成或报错后 PLC 自动清 `G.arm_reset_req[i]`。
 4. 只有 `G.arm_manual_enable=TRUE`、对应轴已上电、无 reset busy、无命令冲突时才允许 `MC_MoveVelocity`。
 5. `G.arm_jog_pos_req[i]` 与 `G.arm_jog_neg_req[i]` 同时为 TRUE 时，置 `G.arm_cmd_conflict[i]=TRUE`，若正在运动则先 `MC_Stop`。
 6. 点动方向变化时先停止，再在后续周期启动反向运动；松开按钮时撤销 MoveVelocity 并执行 Stop。
@@ -723,6 +723,12 @@ END_FOR
 - 行为变化：`MAIN` 首周期清空定位臂 enable/reset/jog 请求，并在原 7 轴 Actions 与主状态机之前调用 `arm_manual_()`；`ArmManual` 每周期负责定位臂 5 轴上电、复位、点动、停止、方向冲突处理和状态上报。
 - 与原状态机关系：定位臂不进入 `_init/_self_check/_handle/_err` 链路，定位臂错误不切换 `G.gen_state`。
 - 上位机契约：原 7 轴 ADS 符号不变；新增 `G.arm_*` 符号供未来 UI 按需读写。
+
+### 2026-08-04 — 修复定位臂 PLC 启动自动上电
+- 作者：AI（Codex）。
+- 涉及文件：`MAIN.TcPOU`、`ArmManual.TcPOU`。
+- 行为变化：PLC 首周期将 `G.arm_enable_req[1..5]` 清为 FALSE；`MC_Power.Enable` 改为 `G.arm_manual_enable AND G.arm_enable_req[i]`。总使能关闭时清除单轴上电和点动请求；复位请求先等待 `MC_Stop` 停稳后再执行 `MC_Reset`，防止 Activate Configuration、PLC 重启或复位时自动上电/继承运动命令。
+- 契约影响：不改变新增 `G.arm_*` ADS 符号名称，不影响原 7 轴 `G.axis[1..7]` 链路；上位机必须先写总使能 TRUE，再按轴写 `arm_enable_req[i]`。
 
 ### 2026-07-06 — 文档初版（无代码变更）
 - 作者：AI（Claude，应用户要求梳理）。

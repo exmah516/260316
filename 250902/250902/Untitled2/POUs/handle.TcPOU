@@ -32,6 +32,10 @@ VAR
 	host_heartbeat_changed : BOOL;
 	host_timeout_latched : BOOL := TRUE;
 	host_timeout_prev : BOOL := FALSE;
+	// 看门狗超时后锁存一次外部设定值保持位置。
+	// 不能每拍把 Actual Position 回写为下一拍设定值，否则编码器微动会被回灌到 NC。
+	host_hold_abs : ARRAY[1..7] OF LREAL;
+	host_hold_captured : BOOL := FALSE;
 	host_all_stopped : BOOL;
 	host_return_stop_active : ARRAY[1..7] OF BOOL;
 	host_return_stop_exec : ARRAY[1..7] OF BOOL;
@@ -133,12 +137,15 @@ IF G.handle_reinit_req THEN
 		traj_pos[i] := 0.0;
 		traj_vel[i] := 0.0;
 		traj_acc[i] := 0.0;
+		host_hold_abs[i] := 0.0;
 		G.return_cmd[i].Req := FALSE;
 		G.return_cmd[i].Busy := FALSE;
 		G.return_cmd[i].Done := FALSE;
 		G.return_cmd[i].Error := FALSE;
 		G.return_cmd[i].ErrorId := 0;
 	END_FOR
+	host_hold_captured := FALSE;
+	host_timeout_prev := FALSE;
 
 	axis4_manual_state := 0;
 	axis4_request_dir_now := 0;
@@ -266,6 +273,15 @@ IF G.host_comm_timeout THEN
 	G.estop_hold_req := TRUE;
 	G.handle_reinit_done := FALSE;
 
+	IF (NOT host_timeout_prev) OR (NOT host_hold_captured) THEN
+		// 仅在进入超时保持时采样一次。之后始终维持同一绝对位置，
+		// 避免 Actual -> Set Position 的逐周期回灌导致低频来回摆动。
+		FOR i:=1 TO 7 DO
+			host_hold_abs[i] := G.axis[i].NcToPlc.ActPos;
+		END_FOR
+		host_hold_captured := TRUE;
+	END_IF
+
 	IF NOT host_timeout_prev THEN
 		// 仅捕获超时发生时已经在运行的独立运动，禁止恢复后自动续跑。
 		FOR i:=1 TO 7 DO
@@ -292,19 +308,19 @@ IF G.host_comm_timeout THEN
 		G.return_cmd[i].Req := FALSE;
 		G.return_cmd[i].Done := FALSE;
 
-		// 外部参考冻结在当前实际位置；气缸输出不在此分支修改。
+		// 实际位置仍实时刷新用于诊断；外部参考始终保持超时边沿的锁存位置。
 		G.Act_pos[i] := G.axis[i].NcToPlc.ActPos - G.init_pos[i];
 		G.act_pos_from_left[i] := G.axis[i].NcToPlc.ActPos - G.leftlimit[i];
-		G.refer[i] := G.Act_pos[i];
-		G.ref_slow[i] := G.Act_pos[i];
-		G.act_h[i] := G.Act_pos[i];
-		G.act_hf[i] := G.Act_pos[i];
-		G.refer_from_left[i] := G.act_pos_from_left[i];
+		G.refer[i] := host_hold_abs[i] - G.init_pos[i];
+		G.ref_slow[i] := G.refer[i];
+		G.act_h[i] := G.refer[i];
+		G.act_hf[i] := G.refer[i];
+		G.refer_from_left[i] := host_hold_abs[i] - G.leftlimit[i];
 		FOR k:=1 TO 30 DO
-			act_hh[i][k] := G.Act_pos[i];
+			act_hh[i][k] := G.refer[i];
 		END_FOR
-		act_h_prev[i] := G.Act_pos[i];
-		traj_pos[i] := G.Act_pos[i];
+		act_h_prev[i] := G.refer[i];
+		traj_pos[i] := G.refer[i];
 		traj_vel[i] := 0.0;
 		traj_acc[i] := 0.0;
 
@@ -327,7 +343,7 @@ IF G.host_comm_timeout THEN
 
 		IF ext_setpoint_enabled[i] THEN
 			MC_ExtSetPointGenFeed(
-				Position:=G.axis[i].NcToPlc.ActPos,
+				Position:=host_hold_abs[i],
 				Velocity:=0.0,
 				Acceleration:=0.0,
 				Direction:=1,
@@ -402,6 +418,7 @@ IF G.host_comm_timeout THEN
 END_IF
 
 host_timeout_prev := FALSE;
+host_hold_captured := FALSE;
 // 非超时状态收到的恢复请求没有业务含义，清除以免成为下一次超时的陈旧握手。
 G.host_recover_req := FALSE;
 

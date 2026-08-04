@@ -26,12 +26,16 @@ void process_force_feedback(
 		!estop_hold_active &&
 		cal_state.zeroed &&
 		sample.valid;
+	const bool catheter_feedback_active =
+		guidewire_mode == GuidewireMode::None || guidewire_mode == GuidewireMode::Cooperative;
+	const bool guidewire_feedback_active =
+		guidewire_mode == GuidewireMode::Independent || guidewire_mode == GuidewireMode::Cooperative;
 
 	if (output_enabled)
 	{
-		if (guidewire_mode == GuidewireMode::None)
+		if (catheter_feedback_active)
 		{
-			CalibratedForce cal = calibrate_force(
+			const CalibratedForce cal = calibrate_force(
 				sample.fn_1_value_v,
 				sample.ft_1_value_v,
 				sample.axis2_pos_rel,
@@ -57,8 +61,6 @@ void process_force_feedback(
 				out_cmd.force_582_f = theory_582_f;
 				out_cmd.force_582_n = theory_582_n;
 			}
-			out_cmd.force_587_f = 0.0;
-			out_cmd.force_587_n = 0.0;
 		}
 		else
 		{
@@ -67,6 +69,36 @@ void process_force_feedback(
 			out_cmd.force_582_n = 0.0;
 			ff.force_582_theory_f = 0.0;
 			ff.force_582_theory_n = 0.0;
+		}
+
+		if (guidewire_feedback_active)
+		{
+			const CalibratedForce cal = calibrate_guidewire_force(
+				sample.fn_2_value_v,
+				sample.ft_2_value_v,
+				sample.axis2_pos_rel,
+				cal_cfg, cal_state);
+			if (fast_move_active)
+			{
+				if (!ff.freeze_587_active)
+				{
+					ff.freeze_587_f = cal.f_feedback_n;
+					ff.freeze_587_n = cal.t_feedback_nm;
+					ff.freeze_587_active = true;
+				}
+				out_cmd.force_587_f = ff.freeze_587_f;
+				out_cmd.force_587_n = ff.freeze_587_n;
+			}
+			else
+			{
+				ff.freeze_587_active = false;
+				out_cmd.force_587_f = cal.f_feedback_n;
+				out_cmd.force_587_n = cal.t_feedback_nm;
+			}
+		}
+		else
+		{
+			ff.freeze_587_active = false;
 			out_cmd.force_587_f = 0.0;
 			out_cmd.force_587_n = 0.0;
 		}
@@ -78,20 +110,47 @@ void process_force_feedback(
 		out_cmd.force_582_n = 0.0;
 		ff.force_582_theory_f = 0.0;
 		ff.force_582_theory_n = 0.0;
+		ff.freeze_587_active = false;
 		out_cmd.force_587_f = 0.0;
 		out_cmd.force_587_n = 0.0;
 	}
 
-	// force_582_* 表示导管/582语义，实际物理手柄由 main.cpp 根据单双手柄状态选择。
-	catheter_feedback_handle.setforce_axis(out_cmd.force_582_f, cfg.axial_force_axis, out_cmd.force_582_n);
-	guidewire_feedback_handle.setforce_axis(out_cmd.force_587_f, cfg.axial_force_axis, out_cmd.force_587_n);
+	// 单手柄模式的两个逻辑角色会指向同一对象，此时只下发当前模式对应的一条命令。
+	if (&catheter_feedback_handle == &guidewire_feedback_handle)
+	{
+		if (guidewire_mode == GuidewireMode::Cooperative)
+		{
+			// 协同模式要求两只独立物理手柄；若上游门控失效则在此处安全归零。
+			out_cmd = ForceOutputCmd{};
+			ff.force_582_theory_f = 0.0;
+			ff.force_582_theory_n = 0.0;
+			ff.freeze_582_active = false;
+			ff.freeze_587_active = false;
+			catheter_feedback_handle.setforce_axis(0.0, cfg.axial_force_axis, 0.0);
+		}
+		else
+		{
+			const bool use_guidewire_output = guidewire_mode == GuidewireMode::Independent;
+			catheter_feedback_handle.setforce_axis(
+				use_guidewire_output ? out_cmd.force_587_f : out_cmd.force_582_f,
+				cfg.axial_force_axis,
+				use_guidewire_output ? out_cmd.force_587_n : out_cmd.force_582_n);
+		}
+	}
+	else
+	{
+		catheter_feedback_handle.setforce_axis(
+			out_cmd.force_582_f, cfg.axial_force_axis, out_cmd.force_582_n);
+		guidewire_feedback_handle.setforce_axis(
+			out_cmd.force_587_f, cfg.axial_force_axis, out_cmd.force_587_n);
+	}
 
 	ff.force_582_f = out_cmd.force_582_f;
 	ff.force_582_n = out_cmd.force_582_n;
 	ff.force_587_f = out_cmd.force_587_f;
 	ff.force_587_n = out_cmd.force_587_n;
 
-	if (!output_enabled || guidewire_mode != GuidewireMode::None)
+	if (!output_enabled || !catheter_feedback_active)
 	{
 		ff.force_582_theory_f = 0.0;
 		ff.force_582_theory_n = 0.0;

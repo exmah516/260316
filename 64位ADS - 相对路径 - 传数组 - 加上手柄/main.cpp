@@ -1,5 +1,6 @@
 #include "control_types.h"
 #include "ads_communication.h"
+#include "arm_manual_ads_service.h"
 #include "delivery_tracking.h"
 #include "experiment_recorder.h"
 #include "force_calibration.h"
@@ -205,23 +206,16 @@ int main(int argc, char* argv[])
 	// 当前运行中不支持热插拔，第二只手柄接入后需要重启本程序重新初始化。
 	const bool dual_handle_ready = axis1_handle_ready && axis6_handle_ready && !single_handle_mode;
 
-	// 力反馈按“导管/导丝语义”下发；单手柄时导管力输出跟随唯一可用物理手柄。
+	// 力反馈按“导管/导丝语义”下发；单手柄时两个逻辑角色都指向唯一可用物理手柄。
 	Handle* catheter_force_output_handle = &handle_axis1;
 	Handle* guidewire_force_output_handle = &handle_axis6;
 	if (single_handle_mode)
 	{
-		if (axis1_handle_ready)
-		{
-			catheter_force_output_handle = &handle_axis1;
-			guidewire_force_output_handle = &handle_axis6;
-		}
-		else
-		{
-			catheter_force_output_handle = &handle_axis6;
-			guidewire_force_output_handle = &handle_axis1;
-		}
-		std::cout << "单手柄力反馈：导管/582语义输出 -> 物理 SN "
-			<< catheter_force_output_handle->serial() << "。" << std::endl;
+		Handle* single_force_output_handle = axis1_handle_ready ? &handle_axis1 : &handle_axis6;
+		catheter_force_output_handle = single_force_output_handle;
+		guidewire_force_output_handle = single_force_output_handle;
+		std::cout << "单手柄力反馈：导管/582与导丝/587语义按当前模式输出到物理 SN "
+			<< single_force_output_handle->serial() << "。" << std::endl;
 	}
 
 	Sleep(1000);
@@ -399,7 +393,7 @@ int main(int argc, char* argv[])
 	bool axis6_window_locked = false;
 	double axis6_locked_window_start_abs = 0.0;
 	double axis6_locked_window_end_abs = 0.0;
-	// 协同模式 axis6 增量叠加状态。
+	// 协同模式 axis5 命令增量差分基准，用于判断 axis6 相对窗口运动方向。
 	bool axis6_coop_ff_inited = false;
 	double axis6_coop_prev_axis1_cmd_abs = 0.0;
 	// 协同方向分为 UI 请求值和已激活值。入口或方向切换失败时保留已激活方向，
@@ -581,6 +575,10 @@ int main(int argc, char* argv[])
 		(axis6_input_handle->buttons2 & physical_direction_toggle_button_mask) != 0;
 	bool axis4_manual_error_prev = false;
 	unsigned long axis4_manual_error_id_prev = 0;
+	bool axis4_ui_forward_pressed = false;
+	bool axis4_ui_reverse_pressed = false;
+	ULONGLONG axis4_ui_jog_deadline_ms = 0;
+	constexpr ULONGLONG axis4_ui_jog_lease_ms = 300;
 	GuidewireMode requested_guidewire_mode_prev = GuidewireMode::None;
 	bool axis1_fast_return = false; // 轴1快退旁路标志（写入 G.axis1_fast_return）
 	bool axis6_fast_retract = false; // 轴6快退旁路标志（写入 G.axis6_fast_retract）
@@ -842,23 +840,11 @@ int main(int argc, char* argv[])
 	{
 		if (ctx.force_sample_source == ForceSampleSource::TCP_DAQ)
 		{
-			double raw_v[6] = { 0 };
-			std::uint64_t ts = 0;
-			if (tcp_force_daq.get_latest_raw(raw_v, ts))
-			{
-				cal_state.f_zero = raw_v[0];
-				cal_state.ft_zero = raw_v[1];
-				cal_state.theta0_deg = plc_act_pos[1];
-				cal_state.zeroed = true;
-				force_tcp_zero_wait_logged = false;
-				std::cout << source << "力传感器零点已采集：AI0/f_zero=" << cal_state.f_zero
-					<< " V, AI1/ft_zero=" << cal_state.ft_zero
-					<< " V, axis2/theta0=" << cal_state.theta0_deg << " deg" << std::endl;
-				return true;
-			}
 			if (!force_tcp_zero_wait_logged)
 			{
-				std::cout << source << "零点采集失败：当前采样源为 TCP_DAQ，但尚无采集卡有效帧；不会回退到 ADS 零点。" << std::endl;
+				std::cout << source
+					<< "零点采集失败：本次F_direct仅由ADS/PLC计数标定，TCP_DAQ同源性尚未确认；"
+					<< "不会对未验证的TCP数据启用力反馈。" << std::endl;
 				force_tcp_zero_wait_logged = true;
 			}
 			return false;
@@ -871,10 +857,16 @@ int main(int argc, char* argv[])
 			force_sample = sampled_frame;
 			cal_state.ft_zero = sampled_frame.ft_1_value_v;
 			cal_state.f_zero = sampled_frame.fn_1_value_v;
+			cal_state.fn_2_zero = sampled_frame.fn_2_value_v;
+			cal_state.ft_2_zero = sampled_frame.ft_2_value_v;
 			cal_state.theta0_deg = sampled_frame.axis2_pos_rel;
 			cal_state.zeroed = true;
+			ff.reset();
+			clear_force_output();
 			std::cout << source << "力传感器零点已采集（ADS 当前采样）：ft_zero=" << cal_state.ft_zero
 				<< " V, f_zero=" << cal_state.f_zero << " V"
+				<< ", fn_2_zero=" << cal_state.fn_2_zero << " V"
+				<< ", ft_2_zero=" << cal_state.ft_2_zero << " V"
 				<< ", axis2/theta0=" << cal_state.theta0_deg << " deg" << std::endl;
 			return true;
 		}
@@ -904,6 +896,11 @@ int main(int argc, char* argv[])
 		return 0;
 	}
 	ctx.ads_service = &ads_communication;
+	ArmManualAdsService arm_manual_ads(ads_communication);
+	if (!arm_manual_ads.start())
+	{
+		std::cout << "定位臂低频 ADS 服务启动失败，定位臂 UI 将保持不可用。" << std::endl;
+	}
 	AdsFastSnapshot initial_ads_snapshot{};
 	if (ads_communication.wait_for_snapshot(0, 500, initial_ads_snapshot) &&
 		initial_ads_snapshot.position_valid)
@@ -1326,10 +1323,21 @@ int main(int argc, char* argv[])
 		}
 		// 正式控制阶段：启动流程已完成，b6 从“暂停键”切换为“电缸5开关键”。
 		const bool formal_control_stage = startup.completed && (startup.phase == StartupPhase::Done);
+		if ((axis4_ui_forward_pressed || axis4_ui_reverse_pressed) &&
+			axis4_ui_jog_deadline_ms != 0 &&
+			GetTickCount64() >= axis4_ui_jog_deadline_ms)
+		{
+			axis4_ui_forward_pressed = false;
+			axis4_ui_reverse_pressed = false;
+			axis4_ui_jog_deadline_ms = 0;
+		}
 		const bool axis4_jog_allowed = ads_cycle_valid && !freeze_active && !estop_hold_active && !startup_sequence_active &&
 			!spacing_recovery.active() && !spacing_recovery.requested;
-		const bool axis4_forward_request = axis4_jog_allowed && axis4_forward_pressed;
-		const bool axis4_reverse_request = axis4_jog_allowed && axis4_reverse_pressed;
+		const bool axis4_forward_semantic = axis4_forward_pressed || axis4_ui_forward_pressed;
+		const bool axis4_reverse_semantic = axis4_reverse_pressed || axis4_ui_reverse_pressed;
+		const bool axis4_direction_conflict = axis4_forward_semantic && axis4_reverse_semantic;
+		const bool axis4_forward_request = axis4_jog_allowed && axis4_forward_semantic && !axis4_direction_conflict;
+		const bool axis4_reverse_request = axis4_jog_allowed && axis4_reverse_semantic && !axis4_direction_conflict;
 
 		if (!formal_control_stage)
 		{
@@ -2111,7 +2119,7 @@ int main(int argc, char* argv[])
 			};
 
 			// 顺序切缸接口：t<stagger_ms 仅下发 close 侧，之后再下发 open 侧。
-			// 当前换手参数为 0 ms（原值 50 ms），因此两侧在同一控制拍下发；调用方仍保留阶段入口时基。
+			// 当前交错值为 0 ms，两侧在同一控制拍下发；SwitchWait 再统一等待 50 ms 后启动电机轴。
 			auto staggered_pair = [&](unsigned short& close_cmd, unsigned short close_val,
 				unsigned short& open_cmd, unsigned short open_val,
 				DWORD seq_t0, DWORD stagger_ms)
@@ -2197,13 +2205,15 @@ int main(int argc, char* argv[])
 			// - axis6_raw_cmd_abs: 本拍按增量累加后的 axis6 绝对目标（未做最终触发处理）
 			// - axis6_increment_mm: 本拍 axis6 线性有效增量（mm）
 			// - axis6_reverse_mode: 当前是否处于反向爬行判定
-			// - axis6_user_increment_active: 587 本人线性通道是否存在有效增量
-			// - require_user_increment_for_trigger: 是否要求“触发反弹必须有 587 本人有效增量”
+			// - axis6_user_increment_active: 导丝手柄线性通道是否存在有效增量
+			// - require_user_increment_for_trigger: 是否要求“触发反弹必须有导丝手柄本人有效增量”
+			// - cooperative_axis5_increment_mm: 协同模式下 axis5 本拍已接受增量，用于判断相对窗口运动方向
 			auto run_axis6_crawl_state = [&](double axis6_raw_cmd_abs,
 				double axis6_increment_mm,
 				bool axis6_reverse_mode,
 				bool axis6_user_increment_active,
-				bool require_user_increment_for_trigger)
+				bool require_user_increment_for_trigger,
+				double cooperative_axis5_increment_mm)
 			{
 				if (axis6_soft_limit_hold)
 				{
@@ -2237,66 +2247,89 @@ int main(int argc, char* argv[])
 					cylinder3_cmd = cyl.cyl3_open;
 					cylinder4_cmd = cyl.cyl4_clamp;
 
-					const double axis6_trigger_edge_abs =
-						axis6_reverse_mode ? axis6_window_right_abs_now : axis6_window_left_abs_now;
-					if (axis6_reverse_switch_guard_active &&
-						(std::abs(axis6_abs - axis6_trigger_edge_abs) > cfg.reverse_switch_trigger_guard_mm))
+					const bool cooperative_relative_window_control = cooperative_axis6_mode;
+					bool cooperative_trigger_from_far_edge = false;
+					bool axis6_ready_to_trigger = false;
+					if (cooperative_relative_window_control)
 					{
-						axis6_reverse_switch_guard_active = false;
+						// 两种协同方向下，两只手柄分别控制绝对位移；相对增量决定轴6正在靠近哪一侧动态窗口。
+						const double relative_increment_mm =
+							axis6_increment_mm - cooperative_axis5_increment_mm;
+						const bool cooperative_input_active =
+							std::abs(axis6_increment_mm) > 0.0 ||
+							std::abs(cooperative_axis5_increment_mm) > 0.0;
+						const bool at_near_edge =
+							axis6_abs <= (axis6_window_left_abs_now + cfg.crawl_arrive_tol_mm);
+						const bool at_far_edge =
+							axis6_abs >= (axis6_window_right_abs_now - cfg.crawl_arrive_tol_mm);
+						const bool trigger_from_near_edge =
+							at_near_edge && cooperative_input_active && relative_increment_mm <= 0.0;
+						cooperative_trigger_from_far_edge =
+							at_far_edge && cooperative_input_active && relative_increment_mm >= 0.0;
+						axis6_ready_to_trigger =
+							trigger_from_near_edge || cooperative_trigger_from_far_edge;
 					}
-					const bool axis6_switch_guard_blocked =
-						axis6_reverse_switch_guard_active &&
-						(std::abs(axis6_abs - axis6_trigger_edge_abs) <= cfg.reverse_switch_trigger_guard_mm);
-
-					const bool axis6_toward_trigger =
-						axis6_reverse_mode ? (axis6_increment_mm > 0.0) : (axis6_increment_mm < 0.0);
-					const bool axis6_trigger_user_ok =
-						(!require_user_increment_for_trigger) || axis6_user_increment_active;
-					const double axis6_prev_abs = axis6_prev_abs_valid ? axis6_prev_abs_for_trigger : axis6_abs;
-					// 按运动方向判断是否到达或跨过触发边，避免两个 ADS 采样点跨过窄容差窗时漏触发。
-					const bool axis6_enter_trigger_edge = axis6_reverse_mode
-						? ((axis6_prev_abs < (axis6_trigger_edge_abs - cfg.crawl_arrive_tol_mm)) &&
-							(axis6_abs >= (axis6_trigger_edge_abs - cfg.crawl_arrive_tol_mm)))
-						: ((axis6_prev_abs > (axis6_trigger_edge_abs + cfg.crawl_arrive_tol_mm)) &&
-							(axis6_abs <= (axis6_trigger_edge_abs + cfg.crawl_arrive_tol_mm)));
-					const bool axis6_at_or_past_trigger_edge = axis6_reverse_mode
-						? (axis6_abs >= (axis6_trigger_edge_abs - cfg.crawl_arrive_tol_mm))
-						: (axis6_abs <= (axis6_trigger_edge_abs + cfg.crawl_arrive_tol_mm));
-					// 重启、重同步或跟踪误差可能让上一采样基准停在触发边上或
-					// 略微越过边界；继续给出有效同向输入时仍允许进入换手判定。
-					const bool axis6_retrigger_from_edge =
-						axis6_at_or_past_trigger_edge &&
-						axis6_toward_trigger &&
-						axis6_trigger_user_ok &&
-						axis6_increment_active;
-					const bool axis6_ready_to_trigger =
-						axis6_trigger_user_ok &&
-						axis6_increment_active &&
-						axis6_toward_trigger &&
-						(axis6_enter_trigger_edge || axis6_retrigger_from_edge) &&
-						(!axis6_switch_guard_blocked || axis6_retrigger_from_edge);
+					else
+					{
+						const double axis6_trigger_edge_abs =
+							axis6_reverse_mode ? axis6_window_right_abs_now : axis6_window_left_abs_now;
+						if (axis6_reverse_switch_guard_active &&
+							(std::abs(axis6_abs - axis6_trigger_edge_abs) > cfg.reverse_switch_trigger_guard_mm))
+						{
+							axis6_reverse_switch_guard_active = false;
+						}
+						const bool axis6_switch_guard_blocked =
+							axis6_reverse_switch_guard_active &&
+							(std::abs(axis6_abs - axis6_trigger_edge_abs) <= cfg.reverse_switch_trigger_guard_mm);
+						const bool axis6_toward_trigger =
+							axis6_reverse_mode ? (axis6_increment_mm > 0.0) : (axis6_increment_mm < 0.0);
+						const bool axis6_trigger_user_ok =
+							(!require_user_increment_for_trigger) || axis6_user_increment_active;
+						const double axis6_prev_abs = axis6_prev_abs_valid ? axis6_prev_abs_for_trigger : axis6_abs;
+						// 按运动方向判断是否到达或跨过触发边，避免两个 ADS 采样点跨过窄容差窗时漏触发。
+						const bool axis6_enter_trigger_edge = axis6_reverse_mode
+							? ((axis6_prev_abs < (axis6_trigger_edge_abs - cfg.crawl_arrive_tol_mm)) &&
+								(axis6_abs >= (axis6_trigger_edge_abs - cfg.crawl_arrive_tol_mm)))
+							: ((axis6_prev_abs > (axis6_trigger_edge_abs + cfg.crawl_arrive_tol_mm)) &&
+								(axis6_abs <= (axis6_trigger_edge_abs + cfg.crawl_arrive_tol_mm)));
+						// 独立导丝每个方向只有一个换手触发边：必须由窗口内部实际进入该边。
+						// 不能因停在边界后持续推手柄重复触发，否则会造成回退往复。
+						axis6_ready_to_trigger =
+							axis6_trigger_user_ok &&
+							axis6_increment_active &&
+							axis6_toward_trigger &&
+							axis6_enter_trigger_edge &&
+							!axis6_switch_guard_blocked;
+					}
 					if (axis6_ready_to_trigger &&
 						(!cooperative_axis6_mode ||
 							cooperative_return_owner == CooperativeReturnOwner::None))
 					{
-						if (axis6_retrigger_from_edge)
-						{
-							std::cout << "axis6 已到达或越过换手边界，收到有效同向输入，重新触发换手。" << std::endl;
-						}
 						double axis6_return_target_abs = axis6_reverse_mode
 							? axis6_window_left_abs_now
 							: axis6_window_right_abs_now;
-						if (cooperative_axis6_mode && !axis6_reverse_mode)
+						if (cooperative_relative_window_control)
 						{
-							// 协同递送保留动态触发边，但导丝换手不退满整个窗口，
-							// 给轴5移动和下一次导管联动快进同时保留两侧余量。
-							const double target_offset_from_window_left_mm =
-								cfg.cooperative_delivery_axis6_return_gap_from_axis5_mm -
-								cfg.axis6_window_min_gap_from_axis5_mm;
-							axis6_return_target_abs = clamp_double(
-								axis6_window_left_abs_now + target_offset_from_window_left_mm,
-								axis6_window_left_abs_now,
-								axis6_window_right_abs_now);
+							const double half_window_mm =
+								(axis6_window_right_abs_now - axis6_window_left_abs_now) * 0.5;
+							const double reset_inset_mm = clamp_double(
+								cfg.cooperative_axis6_reset_inset_mm,
+								0.0,
+								half_window_mm);
+							axis6_return_target_abs = cooperative_trigger_from_far_edge
+								? axis6_window_left_abs_now + reset_inset_mm
+								: axis6_window_right_abs_now - reset_inset_mm;
+							const double target_gap_mm = cooperative_trigger_from_far_edge
+								? cfg.axis6_window_min_gap_from_axis5_mm + reset_inset_mm
+								: cfg.axis6_window_min_gap_from_axis5_mm +
+									cfg.axis6_window_size_mm - reset_inset_mm;
+							std::cout << (axis6_reverse_mode ? "协同撤出" : "协同递送")
+								<< "：axis6 到达"
+								<< (cooperative_trigger_from_far_edge ? "远端" : "近端")
+								<< "窗口，计划"
+								<< (cooperative_trigger_from_far_edge ? "快进" : "快退")
+								<< "到 axis6-axis5=" << target_gap_mm << " mm。"
+								<< std::endl;
 						}
 						if (axis6_target_exceeds_soft_limit(axis6_return_target_abs))
 						{
@@ -2818,7 +2851,8 @@ int main(int argc, char* argv[])
 					axis6_increment_for_state_mm,
 					axis6_effective_reverse_pressed,
 					axis6_directional_increment_active,
-					false);
+					false,
+					0.0);
 				const double axis6_effective_delta_axis_mm = axis6_follow_cmd_abs - axis6_follow_start_abs;
 				const double axis6_effective_forward_mm =
 					(!axis6_effective_reverse_pressed && axis6_effective_delta_axis_mm < 0.0)
@@ -2840,10 +2874,7 @@ int main(int argc, char* argv[])
 				// - axis6 在导管模式 Follow 阶段保持不动
 				// - axis1 触发快退时，axis6 按反向等位移联动，并限制在轴5相对窗口内
 				const bool cooperative_mode = (guidewire_mode == GuidewireMode::Cooperative);
-				const bool cooperative_delivery_mode =
-					cooperative_mode && !cooperative_retraction_active;
-				const bool axis1_return_couples_axis6 =
-					!cooperative_mode || cooperative_delivery_mode;
+				const bool axis1_return_couples_axis6 = !cooperative_mode;
 				// 协同回退只允许一条链路拥有 PLC 计划动作。若运行态在异常边沿进入
 				// 非 Follow，相同周期内优先判定 axis1，避免两个 return_cmd 并发下发。
 				if (cooperative_mode && cooperative_return_owner == CooperativeReturnOwner::None)
@@ -2863,7 +2894,7 @@ int main(int argc, char* argv[])
 				double axis6_catheter_window_end_abs = axis6_abs;
 				if (axis1_return_couples_axis6)
 				{
-					// 普通导管与协同递送都按轴5实际位置约束轴1回退时的轴6联动目标。
+					// 普通导管按轴5实际位置约束轴1回退时的轴6联动目标。
 					motion_sync::calculate_axis6_window_from_axis5(
 						ctx,
 						axis6_catheter_window_start_abs,
@@ -3198,7 +3229,7 @@ int main(int argc, char* argv[])
 								axis6_coupled_settle_rel = plc_act_pos[5];
 								if (axis1_return_couples_axis6)
 								{
-									// 普通导管与协同递送：axis6 与 axis1 回退位移镜像反向快进。
+									// 普通导管：axis6 与 axis1 回退位移镜像反向快进。
 									axis6_coupled_target_abs = candidate_axis6_coupled_target_abs;
 									if (std::abs(axis6_coupled_target_abs - axis6_coupled_target_raw_abs) >
 										cfg.crawl_arrive_tol_mm)
@@ -3609,15 +3640,11 @@ int main(int argc, char* argv[])
 					if (cooperative_return_owner == CooperativeReturnOwner::Axis1)
 					{
 						// 导管换手期间不再运行 axis6 自身状态机，也不接受线性/旋转手柄输入。
-						// 协同递送的 axis6 联动快进由 axis1 状态机统一下发，不能在此覆盖。
 						axis6_coop_ff_inited = false;
+						pos[5] = plc_act_pos[5];
 						pos[6] = axis7_hold_rel;
-						if (!axis6_coupled_active)
-						{
-							pos[5] = plc_act_pos[5];
-							cylinder3_cmd = cyl.cyl3_open;
-							cylinder4_cmd = cyl.cyl4_clamp;
-						}
+						cylinder3_cmd = cyl.cyl3_open;
+						cylinder4_cmd = cyl.cyl4_clamp;
 					}
 					else
 					{
@@ -3627,13 +3654,13 @@ int main(int argc, char* argv[])
 							axis6_crawl.phase == CrawlState::Phase::Follow;
 						if (cooperative_follow_active)
 						{
-							// 两种协同方向的窗口都随当期 axis5 命令位置移动，而不是沿用入模时的固定窗口。
-							const double axis5_cmd_abs = pos[4] + plc_init_pos[4];
+							// 两种协同方向都按 axis5 实际位置建立物理相对窗口，避免命令超前导致提前切夹爪。
+							const double axis5_window_abs = axis5_abs;
 							double axis6_window_left_abs = 0.0;
 							double axis6_window_right_abs = 0.0;
 							motion_sync::calculate_axis6_window_from_axis5_abs(
 								ctx,
-								axis5_cmd_abs,
+								axis5_window_abs,
 								axis6_window_left_abs,
 								axis6_window_right_abs);
 							axis6_crawl.start_abs = axis6_window_left_abs;
@@ -3647,27 +3674,24 @@ int main(int argc, char* argv[])
 
 						if (cooperative_follow_active)
 						{
-							// axis6 目标 = 582 导管链路已接受的命令增量 + 587 本人的命令增量。
-							// 两项均保留原坐标符号，因此递送与撤出都能维持 axis6 相对 axis5 的间距。
-							const double axis1_cmd_abs_for_ff = pos[0] + plc_init_pos[0];
+							const double axis5_cmd_abs_for_relative = pos[4] + plc_init_pos[4];
 							if (!axis6_coop_ff_inited)
 							{
 								axis6_coop_ff_inited = true;
-								axis6_coop_prev_axis1_cmd_abs = axis1_cmd_abs_for_ff;
+								axis6_coop_prev_axis1_cmd_abs = axis5_cmd_abs_for_relative;
 							}
-							const double axis1_increment_mm =
-								axis1_cmd_abs_for_ff - axis6_coop_prev_axis1_cmd_abs;
-							const double axis6_combined_increment_mm =
-								axis6_directional_increment_mm + axis1_increment_mm;
-							axis6_coop_prev_axis1_cmd_abs = axis1_cmd_abs_for_ff;
-							const double axis6_raw_cmd_abs = axis6_follow_cmd_abs + axis6_combined_increment_mm;
-
+							const double axis5_increment_mm =
+								axis5_cmd_abs_for_relative - axis6_coop_prev_axis1_cmd_abs;
+							axis6_coop_prev_axis1_cmd_abs = axis5_cmd_abs_for_relative;
+							// 两种协同方向的线性链路都相互独立：axis6 只累加导丝手柄增量，
+							// axis5 增量仅参与相对窗口方向和双边触发判断。
 							run_axis6_crawl_state(
-								axis6_raw_cmd_abs,
-								axis6_combined_increment_mm,
+								axis6_follow_cmd_abs + axis6_directional_increment_mm,
+								axis6_directional_increment_mm,
 								cooperative_retraction_active,
 								axis6_directional_increment_active,
-								true);
+								true,
+								axis5_increment_mm);
 						}
 						else
 						{
@@ -3678,7 +3702,8 @@ int main(int argc, char* argv[])
 								0.0,
 								cooperative_retraction_active,
 								false,
-								true);
+								true,
+								0.0);
 						}
 					}
 				}
@@ -3851,6 +3876,8 @@ int main(int argc, char* argv[])
 				sampled_frame.ft_2_value = ads_snapshot.ft_2_value;
 				sampled_frame.ft_1_value_v = static_cast<double>(ads_snapshot.ft_1_value) / 1000.0;
 				sampled_frame.fn_1_value_v = static_cast<double>(ads_snapshot.fn_1_value) / 1000.0;
+				sampled_frame.fn_2_value_v = static_cast<double>(ads_snapshot.fn_2_value) / 1000.0;
+				sampled_frame.ft_2_value_v = static_cast<double>(ads_snapshot.ft_2_value) / 1000.0;
 				sampled_frame.axis1_pos_rel = ads_snapshot.act_pos_rel[0];
 				sampled_frame.axis2_pos_rel = ads_snapshot.act_pos_rel[1];
 				sampled_frame.tick_ms = force_sample_now_ms;
@@ -3920,7 +3947,8 @@ int main(int argc, char* argv[])
 		const double csv_nan = std::numeric_limits<double>::quiet_NaN();
 		const bool clean_force_valid = force_sample.valid && cal_state.zeroed;
 		const CleanForce clean_force = clean_force_valid
-			? calculate_clean_force(force_sample.fn_1_value_v, force_sample.ft_1_value_v, cal_state)
+			? calculate_clean_force(
+				force_sample.fn_1_value_v, force_sample.ft_1_value_v, cal_cfg, cal_state)
 			: CleanForce{};
 		if (experiment_recorder.is_recording())
 		{
@@ -3948,7 +3976,8 @@ int main(int argc, char* argv[])
 				}
 				force_row.calibrated_valid = force_row.sample_valid && cal_state.zeroed;
 				const CleanForce row_clean_force = force_row.calibrated_valid
-					? calculate_clean_force(force_row.fn_1_raw_v, force_row.ft_1_raw_v, cal_state)
+					? calculate_clean_force(
+						force_row.fn_1_raw_v, force_row.ft_1_raw_v, cal_cfg, cal_state)
 					: CleanForce{};
 				force_row.fn_1_zero_v = force_row.calibrated_valid ? cal_state.f_zero : csv_nan;
 				force_row.ft_1_zero_v = force_row.calibrated_valid ? cal_state.ft_zero : csv_nan;
@@ -4014,7 +4043,6 @@ int main(int argc, char* argv[])
 			else if (freeze_active) current_force_feedback_reason = "力反馈等待：582 暂停处于开启状态。";
 			else if (estop_hold_active) current_force_feedback_reason = "力反馈等待：PLC 保持处于开启状态。";
 			else if (spacing_recovery.active()) current_force_feedback_reason = "力反馈等待：当前为屈曲恢复模式。";
-			else if (guidewire_mode != GuidewireMode::None) current_force_feedback_reason = "力反馈等待：当前为导丝模式，582 导管力反馈输出被置零。";
 		}
 		if (!current_force_feedback_reason.empty() && current_force_feedback_reason != force_feedback_diag_reason)
 		{
@@ -4141,25 +4169,41 @@ int main(int argc, char* argv[])
 			control_active &&
 			!freeze_active &&
 			!estop_hold_active &&
-			guidewire_mode == GuidewireMode::None &&
 			(force_feedback_value_log_last_ms == 0 ||
 				(force_feedback_value_log_now_ms - force_feedback_value_log_last_ms) >= 1000))
 		{
-			const double dft = force_sample.ft_1_value_v - cal_state.ft_zero;
-			const double df = force_sample.fn_1_value_v - cal_state.f_zero;
-			std::cout << "[FF] AI0/f=" << force_sample.fn_1_value_v
-				<< " V, AI1/ft=" << force_sample.ft_1_value_v
-				<< " V, dft=" << dft
-				<< " V, df=" << df
-				<< " V -> 导管力反馈(SN " << catheter_force_output_handle->serial()
-				<< ").setforce_axis(F=" << ff.force_582_f
-				<< " N, axis=" << cfg.axial_force_axis
-				<< ", N=" << ff.force_582_n
-				<< " N*m), theory(F=" << ff.force_582_theory_f
-				<< " N, N=" << ff.force_582_theory_n
-				<< " N*m), gravity=" << (cal_cfg.gravity_comp_enabled ? "ON" : "OFF")
-				<< ", theta=" << force_sample.axis2_pos_rel
-				<< " deg, theta0=" << cal_state.theta0_deg << " deg" << std::endl;
+			if (guidewire_mode == GuidewireMode::None || guidewire_mode == GuidewireMode::Cooperative)
+			{
+				const double dft = force_direct_calibration::zeroed_force_n(
+					force_sample.ft_1_value_v, cal_state.ft_zero, cal_cfg.tangential_direct_n_per_v);
+				const double df = force_direct_calibration::zeroed_force_n(
+					force_sample.fn_1_value_v, cal_state.f_zero, cal_cfg.axial_direct_n_per_v);
+				std::cout << "[FF-582] fn_1=" << force_sample.fn_1_value_v
+					<< " V, ft_1=" << force_sample.ft_1_value_v
+					<< " V, df_direct=" << df
+					<< " N, dft_direct=" << dft
+					<< " N -> SN " << catheter_force_output_handle->serial()
+					<< ", F=" << ff.force_582_f
+					<< " N, axis=" << cfg.axial_force_axis
+					<< ", T=" << ff.force_582_n << " N*m" << std::endl;
+			}
+			if (guidewire_mode == GuidewireMode::Independent || guidewire_mode == GuidewireMode::Cooperative)
+			{
+				const double dft = force_direct_calibration::zeroed_force_n(
+					force_sample.ft_2_value_v, cal_state.ft_2_zero,
+					cal_cfg.guidewire_tangential_direct_n_per_v);
+				const double df = force_direct_calibration::zeroed_force_n(
+					force_sample.fn_2_value_v, cal_state.fn_2_zero,
+					cal_cfg.guidewire_axial_direct_n_per_v);
+				std::cout << "[FF-587] fn_2=" << force_sample.fn_2_value_v
+					<< " V, ft_2=" << force_sample.ft_2_value_v
+					<< " V, df_direct=" << df
+					<< " N, dft_direct=" << dft
+					<< " N -> SN " << guidewire_force_output_handle->serial()
+					<< ", F=" << ff.force_587_f
+					<< " N, axis=" << cfg.axial_force_axis
+					<< ", T=" << ff.force_587_n << " N*m" << std::endl;
+			}
 			force_feedback_value_log_last_ms = force_feedback_value_log_now_ms;
 		}
 
@@ -4276,6 +4320,38 @@ int main(int argc, char* argv[])
 			vs.ads_reconnect_count = ads_stats.reconnect_count;
 			vs.plc_restart_count = ads_stats.plc_restart_count;
 			vs.host_comm_timeout = ads_events.host_comm_timeout;
+			const ArmManualSnapshot arm_snapshot = arm_manual_ads.snapshot();
+			vs.arm_manual_enable = arm_snapshot.manual_enable;
+			for (int i = 0; i < 5; ++i)
+			{
+				vs.arm_enable_req[i] = arm_snapshot.enable_req[i];
+				vs.arm_power_done[i] = arm_snapshot.power_done[i];
+				vs.arm_power_busy[i] = arm_snapshot.power_busy[i];
+				vs.arm_power_active[i] = arm_snapshot.power_active[i];
+				vs.arm_power_error[i] = arm_snapshot.power_error[i];
+				vs.arm_power_error_id[i] = arm_snapshot.power_error_id[i];
+				vs.arm_reset_done[i] = arm_snapshot.reset_done[i];
+				vs.arm_reset_busy[i] = arm_snapshot.reset_busy[i];
+				vs.arm_reset_active[i] = arm_snapshot.reset_active[i];
+				vs.arm_reset_error[i] = arm_snapshot.reset_error[i];
+				vs.arm_reset_error_id[i] = arm_snapshot.reset_error_id[i];
+				vs.arm_act_pos[i] = arm_snapshot.act_pos[i];
+				vs.arm_act_vel[i] = arm_snapshot.act_vel[i];
+				vs.arm_motion_busy[i] = arm_snapshot.motion_busy[i];
+				vs.arm_motion_done[i] = arm_snapshot.motion_done[i];
+				vs.arm_motion_error[i] = arm_snapshot.motion_error[i];
+				vs.arm_motion_error_id[i] = arm_snapshot.motion_error_id[i];
+				vs.arm_cmd_dir[i] = arm_snapshot.cmd_dir[i];
+				vs.arm_cmd_conflict[i] = arm_snapshot.cmd_conflict[i];
+				vs.arm_jog_velocity[i] = arm_snapshot.jog_velocity[i];
+				vs.arm_jog_acc[i] = arm_snapshot.jog_acc[i];
+				vs.arm_jog_dec[i] = arm_snapshot.jog_dec[i];
+				vs.arm_jog_jerk[i] = arm_snapshot.jog_jerk[i];
+			}
+			vs.axis4_manual_busy = ads_events.axis4_manual_busy;
+			vs.axis4_manual_done = ads_events.axis4_manual_done;
+			vs.axis4_manual_error = ads_events.axis4_manual_error;
+			vs.axis4_manual_error_id = ads_events.axis4_manual_error_id;
 			vis_server.push_state(vs);
 		}
 
@@ -4468,6 +4544,43 @@ int main(int argc, char* argv[])
 				case VisCommandType::SetCleanForceMonitor:
 					clean_force_monitor_enabled = vcmd.param1 != 0;
 					break;
+				case VisCommandType::SetArmManualEnable:
+					arm_manual_ads.set_manual_enable(vcmd.param1 != 0);
+					break;
+				case VisCommandType::SetArmAxisEnable:
+					if (vcmd.param1 >= 1 && vcmd.param1 <= 5)
+						arm_manual_ads.set_axis_enable(vcmd.param1, vcmd.param2 != 0);
+					break;
+				case VisCommandType::RequestArmAxisReset:
+					if (vcmd.param1 >= 1 && vcmd.param1 <= 5)
+						arm_manual_ads.request_reset(vcmd.param1);
+					break;
+				case VisCommandType::SetArmAxisJog:
+					if (vcmd.param1 >= 1 && vcmd.param1 <= 5 && vcmd.param2 >= -1 && vcmd.param2 <= 1)
+						arm_manual_ads.set_jog_direction(vcmd.param1, vcmd.param2);
+					break;
+				case VisCommandType::SetArmJogParameter:
+				{
+					const int axis_one_based = (vcmd.param1 / 4) + 1;
+					const int parameter_kind = vcmd.param1 % 4;
+					const double value = static_cast<double>(vcmd.param2) / 1000.0;
+					if (vcmd.param1 < 0 || vcmd.param1 >= 20 ||
+						!arm_manual_ads.set_jog_parameter(axis_one_based, parameter_kind, value))
+					{
+						std::cout << "定位臂点动参数已忽略：轴号、字段或数值超出范围。" << std::endl;
+					}
+					break;
+				}
+				case VisCommandType::SetAxis4ManualJog:
+					if (vcmd.param1 >= -1 && vcmd.param1 <= 1)
+					{
+						axis4_ui_forward_pressed = vcmd.param1 > 0;
+						axis4_ui_reverse_pressed = vcmd.param1 < 0;
+						axis4_ui_jog_deadline_ms = vcmd.param1 == 0
+							? 0
+							: GetTickCount64() + axis4_ui_jog_lease_ms;
+					}
+					break;
 				case VisCommandType::SetAxis1PostReturnLead:
 				{
 					const double lead_mm = static_cast<double>(vcmd.param1) / 1000.0;
@@ -4581,7 +4694,13 @@ int main(int argc, char* argv[])
 				}
 				case VisCommandType::SetGravityCompensation:
 				{
-					const bool enabled = (vcmd.param1 != 0);
+					const bool requested_enabled = (vcmd.param1 != 0);
+					const bool enabled = requested_enabled && cal_cfg.gravity_comp_validated;
+					if (requested_enabled && !cal_cfg.gravity_comp_validated)
+					{
+						std::cout << "UI：重力补偿启用已拒绝：返工后的F_direct尚未完成旋转重力复标。"
+							<< std::endl;
+					}
 					if (cal_cfg.gravity_comp_enabled != enabled)
 					{
 						cal_cfg.gravity_comp_enabled = enabled;
@@ -4734,6 +4853,7 @@ int main(int argc, char* argv[])
 	clear_force_output();
 	experiment_recorder.stop_and_wait("program_exit");
 	tcp_force_daq.stop();
+	arm_manual_ads.stop();
 	ads_communication.stop();
 	vis_server.stop();
 	handle_axis1.close();

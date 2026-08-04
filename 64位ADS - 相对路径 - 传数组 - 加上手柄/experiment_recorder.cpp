@@ -581,6 +581,7 @@ bool ExperimentRecorder::start(const std::string& experiment_name_utf8, const Ex
 	clock_.reset();
 	force_sample_index_ = 0;
 	motion_sample_index_ = 0;
+	stop_elapsed_us_.store(0, std::memory_order_relaxed);
 	force_first_ads_sequence_ = 0;
 	force_last_ads_sequence_ = 0;
 	motion_first_ads_sequence_ = 0;
@@ -663,6 +664,7 @@ void ExperimentRecorder::stop_async(const char* reason)
 		{
 			return;
 		}
+		stop_elapsed_us_.store(clock_.elapsed_us(clock_.now_qpc()), std::memory_order_release);
 		ads_stats_session_end_ = ads_stats_latest_;
 		ads_stats_session_end_available_ = ads_stats_latest_available_;
 	}
@@ -692,11 +694,28 @@ void ExperimentRecorder::stop_and_wait(const char* reason)
 
 void ExperimentRecorder::stop_worker(std::string reason)
 {
-	camera_.stop_recording_and_wait();
-	transition_writer_.stop();
-	force_writer_.stop();
-	motion_writer_.stop();
-	write_session_json(true, reason);
+	bool cleanup_failed = false;
+	try
+	{
+		(void)camera_.stop_recording_and_wait();
+	}
+	catch (...)
+	{
+		cleanup_failed = true;
+	}
+	try { transition_writer_.stop(); }
+	catch (...) { cleanup_failed = true; }
+	try { force_writer_.stop(); }
+	catch (...) { cleanup_failed = true; }
+	try { motion_writer_.stop(); }
+	catch (...) { cleanup_failed = true; }
+	try { write_session_json(true, reason); }
+	catch (...) { cleanup_failed = true; }
+	if (cleanup_failed)
+	{
+		// 各阶段独立回收：前一阶段异常不得跳过后续 CSV 关闭和元数据写入。
+		error_.store(ExperimentRecordingError::StopThreadFailed, std::memory_order_release);
+	}
 	state_.store(ExperimentRecordingState::Idle, std::memory_order_release);
 }
 
@@ -963,9 +982,13 @@ ExperimentRecorderSnapshot ExperimentRecorder::snapshot() const
 	ExperimentRecorderSnapshot result;
 	result.state = state_.load(std::memory_order_acquire);
 	result.error = error_.load(std::memory_order_acquire);
-	if (result.state == ExperimentRecordingState::Recording || result.state == ExperimentRecordingState::Stopping)
+	if (result.state == ExperimentRecordingState::Recording)
 	{
 		result.elapsed_us = clock_.elapsed_us(clock_.now_qpc());
+	}
+	else if (result.state == ExperimentRecordingState::Stopping)
+	{
+		result.elapsed_us = stop_elapsed_us_.load(std::memory_order_acquire);
 	}
 	result.force_dropped = force_writer_.dropped_count();
 	result.motion_dropped = motion_writer_.dropped_count();

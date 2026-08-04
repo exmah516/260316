@@ -57,7 +57,8 @@ public:
 		const std::wstring& frame_timing_path,
 		std::int64_t session_anchor_qpc,
 		std::int64_t qpc_frequency);
-	void stop_recording_and_wait();
+	// 正常封装或失败回收都必须有界；false 表示后台相机超时，不阻止 CSV 会话停止。
+	bool stop_recording_and_wait();
 	bool timing_writer_failed() const;
 	Action4CameraSnapshot snapshot() const;
 	void shutdown();

@@ -1,5 +1,8 @@
 using System.Windows;
+using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
+using System.Windows.Input;
+using System.Windows.Threading;
 
 namespace AdsControlUI
 {
@@ -10,6 +13,10 @@ namespace AdsControlUI
         private CleanForceWindow _cleanForceWindow;
         private CameraPreviewWindow _cameraPreviewWindow;
         private ForceTransitionWindow _ftExpWindow;
+		private readonly DispatcherTimer _manualJogKeepaliveTimer;
+		private int _activeArmJogAxis;
+		private int _activeArmJogDirection;
+		private int _activeAxis4JogDirection;
 
         public MainWindow()
         {
@@ -17,10 +24,15 @@ namespace AdsControlUI
             _vm = new AdsControlViewModel();
             DataContext = _vm;
             _vm.StateUpdated += Vm_StateUpdated;
+			_manualJogKeepaliveTimer = new DispatcherTimer { Interval = System.TimeSpan.FromMilliseconds(100) };
+			_manualJogKeepaliveTimer.Tick += ManualJogKeepaliveTimer_Tick;
+			_manualJogKeepaliveTimer.Start();
         }
 
         protected override void OnClosed(System.EventArgs e)
         {
+			_manualJogKeepaliveTimer.Stop();
+			StopAllManualJogs();
             _vm.StateUpdated -= Vm_StateUpdated;
             _forceWindow?.Close();
             _cleanForceWindow?.Close();
@@ -29,6 +41,12 @@ namespace AdsControlUI
             _vm.Dispose();
             base.OnClosed(e);
         }
+
+		protected override void OnDeactivated(System.EventArgs e)
+		{
+			StopAllManualJogs();
+			base.OnDeactivated(e);
+		}
 
         private void Cyl1_Click(object sender, RoutedEventArgs e) => SetCylinderState(sender, 0);
         private void Cyl2_Click(object sender, RoutedEventArgs e) => SetCylinderState(sender, 1);
@@ -60,6 +78,167 @@ namespace AdsControlUI
             if (sender is ToggleButton button)
                 _vm.SetSpacingRecovery(button.IsChecked == true);
         }
+
+		private void ArmManualEnable_Click(object sender, RoutedEventArgs e)
+		{
+			if (sender is ToggleButton button)
+			{
+				if (button.IsChecked != true)
+					StopAllManualJogs();
+				_vm.SetArmManualEnable(button.IsChecked == true);
+			}
+		}
+
+		private void ArmAxisEnable_Click(object sender, RoutedEventArgs e)
+		{
+			if (sender is ToggleButton button && TryGetAxisNumber(button.Tag, out int axisNumber))
+			{
+				if (button.IsChecked != true)
+					StopArmAxisJog(axisNumber);
+				_vm.SetArmAxisEnable(axisNumber, button.IsChecked == true);
+			}
+		}
+
+		private void ArmAxisReset_Click(object sender, RoutedEventArgs e)
+		{
+			if (sender is Button button && TryGetAxisNumber(button.Tag, out int axisNumber))
+				_vm.RequestArmAxisReset(axisNumber);
+		}
+
+		private void ArmJogButton_PreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+		{
+			if (!(sender is Button button) ||
+				!TryGetAxisNumber(button.Tag, out int axisNumber) ||
+				!TryGetJogDirection(button.CommandParameter, out int direction))
+			{
+				return;
+			}
+
+			if (_activeArmJogAxis != 0 && _activeArmJogAxis != axisNumber)
+				_vm.SetArmAxisJog(_activeArmJogAxis, 0);
+			_activeArmJogAxis = axisNumber;
+			_activeArmJogDirection = direction;
+			_vm.SetArmAxisJog(axisNumber, direction);
+			button.CaptureMouse();
+		}
+
+		private void ArmJogButton_PreviewMouseLeftButtonUp(object sender, MouseButtonEventArgs e)
+		{
+			StopArmJog(sender);
+		}
+
+		private void ArmJogButton_LostMouseCapture(object sender, MouseEventArgs e)
+		{
+			StopArmJog(sender);
+		}
+
+		private void StopArmJog(object sender)
+		{
+			if (!(sender is Button button) || !TryGetAxisNumber(button.Tag, out int axisNumber))
+				return;
+			StopArmAxisJog(axisNumber);
+			if (button.IsMouseCaptured)
+				button.ReleaseMouseCapture();
+		}
+
+		private void Axis4JogButton_PreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+		{
+			if (!(sender is Button button) ||
+				!TryGetJogDirection(button.CommandParameter, out int direction))
+			{
+				return;
+			}
+
+			_activeAxis4JogDirection = direction;
+			_vm.SetAxis4ManualJog(direction);
+			button.CaptureMouse();
+		}
+
+		private void Axis4JogButton_PreviewMouseLeftButtonUp(object sender, MouseButtonEventArgs e)
+		{
+			StopAxis4Jog(sender);
+		}
+
+		private void Axis4JogButton_LostMouseCapture(object sender, MouseEventArgs e)
+		{
+			StopAxis4Jog(sender);
+		}
+
+		private void StopAxis4Jog(object sender)
+		{
+			if (!(sender is Button button)) return;
+			_activeAxis4JogDirection = 0;
+			_vm.SetAxis4ManualJog(0);
+			if (button.IsMouseCaptured)
+				button.ReleaseMouseCapture();
+		}
+
+		private void StopArmAxisJog(int axisNumber)
+		{
+			if (_activeArmJogAxis == axisNumber)
+			{
+				_activeArmJogAxis = 0;
+				_activeArmJogDirection = 0;
+			}
+			_vm.SetArmAxisJog(axisNumber, 0);
+		}
+
+		private void StopAllManualJogs()
+		{
+			_activeArmJogAxis = 0;
+			_activeArmJogDirection = 0;
+			_activeAxis4JogDirection = 0;
+			_vm.StopManualJogs();
+		}
+
+		private void ManualJogKeepaliveTimer_Tick(object sender, System.EventArgs e)
+		{
+			if (_activeArmJogAxis != 0 && _activeArmJogDirection != 0)
+				_vm.SetArmAxisJog(_activeArmJogAxis, _activeArmJogDirection);
+			if (_activeAxis4JogDirection != 0)
+				_vm.SetAxis4ManualJog(_activeAxis4JogDirection);
+		}
+
+		private void ApplyArmJogParameters_Click(object sender, RoutedEventArgs e)
+		{
+			if (!(sender is Button button) || !(button.DataContext is ArmAxisControlModel axis))
+				return;
+			if (!axis.TryGetParameters(out double velocity, out double acceleration, out double deceleration, out double jerk))
+				return;
+
+			if (_vm.SetArmJogParameters(axis.AxisNumber, velocity, acceleration, deceleration, jerk))
+				axis.MarkParametersApplied();
+			else
+				axis.ParameterErrorText = "参数发送失败，请检查上位机管道连接。";
+		}
+
+		private static bool TryGetAxisNumber(object value, out int axisNumber)
+		{
+			try
+			{
+				axisNumber = System.Convert.ToInt32(value);
+				return axisNumber >= 1 && axisNumber <= 5;
+			}
+			catch
+			{
+				axisNumber = 0;
+				return false;
+			}
+		}
+
+		private static bool TryGetJogDirection(object value, out int direction)
+		{
+			try
+			{
+				direction = System.Convert.ToInt32(value);
+				return direction == -1 || direction == 1;
+			}
+			catch
+			{
+				direction = 0;
+				return false;
+			}
+		}
 
         private void Zero_Click(object sender, RoutedEventArgs e) => _vm.ZeroForceSensor();
         private void FfToggle_Click(object sender, RoutedEventArgs e) => _vm.ToggleForceFeedback();

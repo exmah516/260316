@@ -11,14 +11,18 @@
 #include <cstdio>
 #include <cstring>
 #include <cwctype>
+#include <deque>
 #include <limits>
 #include <mutex>
+#include <new>
 #include <string>
 #include <thread>
 #include <vector>
 
 #define WIN32_LEAN_AND_MEAN
+#ifndef NOMINMAX
 #define NOMINMAX
+#endif
 #include <windows.h>
 #include <mfapi.h>
 #include <mferror.h>
@@ -46,6 +50,12 @@ namespace
 	constexpr std::size_t kPreviewBytes = static_cast<std::size_t>(kPreviewStride) * kPreviewHeight;
 	constexpr LONGLONG kFrameDuration100ns = 10000000LL / 30LL;
 	constexpr DWORD kVideoBitrate = 20000000;
+	constexpr auto kCameraStopGrace = std::chrono::milliseconds(500);
+	constexpr auto kCameraStopAfterCancel = std::chrono::milliseconds(6000);
+	constexpr auto kSourceShutdownTimeout = std::chrono::milliseconds(500);
+	constexpr auto kSinkStartTimeout = std::chrono::milliseconds(3000);
+	constexpr auto kSinkStopTimeout = std::chrono::milliseconds(5000);
+	constexpr std::size_t kSinkFrameQueueCapacity = 8;
 
 #pragma pack(push, 1)
 	struct PreviewSharedHeader
@@ -115,6 +125,51 @@ namespace
 		return static_cast<int>(hr);
 	}
 
+	struct SourceShutdownResult
+	{
+		std::mutex mutex;
+		std::condition_variable condition;
+		bool completed = false;
+	};
+
+	void request_source_shutdown(ComPtr<IMFMediaSource> source) noexcept
+	{
+		if (!source) return;
+		try
+		{
+			const auto result = std::make_shared<SourceShutdownResult>();
+			// 驱动的 Shutdown 也可能阻塞；遗留线程只持有自己的 COM 引用。
+			std::thread shutdown_thread([source, result]() mutable {
+				const HRESULT com_hr = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+				const HRESULT mf_hr = MFStartup(MF_VERSION, MFSTARTUP_FULL);
+				(void)source->Shutdown();
+				source.Reset();
+				if (SUCCEEDED(mf_hr)) MFShutdown();
+				if (SUCCEEDED(com_hr)) CoUninitialize();
+				{
+					std::lock_guard<std::mutex> lock(result->mutex);
+					result->completed = true;
+				}
+				result->condition.notify_all();
+			});
+			std::unique_lock<std::mutex> lock(result->mutex);
+			if (result->condition.wait_for(lock, kSourceShutdownTimeout, [&]() { return result->completed; }))
+			{
+				lock.unlock();
+				shutdown_thread.join();
+			}
+			else
+			{
+				lock.unlock();
+				shutdown_thread.detach();
+			}
+		}
+		catch (...)
+		{
+			// 无法创建解阻线程时也不回退到同步 Shutdown，保证记录停止仍有界。
+		}
+	}
+
 	struct NativeCandidate
 	{
 		ComPtr<IMFMediaType> type;
@@ -124,6 +179,355 @@ namespace
 		UINT32 fps_numerator = 0;
 		UINT32 fps_denominator = 1;
 		int rank = 100;
+	};
+
+	struct PendingVideoFrame
+	{
+		ComPtr<IMFSample> sample;
+		VideoFrameTimingRow timing;
+	};
+
+	// 每次录像独占一个 sink 会话。线程只捕获 shared_ptr，超时遗留时不访问相机 Impl。
+	class SinkWriterSession : public std::enable_shared_from_this<SinkWriterSession>
+	{
+	public:
+		SinkWriterSession(
+			std::wstring video_path,
+			std::wstring timing_path,
+			int width,
+			int height,
+			int fps_numerator,
+			int fps_denominator)
+			: video_path_(std::move(video_path)),
+			timing_path_(std::move(timing_path)),
+			width_(width),
+			height_(height),
+			fps_numerator_(fps_numerator > 0 ? fps_numerator : 30),
+			fps_denominator_(fps_denominator > 0 ? fps_denominator : 1)
+		{
+		}
+
+		~SinkWriterSession()
+		{
+			// 正常路径由拥有者 join；超时路径已 detach，这里只是最后防线。
+			if (worker_.joinable()) worker_.detach();
+		}
+
+		bool start_and_wait(HRESULT& result)
+		{
+			try
+			{
+				const std::shared_ptr<SinkWriterSession> self = shared_from_this();
+				worker_ = std::thread([self]() { self->run(); });
+			}
+			catch (...)
+			{
+				result = E_OUTOFMEMORY;
+				return false;
+			}
+
+			std::unique_lock<std::mutex> lock(mutex_);
+			if (!condition_.wait_for(lock, kSinkStartTimeout, [&]() { return start_completed_; }))
+			{
+				stop_requested_ = true;
+				accepting_ = false;
+				result = HRESULT_FROM_WIN32(WAIT_TIMEOUT);
+				lock.unlock();
+				condition_.notify_all();
+				request_frame_writer_stop();
+				detach_worker();
+				return false;
+			}
+			result = start_result_;
+			const bool started = SUCCEEDED(start_result_);
+			lock.unlock();
+			if (!started) join_worker();
+			return started;
+		}
+
+		bool enqueue(IMFSample* sample, const VideoFrameTimingRow& timing)
+		{
+			if (sample == nullptr) return false;
+			std::lock_guard<std::mutex> lock(mutex_);
+			if (!accepting_ || FAILED(runtime_error_.load(std::memory_order_acquire)))
+			{
+				return false;
+			}
+			if (queue_.size() >= kSinkFrameQueueCapacity)
+			{
+				dropped_frames_.fetch_add(1, std::memory_order_relaxed);
+				return true;
+			}
+			try
+			{
+				PendingVideoFrame pending;
+				pending.sample = sample;
+				pending.timing = timing;
+				queue_.push_back(std::move(pending));
+			}
+			catch (...)
+			{
+				runtime_error_.store(E_OUTOFMEMORY, std::memory_order_release);
+				accepting_ = false;
+				stop_requested_ = true;
+				condition_.notify_all();
+				return false;
+			}
+			condition_.notify_all();
+			return true;
+		}
+
+		bool stop_and_wait(HRESULT& result)
+		{
+			std::unique_lock<std::mutex> lock(mutex_);
+			accepting_ = false;
+			stop_requested_ = true;
+			condition_.notify_all();
+			if (!condition_.wait_for(lock, kSinkStopTimeout, [&]() { return completed_; }))
+			{
+				result = HRESULT_FROM_WIN32(WAIT_TIMEOUT);
+				lock.unlock();
+				request_frame_writer_stop();
+				schedule_frame_writer_cleanup();
+				detach_worker();
+				return false;
+			}
+			result = terminal_result_;
+			lock.unlock();
+			join_worker();
+			return true;
+		}
+
+		bool has_error() const
+		{
+			return FAILED(runtime_error_.load(std::memory_order_acquire));
+		}
+
+		HRESULT runtime_error() const
+		{
+			const HRESULT error = runtime_error_.load(std::memory_order_acquire);
+			return FAILED(error) ? error : E_FAIL;
+		}
+
+		std::uint64_t frame_count() const { return frame_count_.load(std::memory_order_acquire); }
+		std::uint64_t dropped_frames() const { return dropped_frames_.load(std::memory_order_acquire); }
+		std::uint64_t timing_rows_dropped() const { return frame_writer_.dropped_count(); }
+		bool timing_writer_failed() const { return frame_writer_.has_error(); }
+
+	private:
+		void request_frame_writer_stop() noexcept
+		{
+			frame_writer_stop_requested_.store(true, std::memory_order_release);
+			frame_writer_.request_stop();
+		}
+
+		void stop_frame_writer()
+		{
+			// 清理线程和 sink 线程均可能抵达这里；只允许一个线程执行 join/fclose。
+			std::call_once(frame_writer_stop_once_, [this]() {
+				frame_writer_stop_requested_.store(true, std::memory_order_release);
+				frame_writer_.stop();
+			});
+		}
+
+		void schedule_frame_writer_cleanup() noexcept
+		{
+			try
+			{
+				const std::shared_ptr<SinkWriterSession> self = shared_from_this();
+				// 线程只持有独立 sink 会话；即使磁盘 flush 阻塞，也不会访问相机 Impl。
+				std::thread([self]() { self->stop_frame_writer(); }).detach();
+			}
+			catch (...)
+			{
+				// request_stop 已经禁止新旁车行并要求后台 writer 排空；创建清理线程失败不延长停止等待。
+			}
+		}
+
+		HRESULT initialize_writer()
+		{
+			ComPtr<IMFAttributes> sink_attributes;
+			HRESULT hr = MFCreateAttributes(&sink_attributes, 3);
+			if (FAILED(hr)) return hr;
+			sink_attributes->SetUINT32(MF_READWRITE_ENABLE_HARDWARE_TRANSFORMS, TRUE);
+			sink_attributes->SetUINT32(MF_SINK_WRITER_DISABLE_THROTTLING, TRUE);
+			hr = MFCreateSinkWriterFromURL(video_path_.c_str(), nullptr, sink_attributes.Get(), &writer_);
+			if (FAILED(hr)) return hr;
+
+			ComPtr<IMFMediaType> output_type;
+			hr = MFCreateMediaType(&output_type);
+			if (FAILED(hr)) return hr;
+			output_type->SetGUID(MF_MT_MAJOR_TYPE, MFMediaType_Video);
+			output_type->SetGUID(MF_MT_SUBTYPE, MFVideoFormat_H264);
+			output_type->SetUINT32(MF_MT_AVG_BITRATE, kVideoBitrate);
+			output_type->SetUINT32(MF_MT_INTERLACE_MODE, MFVideoInterlace_Progressive);
+			MFSetAttributeSize(output_type.Get(), MF_MT_FRAME_SIZE, width_, height_);
+			MFSetAttributeRatio(output_type.Get(), MF_MT_FRAME_RATE, fps_numerator_, fps_denominator_);
+			MFSetAttributeRatio(output_type.Get(), MF_MT_PIXEL_ASPECT_RATIO, 1, 1);
+			hr = writer_->AddStream(output_type.Get(), &stream_index_);
+			if (FAILED(hr)) return hr;
+
+			ComPtr<IMFMediaType> input_type;
+			hr = MFCreateMediaType(&input_type);
+			if (FAILED(hr)) return hr;
+			input_type->SetGUID(MF_MT_MAJOR_TYPE, MFMediaType_Video);
+			input_type->SetGUID(MF_MT_SUBTYPE, MFVideoFormat_RGB32);
+			input_type->SetUINT32(MF_MT_INTERLACE_MODE, MFVideoInterlace_Progressive);
+			MFSetAttributeSize(input_type.Get(), MF_MT_FRAME_SIZE, width_, height_);
+			MFSetAttributeRatio(input_type.Get(), MF_MT_FRAME_RATE, fps_numerator_, fps_denominator_);
+			MFSetAttributeRatio(input_type.Get(), MF_MT_PIXEL_ASPECT_RATIO, 1, 1);
+			hr = writer_->SetInputMediaType(stream_index_, input_type.Get(), nullptr);
+			if (FAILED(hr)) return hr;
+			hr = writer_->BeginWriting();
+			if (FAILED(hr)) return hr;
+
+			if (frame_writer_stop_requested_.load(std::memory_order_acquire))
+			{
+				return HRESULT_FROM_WIN32(ERROR_CANCELLED);
+			}
+			const char* frame_header =
+				"frame_index,source_timestamp_100ns,callback_elapsed_us,keyframe,discontinuity\n";
+			if (!frame_writer_.start(timing_path_, frame_header, &write_frame_timing))
+			{
+				return HRESULT_FROM_WIN32(ERROR_OPEN_FAILED);
+			}
+			// 覆盖 stop 恰好发生在 start() 重置内部原子状态期间的竞态。
+			if (frame_writer_stop_requested_.load(std::memory_order_acquire))
+			{
+				frame_writer_.request_stop();
+				return HRESULT_FROM_WIN32(ERROR_CANCELLED);
+			}
+			return S_OK;
+		}
+
+		void run()
+		{
+			const HRESULT com_hr = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+			const HRESULT mf_hr = MFStartup(MF_VERSION, MFSTARTUP_FULL);
+			HRESULT start_hr = SUCCEEDED(mf_hr) ? initialize_writer() : mf_hr;
+			if (FAILED(com_hr) && com_hr != RPC_E_CHANGED_MODE) start_hr = com_hr;
+			if (FAILED(start_hr))
+			{
+				writer_.Reset();
+				stop_frame_writer();
+				DeleteFileW(video_path_.c_str());
+				DeleteFileW(timing_path_.c_str());
+				if (SUCCEEDED(mf_hr)) MFShutdown();
+				if (SUCCEEDED(com_hr)) CoUninitialize();
+				{
+					std::lock_guard<std::mutex> lock(mutex_);
+					start_result_ = start_hr;
+					terminal_result_ = start_hr;
+					start_completed_ = true;
+					completed_ = true;
+				}
+				condition_.notify_all();
+				return;
+			}
+
+			{
+				std::lock_guard<std::mutex> lock(mutex_);
+				start_result_ = S_OK;
+				start_completed_ = true;
+				accepting_ = !stop_requested_;
+			}
+			condition_.notify_all();
+
+			HRESULT write_hr = S_OK;
+			for (;;)
+			{
+				PendingVideoFrame pending;
+				{
+					std::unique_lock<std::mutex> lock(mutex_);
+					condition_.wait(lock, [&]() { return stop_requested_ || !queue_.empty(); });
+					if (queue_.empty() && stop_requested_) break;
+					pending = std::move(queue_.front());
+					queue_.pop_front();
+				}
+
+				write_hr = writer_->WriteSample(stream_index_, pending.sample.Get());
+				if (FAILED(write_hr))
+				{
+					runtime_error_.store(write_hr, std::memory_order_release);
+					break;
+				}
+				// MP4 已经接收该帧，计数必须先于旁车写入更新，避免旁车故障少报一帧。
+				pending.timing.frame_index = frame_count_.fetch_add(1, std::memory_order_release);
+				if (!frame_writer_.try_enqueue(pending.timing) && frame_writer_.has_error())
+				{
+					write_hr = HRESULT_FROM_WIN32(ERROR_WRITE_FAULT);
+					runtime_error_.store(write_hr, std::memory_order_release);
+					break;
+				}
+			}
+
+			{
+				std::lock_guard<std::mutex> lock(mutex_);
+				accepting_ = false;
+				queue_.clear();
+			}
+			// 先排空并关闭旁车；即使驱动在 Finalize 阶段永久阻塞，CSV 也已经完整落盘。
+			stop_frame_writer();
+			const HRESULT finalize_hr = writer_ ? writer_->Finalize() : S_OK;
+			writer_.Reset();
+			if (frame_count_.load(std::memory_order_acquire) == 0)
+			{
+				DeleteFileW(video_path_.c_str());
+				DeleteFileW(timing_path_.c_str());
+			}
+			const HRESULT queued_error = runtime_error_.load(std::memory_order_acquire);
+			HRESULT terminal_hr = FAILED(write_hr)
+				? write_hr
+				: (FAILED(queued_error) ? queued_error : finalize_hr);
+			if (SUCCEEDED(terminal_hr) && frame_writer_.has_error())
+			{
+				terminal_hr = HRESULT_FROM_WIN32(ERROR_WRITE_FAULT);
+			}
+			if (FAILED(terminal_hr)) runtime_error_.store(terminal_hr, std::memory_order_release);
+			if (SUCCEEDED(mf_hr)) MFShutdown();
+			if (SUCCEEDED(com_hr)) CoUninitialize();
+			{
+				std::lock_guard<std::mutex> lock(mutex_);
+				terminal_result_ = terminal_hr;
+				completed_ = true;
+			}
+			condition_.notify_all();
+		}
+
+		void detach_worker()
+		{
+			if (worker_.joinable()) worker_.detach();
+		}
+
+		void join_worker()
+		{
+			if (worker_.joinable()) worker_.join();
+		}
+
+		std::wstring video_path_;
+		std::wstring timing_path_;
+		int width_ = 0;
+		int height_ = 0;
+		int fps_numerator_ = 30;
+		int fps_denominator_ = 1;
+		mutable std::mutex mutex_;
+		std::condition_variable condition_;
+		std::deque<PendingVideoFrame> queue_;
+		std::thread worker_;
+		bool accepting_ = false;
+		bool stop_requested_ = false;
+		bool start_completed_ = false;
+		bool completed_ = false;
+		HRESULT start_result_ = E_PENDING;
+		HRESULT terminal_result_ = E_PENDING;
+		std::atomic<HRESULT> runtime_error_{ S_OK };
+		std::atomic<std::uint64_t> frame_count_{ 0 };
+		std::atomic<std::uint64_t> dropped_frames_{ 0 };
+		ComPtr<IMFSinkWriter> writer_;
+		DWORD stream_index_ = 0;
+		AsyncCsvWriter<VideoFrameTimingRow, 4096> frame_writer_;
+		std::atomic<bool> frame_writer_stop_requested_{ false };
+		std::once_flag frame_writer_stop_once_;
 	};
 }
 
@@ -163,16 +567,21 @@ public:
 		std::int64_t qpc_frequency)
 	{
 		std::lock_guard<std::mutex> lock(mutex_);
-		if (shutdown_requested_ || recording_requested_ || recording_active_ || finalizing_)
+		if (shutdown_requested_ || capture_opening_ || recording_requested_ || recording_starting_ || recording_active_ ||
+			finalizing_ || sink_session_)
 		{
 			return false;
 		}
 		video_path_ = video_path;
 		frame_timing_path_ = frame_timing_path;
-		frame_writer_.reset_status();
+		last_sink_session_.reset();
 		session_anchor_qpc_ = session_anchor_qpc;
 		qpc_frequency_ = qpc_frequency > 0 ? qpc_frequency : 1;
 		recording_requested_ = true;
+		recording_stop_failed_ = false;
+		recording_stop_elapsed_frozen_ = false;
+		recording_stop_elapsed_us_ = 0;
+		recording_start_qpc_ = 0;
 		++recording_generation_;
 		++request_revision_;
 		snapshot_.frame_count = 0;
@@ -183,32 +592,107 @@ public:
 		return true;
 	}
 
-	void stop_recording_and_wait()
+	bool stop_recording_and_wait()
 	{
 		std::unique_lock<std::mutex> lock(mutex_);
+		const bool recording_in_flight =
+			recording_requested_ || recording_starting_ || recording_active_ || finalizing_;
+		if (recording_in_flight)
+		{
+			freeze_recording_elapsed_locked(current_qpc());
+		}
 		if (recording_requested_)
 		{
 			recording_requested_ = false;
 			++request_revision_;
 			condition_.notify_all();
 		}
-		condition_.wait(lock, [&]() {
-			return !recording_starting_ && !recording_active_ && !finalizing_;
-		});
+		const auto stopped = [&]() {
+			return !capture_opening_ && !recording_starting_ && !recording_active_ && !finalizing_;
+		};
+		if (condition_.wait_for(lock, kCameraStopGrace, stopped))
+		{
+			return !recording_stop_failed_;
+		}
+
+
+		// source 可能在首次检查之后才完成激活；等待期间监听其发布并做一次有界 Shutdown。
+		ComPtr<IMFMediaSource> cancellation_attempted;
+		const auto cancellation_deadline = std::chrono::steady_clock::now() + kCameraStopAfterCancel;
+		while (!stopped())
+		{
+			ComPtr<IMFMediaSource> source_to_cancel;
+			const bool can_cancel = capture_opening_ || recording_starting_ || recording_active_;
+			if (can_cancel && cancellation_source_ &&
+				cancellation_source_.Get() != cancellation_attempted.Get())
+			{
+				source_to_cancel = cancellation_source_;
+				cancellation_attempted = source_to_cancel;
+			}
+			if (source_to_cancel)
+			{
+				lock.unlock();
+				request_source_shutdown(std::move(source_to_cancel));
+				lock.lock();
+				if (stopped())
+				{
+					return !recording_stop_failed_;
+				}
+			}
+			const bool awakened = condition_.wait_until(lock, cancellation_deadline, [&]() {
+				if (stopped()) return true;
+				const bool now_cancellable = capture_opening_ || recording_starting_ || recording_active_;
+				return now_cancellable && cancellation_source_ &&
+					cancellation_source_.Get() != cancellation_attempted.Get();
+			});
+			if (!awakened)
+			{
+				break;
+			}
+		}
+		if (stopped())
+		{
+			return !recording_stop_failed_;
+		}
+
+		recording_stop_failed_ = true;
+		snapshot_.recording = false;
+		snapshot_.state = Action4CameraState::Error;
+		snapshot_.error_code = hresult_code(HRESULT_FROM_WIN32(WAIT_TIMEOUT));
+		if (recording_stop_elapsed_frozen_)
+		{
+			snapshot_.recording_elapsed_us = recording_stop_elapsed_us_;
+		}
+		return false;
 	}
 
 	bool timing_writer_failed() const
 	{
-		return frame_writer_.has_error();
+		std::lock_guard<std::mutex> lock(mutex_);
+		const std::shared_ptr<SinkWriterSession> session = sink_session_
+			? sink_session_
+			: last_sink_session_;
+		return session && session->timing_writer_failed();
 	}
 
 	Action4CameraSnapshot snapshot() const
 	{
 		std::lock_guard<std::mutex> lock(mutex_);
 		Action4CameraSnapshot copy = snapshot_;
-		copy.timing_rows_dropped = frame_writer_.dropped_count();
-		copy.timing_writer_error = frame_writer_.has_error();
-		if (recording_active_)
+		const std::shared_ptr<SinkWriterSession> session = sink_session_
+			? sink_session_
+			: last_sink_session_;
+		if (session)
+		{
+			copy.timing_rows_dropped = session->timing_rows_dropped();
+			copy.timing_writer_error = session->timing_writer_failed();
+			if (recording_active_)
+			{
+				copy.frame_count = session->frame_count();
+				copy.dropped_frames += session->dropped_frames();
+			}
+		}
+		if (recording_active_ && !recording_stop_elapsed_frozen_)
 		{
 			copy.recording_elapsed_us = qpc_elapsed_us(current_qpc(), recording_start_qpc_, qpc_frequency_);
 		}
@@ -217,6 +701,7 @@ public:
 
 	void shutdown()
 	{
+		ComPtr<IMFMediaSource> source_to_cancel;
 		{
 			std::lock_guard<std::mutex> lock(mutex_);
 			if (shutdown_requested_)
@@ -227,7 +712,9 @@ public:
 			recording_requested_ = false;
 			preview_requested_ = false;
 			++request_revision_;
+			source_to_cancel = cancellation_source_;
 		}
+		request_source_shutdown(std::move(source_to_cancel));
 		condition_.notify_all();
 		if (worker_.joinable())
 		{
@@ -237,6 +724,20 @@ public:
 	}
 
 private:
+	// 调用者持有 mutex_。停止边界只取一次，后续排空和封装不得继续累加录像时长。
+	void freeze_recording_elapsed_locked(std::int64_t stop_qpc)
+	{
+		if (recording_stop_elapsed_frozen_)
+		{
+			return;
+		}
+		recording_stop_elapsed_us_ = recording_start_qpc_ > 0
+			? qpc_elapsed_us(stop_qpc, recording_start_qpc_, qpc_frequency_)
+			: snapshot_.recording_elapsed_us;
+		recording_stop_elapsed_frozen_ = true;
+		snapshot_.recording_elapsed_us = recording_stop_elapsed_us_;
+	}
+
 	void initialize_preview_mapping()
 	{
 		const std::size_t total_bytes = sizeof(PreviewSharedHeader) + kPreviewBytes * 2;
@@ -536,6 +1037,11 @@ private:
 		close_capture();
 		HRESULT hr = activate_action4(source_, missing);
 		if (FAILED(hr)) return hr;
+		{
+			std::lock_guard<std::mutex> lock(mutex_);
+			cancellation_source_ = source_;
+		}
+		condition_.notify_all();
 
 		ComPtr<IMFAttributes> reader_attributes;
 		hr = MFCreateAttributes(&reader_attributes, 4);
@@ -574,11 +1080,13 @@ private:
 	void close_capture()
 	{
 		reader_.Reset();
-		if (source_)
+		ComPtr<IMFMediaSource> source_to_shutdown = source_;
+		source_.Reset();
 		{
-			source_->Shutdown();
-			source_.Reset();
+			std::lock_guard<std::mutex> lock(mutex_);
+			cancellation_source_.Reset();
 		}
+		request_source_shutdown(std::move(source_to_shutdown));
 		capture_width_ = 0;
 		capture_height_ = 0;
 		capture_stride_ = 0;
@@ -593,66 +1101,34 @@ private:
 		{
 			return MF_E_INVALIDMEDIATYPE;
 		}
-		const char* frame_header =
-			"frame_index,source_timestamp_100ns,callback_elapsed_us,keyframe,discontinuity\n";
-		if (!frame_writer_.start(frame_timing_path_, frame_header, &write_frame_timing))
+		std::shared_ptr<SinkWriterSession> session;
+		try
 		{
-			return HRESULT_FROM_WIN32(ERROR_OPEN_FAILED);
+			session = std::make_shared<SinkWriterSession>(
+				video_path_,
+				frame_timing_path_,
+				capture_width_,
+				capture_height_,
+				capture_fps_numerator_,
+				capture_fps_denominator_);
 		}
-
-		ComPtr<IMFAttributes> sink_attributes;
-		HRESULT hr = MFCreateAttributes(&sink_attributes, 3);
-		if (FAILED(hr)) return hr;
-		sink_attributes->SetUINT32(MF_READWRITE_ENABLE_HARDWARE_TRANSFORMS, TRUE);
-		sink_attributes->SetUINT32(MF_SINK_WRITER_DISABLE_THROTTLING, TRUE);
-		hr = MFCreateSinkWriterFromURL(video_path_.c_str(), nullptr, sink_attributes.Get(), &sink_writer_);
-		if (FAILED(hr))
+		catch (...)
 		{
-			frame_writer_.stop();
-			return hr;
+			return E_OUTOFMEMORY;
 		}
-
-		ComPtr<IMFMediaType> output_type;
-		hr = MFCreateMediaType(&output_type);
-		if (FAILED(hr)) return hr;
-		output_type->SetGUID(MF_MT_MAJOR_TYPE, MFMediaType_Video);
-		output_type->SetGUID(MF_MT_SUBTYPE, MFVideoFormat_H264);
-		output_type->SetUINT32(MF_MT_AVG_BITRATE, kVideoBitrate);
-		output_type->SetUINT32(MF_MT_INTERLACE_MODE, MFVideoInterlace_Progressive);
-		MFSetAttributeSize(output_type.Get(), MF_MT_FRAME_SIZE, capture_width_, capture_height_);
-		MFSetAttributeRatio(
-			output_type.Get(),
-			MF_MT_FRAME_RATE,
-			capture_fps_numerator_ > 0 ? capture_fps_numerator_ : 30,
-			capture_fps_denominator_ > 0 ? capture_fps_denominator_ : 1);
-		MFSetAttributeRatio(output_type.Get(), MF_MT_PIXEL_ASPECT_RATIO, 1, 1);
-		hr = sink_writer_->AddStream(output_type.Get(), &sink_stream_index_);
-		if (FAILED(hr)) return hr;
-
-		ComPtr<IMFMediaType> input_type;
-		hr = MFCreateMediaType(&input_type);
-		if (FAILED(hr)) return hr;
-		input_type->SetGUID(MF_MT_MAJOR_TYPE, MFMediaType_Video);
-		input_type->SetGUID(MF_MT_SUBTYPE, MFVideoFormat_RGB32);
-		input_type->SetUINT32(MF_MT_INTERLACE_MODE, MFVideoInterlace_Progressive);
-		MFSetAttributeSize(input_type.Get(), MF_MT_FRAME_SIZE, capture_width_, capture_height_);
-		MFSetAttributeRatio(
-			input_type.Get(),
-			MF_MT_FRAME_RATE,
-			capture_fps_numerator_ > 0 ? capture_fps_numerator_ : 30,
-			capture_fps_denominator_ > 0 ? capture_fps_denominator_ : 1);
-		MFSetAttributeRatio(input_type.Get(), MF_MT_PIXEL_ASPECT_RATIO, 1, 1);
-		hr = sink_writer_->SetInputMediaType(sink_stream_index_, input_type.Get(), nullptr);
-		if (FAILED(hr)) return hr;
-		hr = sink_writer_->BeginWriting();
-		if (FAILED(hr)) return hr;
+		HRESULT start_hr = E_FAIL;
+		if (!session->start_and_wait(start_hr))
+		{
+			return start_hr;
+		}
 
 		first_source_timestamp_ = std::numeric_limits<LONGLONG>::min();
 		last_source_timestamp_ = std::numeric_limits<LONGLONG>::min();
-		frame_index_ = 0;
-		recording_start_qpc_ = current_qpc();
+		const std::int64_t start_qpc = current_qpc();
 		{
 			std::lock_guard<std::mutex> lock(mutex_);
+			recording_start_qpc_ = start_qpc;
+			sink_session_ = std::move(session);
 			recording_active_ = true;
 			finalizing_ = false;
 			snapshot_.recording = true;
@@ -666,34 +1142,43 @@ private:
 
 	void finish_sink_writer(bool preserve_disconnect_state)
 	{
+		std::shared_ptr<SinkWriterSession> session;
 		{
 			std::lock_guard<std::mutex> lock(mutex_);
-			if (!recording_active_ && !sink_writer_)
+			if (!recording_active_ && !sink_session_)
 			{
 				return;
 			}
+			freeze_recording_elapsed_locked(current_qpc());
 			finalizing_ = true;
 			recording_active_ = false;
 			snapshot_.recording = false;
+			session = sink_session_;
+			sink_session_.reset();
 		}
 		HRESULT finalize_hr = S_OK;
-		if (sink_writer_)
-		{
-			finalize_hr = sink_writer_->Finalize();
-			sink_writer_.Reset();
-		}
-		frame_writer_.stop();
-
-		if (frame_index_ == 0)
-		{
-			DeleteFileW(video_path_.c_str());
-			DeleteFileW(frame_timing_path_.c_str());
-		}
+		const bool completed = !session || session->stop_and_wait(finalize_hr);
+		if (!completed) finalize_hr = HRESULT_FROM_WIN32(WAIT_TIMEOUT);
 		{
 			std::lock_guard<std::mutex> lock(mutex_);
+			last_sink_session_ = session;
+			if (!completed)
+			{
+				recording_stop_failed_ = true;
+			}
+			if (session)
+			{
+				snapshot_.frame_count = session->frame_count();
+				snapshot_.dropped_frames += session->dropped_frames();
+			}
 			finalizing_ = false;
-			snapshot_.recording_elapsed_us = qpc_elapsed_us(current_qpc(), recording_start_qpc_, qpc_frequency_);
-			if (FAILED(finalize_hr) && !preserve_disconnect_state)
+			snapshot_.recording_elapsed_us = recording_stop_elapsed_us_;
+			if (!completed)
+			{
+				snapshot_.state = Action4CameraState::Error;
+				snapshot_.error_code = hresult_code(finalize_hr);
+			}
+			else if (FAILED(finalize_hr) && !preserve_disconnect_state)
 			{
 				snapshot_.state = Action4CameraState::Error;
 				snapshot_.error_code = hresult_code(finalize_hr);
@@ -708,11 +1193,11 @@ private:
 
 	void fail_recording_start(HRESULT hr)
 	{
-		sink_writer_.Reset();
-		frame_writer_.stop();
-		DeleteFileW(video_path_.c_str());
-		DeleteFileW(frame_timing_path_.c_str());
 		std::lock_guard<std::mutex> lock(mutex_);
+		if (hr == HRESULT_FROM_WIN32(WAIT_TIMEOUT))
+		{
+			recording_stop_failed_ = true;
+		}
 		failed_recording_generation_ = recording_generation_;
 		recording_active_ = false;
 		finalizing_ = false;
@@ -791,20 +1276,23 @@ private:
 		const std::uint64_t callback_elapsed_us = qpc_elapsed_us(callback_qpc, session_anchor_qpc_, qpc_frequency_);
 		bool preview_enabled = false;
 		bool recording_active = false;
+		std::shared_ptr<SinkWriterSession> session;
 		{
 			std::lock_guard<std::mutex> lock(mutex_);
 			preview_enabled = preview_requested_;
 			recording_active = recording_active_;
+			session = sink_session_;
 		}
 		if (preview_enabled)
 		{
 			publish_preview(sample, callback_elapsed_us);
 		}
 
-		if (!recording_active || !sink_writer_)
+		if (!recording_active || !session)
 		{
 			return S_OK;
 		}
+		if (session->has_error()) return session->runtime_error();
 		if (first_source_timestamp_ == std::numeric_limits<LONGLONG>::min())
 		{
 			first_source_timestamp_ = source_timestamp;
@@ -812,11 +1300,6 @@ private:
 		const LONGLONG normalized_timestamp = std::max<LONGLONG>(0, source_timestamp - first_source_timestamp_);
 		sample->SetSampleTime(normalized_timestamp);
 		sample->SetSampleDuration(kFrameDuration100ns);
-		HRESULT hr = sink_writer_->WriteSample(sink_stream_index_, sample);
-		if (FAILED(hr))
-		{
-			return hr;
-		}
 
 		UINT32 clean_point = FALSE;
 		UINT32 sample_discontinuity = FALSE;
@@ -837,20 +1320,22 @@ private:
 		last_source_timestamp_ = source_timestamp;
 
 		VideoFrameTimingRow timing;
-		timing.frame_index = frame_index_;
 		timing.source_timestamp_100ns = source_timestamp;
 		timing.callback_elapsed_us = callback_elapsed_us;
 		timing.keyframe = clean_point != FALSE;
 		timing.discontinuity = discontinuity;
-		if (!frame_writer_.try_enqueue(timing) && frame_writer_.has_error())
+		if (!session->enqueue(sample, timing))
 		{
-			return HRESULT_FROM_WIN32(ERROR_WRITE_FAULT);
+			return session->runtime_error();
 		}
-		++frame_index_;
 		{
 			std::lock_guard<std::mutex> lock(mutex_);
-			snapshot_.frame_count = frame_index_;
-			snapshot_.recording_elapsed_us = qpc_elapsed_us(callback_qpc, recording_start_qpc_, qpc_frequency_);
+			snapshot_.frame_count = session->frame_count();
+			if (!recording_stop_elapsed_frozen_)
+			{
+				snapshot_.recording_elapsed_us = qpc_elapsed_us(
+					callback_qpc, recording_start_qpc_, qpc_frequency_);
+			}
 		}
 		return S_OK;
 	}
@@ -963,6 +1448,7 @@ private:
 				attempted_revision = revision;
 				{
 					std::lock_guard<std::mutex> lock(mutex_);
+					capture_opening_ = true;
 					snapshot_.state = Action4CameraState::Opening;
 					snapshot_.error_code = 0;
 					snapshot_.input_format = Action4InputFormat::Unknown;
@@ -972,27 +1458,47 @@ private:
 					snapshot_.fps_denominator = 1;
 				}
 				bool missing = false;
-				const HRESULT open_hr = open_capture(missing);
+				HRESULT open_hr = E_UNEXPECTED;
+				try
+				{
+					open_hr = open_capture(missing);
+				}
+				catch (const std::bad_alloc&)
+				{
+					open_hr = E_OUTOFMEMORY;
+				}
+				catch (...)
+				{
+					open_hr = E_UNEXPECTED;
+				}
 				if (FAILED(open_hr))
 				{
 					close_capture();
-					std::lock_guard<std::mutex> lock(mutex_);
-					if (recording_requested_)
-					{
-						failed_recording_generation_ = recording_generation_;
-					}
-					snapshot_.state = missing ? Action4CameraState::Missing : Action4CameraState::Error;
-					snapshot_.error_code = hresult_code(open_hr);
-					snapshot_.recording = false;
-					condition_.notify_all();
-					continue;
 				}
 				{
 					std::lock_guard<std::mutex> lock(mutex_);
-					snapshot_.state = recording_requested_
-						? Action4CameraState::Opening
-						: Action4CameraState::Previewing;
+					capture_opening_ = false;
+					if (FAILED(open_hr))
+					{
+						if (recording_requested_)
+						{
+							failed_recording_generation_ = recording_generation_;
+						}
+						if (!recording_stop_failed_)
+						{
+							snapshot_.state = missing ? Action4CameraState::Missing : Action4CameraState::Error;
+							snapshot_.error_code = hresult_code(open_hr);
+						}
+						snapshot_.recording = false;
+					}
+					else if (!recording_stop_failed_)
+					{
+						snapshot_.state = recording_requested_
+							? Action4CameraState::Opening
+							: (preview_requested_ ? Action4CameraState::Previewing : Action4CameraState::Closed);
+					}
 				}
+				condition_.notify_all();
 				continue;
 			}
 
@@ -1028,7 +1534,14 @@ private:
 			{
 				close_capture();
 				std::lock_guard<std::mutex> lock(mutex_);
-				snapshot_.state = Action4CameraState::Closed;
+				const bool terminal_state =
+					snapshot_.state == Action4CameraState::Missing ||
+					snapshot_.state == Action4CameraState::Disconnected ||
+					snapshot_.state == Action4CameraState::Error;
+				if (!terminal_state)
+				{
+					snapshot_.state = Action4CameraState::Closed;
+				}
 				continue;
 			}
 
@@ -1070,7 +1583,12 @@ private:
 			}
 		}
 
-		if (recording_active_ || sink_writer_)
+		bool sink_needs_stop = false;
+		{
+			std::lock_guard<std::mutex> lock(mutex_);
+			sink_needs_stop = recording_active_ || static_cast<bool>(sink_session_);
+		}
+		if (sink_needs_stop)
 		{
 			finish_sink_writer(false);
 		}
@@ -1084,6 +1602,8 @@ private:
 			std::lock_guard<std::mutex> lock(mutex_);
 			snapshot_.state = Action4CameraState::Closed;
 			snapshot_.recording = false;
+			capture_opening_ = false;
+			recording_starting_ = false;
 			recording_active_ = false;
 			finalizing_ = false;
 		}
@@ -1096,9 +1616,12 @@ private:
 	bool shutdown_requested_ = false;
 	bool preview_requested_ = false;
 	bool recording_requested_ = false;
+	bool capture_opening_ = false;
 	bool recording_starting_ = false;
 	bool recording_active_ = false;
 	bool finalizing_ = false;
+	bool recording_stop_failed_ = false;
+	bool recording_stop_elapsed_frozen_ = false;
 	std::uint64_t request_revision_ = 0;
 	std::uint64_t recording_generation_ = 0;
 	std::uint64_t failed_recording_generation_ = std::numeric_limits<std::uint64_t>::max();
@@ -1109,24 +1632,25 @@ private:
 	std::int64_t session_anchor_qpc_ = 0;
 	std::int64_t qpc_frequency_ = 1;
 	std::int64_t recording_start_qpc_ = 0;
+	std::uint64_t recording_stop_elapsed_us_ = 0;
 	LONGLONG first_source_timestamp_ = std::numeric_limits<LONGLONG>::min();
 	LONGLONG last_source_timestamp_ = std::numeric_limits<LONGLONG>::min();
-	std::uint64_t frame_index_ = 0;
 
 	ComPtr<IMFMediaSource> source_;
+	// 仅供停止线程复制引用并调用 Shutdown，解除同步 ReadSample 阻塞。
+	ComPtr<IMFMediaSource> cancellation_source_;
 	ComPtr<IMFSourceReader> reader_;
 	ComPtr<IMFSample> primed_sample_;
 	LONGLONG primed_timestamp_ = 0;
 	DWORD primed_stream_flags_ = 0;
-	ComPtr<IMFSinkWriter> sink_writer_;
-	DWORD sink_stream_index_ = 0;
+	std::shared_ptr<SinkWriterSession> sink_session_;
+	std::shared_ptr<SinkWriterSession> last_sink_session_;
 	int capture_width_ = 0;
 	int capture_height_ = 0;
 	LONG capture_stride_ = 0;
 	int capture_fps_numerator_ = 0;
 	int capture_fps_denominator_ = 1;
 	Action4InputFormat selected_input_format_ = Action4InputFormat::Unknown;
-	AsyncCsvWriter<VideoFrameTimingRow, 4096> frame_writer_;
 
 	HANDLE preview_mapping_ = nullptr;
 	HANDLE preview_event_ = nullptr;
@@ -1155,9 +1679,9 @@ bool Action4CameraRecorder::start_recording(
 	return impl_->start_recording(video_path, frame_timing_path, session_anchor_qpc, qpc_frequency);
 }
 
-void Action4CameraRecorder::stop_recording_and_wait()
+bool Action4CameraRecorder::stop_recording_and_wait()
 {
-	impl_->stop_recording_and_wait();
+	return impl_->stop_recording_and_wait();
 }
 
 bool Action4CameraRecorder::timing_writer_failed() const

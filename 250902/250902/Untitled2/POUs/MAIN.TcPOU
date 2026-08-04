@@ -18,6 +18,11 @@ END_VAR]]></Declaration>
 	G.axis[i]();	
 END_FOR
 
+// 注射器 NC 轴仅刷新 AXIS_REF，当前不进入业务状态机且不下发运动命令。
+FOR i:=1 TO 2 DO
+	G.inject_axis[i]();
+END_FOR
+
 IF TwinCAT_SystemInfoVarList._TaskInfo[1].FirstCycle THEN
 	G.gen_state := _init;
 	G.self_check_done := FALSE;
@@ -32,7 +37,8 @@ IF TwinCAT_SystemInfoVarList._TaskInfo[1].FirstCycle THEN
 	END_FOR
 	G.arm_manual_enable := FALSE;
 	FOR i:=1 TO 5 DO
-		G.arm_enable_req[i] := TRUE;
+		// PLC 启动时定位臂必须保持断使能，不能因为残留请求自动上电。
+		G.arm_enable_req[i] := FALSE;
 		G.arm_reset_req[i] := FALSE;
 		G.arm_jog_pos_req[i] := FALSE;
 		G.arm_jog_neg_req[i] := FALSE;

@@ -117,9 +117,79 @@
                 <ColumnDefinition Width="*"/>
             </Grid.ColumnDefinitions>
 
-            <!-- 左侧：轴位置 -->
-            <GroupBox Grid.Column="0" Header="轴位置 / 已行进行程" Margin="0,0,8,0">
-                <ScrollViewer VerticalScrollBarVisibility="Auto">
+            <!-- 左侧：模式选择与平移轴行程 -->
+            <ScrollViewer Grid.Column="0" Margin="0,0,8,0"
+                          VerticalScrollBarVisibility="Auto"
+                          HorizontalScrollBarVisibility="Disabled">
+                <StackPanel>
+                <GroupBox Header="模式选择">
+                    <StackPanel>
+                        <UniformGrid Columns="2" Margin="2">
+                            <RadioButton Content="导管递送" GroupName="Mode" Style="{StaticResource ModeChipRadio}"
+                                         Click="ModeCathFwd_Click" IsChecked="{Binding ModeCathFwdSelected, Mode=OneWay}"
+                                         IsEnabled="{Binding ModeSwitchAllowed}"/>
+                            <RadioButton Content="导管撤出" GroupName="Mode" Style="{StaticResource ModeChipRadio}"
+                                         Click="ModeCathRev_Click" IsChecked="{Binding ModeCathRevSelected, Mode=OneWay}"
+                                         IsEnabled="{Binding ModeSwitchAllowed}"/>
+                            <RadioButton Content="导丝递送" GroupName="Mode" Style="{StaticResource ModeChipRadio}"
+                                         Click="ModeGuideFwd_Click" IsChecked="{Binding ModeGuideFwdSelected, Mode=OneWay}"
+                                         IsEnabled="{Binding ModeSwitchAllowed}"/>
+                            <RadioButton Content="导丝撤出" GroupName="Mode" Style="{StaticResource ModeChipRadio}"
+                                         Click="ModeGuideRev_Click" IsChecked="{Binding ModeGuideRevSelected, Mode=OneWay}"
+                                         IsEnabled="{Binding ModeSwitchAllowed}"/>
+                        </UniformGrid>
+                        <UniformGrid Columns="2" Margin="2,0,2,2">
+                            <RadioButton Content="协同递送" GroupName="Mode" Style="{StaticResource ModeChipRadio}"
+                                         Click="ModeCooperativeDelivery_Click"
+                                         IsChecked="{Binding ModeCooperativeDeliverySelected, Mode=OneWay}"
+                                         IsEnabled="{Binding CooperativeModeEnabled}"/>
+                            <RadioButton Content="协同撤出" GroupName="Mode" Style="{StaticResource ModeChipRadio}"
+                                         Click="ModeCooperativeRetraction_Click"
+                                         IsChecked="{Binding ModeCooperativeRetractionSelected, Mode=OneWay}"
+                                         IsEnabled="{Binding CooperativeModeEnabled}"/>
+                        </UniformGrid>
+                        <TextBlock Text="{Binding CooperativeStatusText}"
+                                   Style="{StaticResource CaptionText}"
+                                   Margin="6,0,6,4"
+                                   TextWrapping="Wrap"/>
+                        <TextBlock Text="{Binding PhysicalButtonNoticeText}"
+                                   Style="{StaticResource ErrorText}"
+                                   FontSize="11" Margin="6,0,6,4"
+                                   TextWrapping="Wrap"/>
+
+                        <!-- 屈曲恢复与导管回退后的轴1先行量 -->
+                        <Border BorderBrush="{StaticResource BorderBrush}"
+                                BorderThickness="0,1,0,0"
+                                Margin="2,6,2,0" Padding="0,10,0,0">
+                            <StackPanel>
+                                <WrapPanel Margin="0,0,0,6" VerticalAlignment="Center">
+                                    <ToggleButton Content="屈曲恢复"
+                                                  IsChecked="{Binding SpacingRecoveryActive, Mode=OneWay}"
+                                                  Click="SpacingRecovery_Click"
+                                                  MinWidth="112" MinHeight="38" Margin="0,0,12,0"/>
+                                    <TextBlock Text="回退后轴1先行量"
+                                               Style="{StaticResource FieldLabelText}"
+                                               VerticalAlignment="Center"
+                                               ToolTip="导管回退后轴1先行量，范围 -10~10 mm"/>
+                                    <TextBox x:Name="TbAxis1PostReturnLead"
+                                             Text="1.00" Width="72" Margin="8,2,0,2"
+                                             VerticalContentAlignment="Center"
+                                             ToolTip="单位 mm，允许范围 -10~10"/>
+                                    <Button Content="应用" Click="ApplyAxis1PostReturnLead_Click"
+                                            Padding="12,7" Margin="8,0,0,0"/>
+                                </WrapPanel>
+                                <TextBlock Text="{Binding SpacingRecoveryStatusText}"
+                                           Style="{StaticResource CaptionText}"
+                                           Margin="0,0,0,4" TextWrapping="Wrap"/>
+                                <TextBlock x:Name="Axis1LeadError" Style="{StaticResource ErrorText}" Margin="0,0,0,4"/>
+                                <TextBlock Text="{Binding Axis6SoftLimitText}"
+                                           Style="{StaticResource CaptionText}" TextWrapping="Wrap"/>
+                            </StackPanel>
+                        </Border>
+                    </StackPanel>
+                </GroupBox>
+
+                <GroupBox Header="轴位置 / 已行进行程" Margin="0,12,0,0">
                     <StackPanel Margin="2">
                         <!-- 轴1 -->
                         <Border Style="{StaticResource AxisRowBorder}">
@@ -131,18 +201,9 @@
                             </StackPanel>
                         </Border>
 
-                        <!-- 轴2 -->
-                        <Border Style="{StaticResource AxisRowBorder}">
-                            <Grid>
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="*"/>
-                                    <ColumnDefinition Width="Auto"/>
-                                </Grid.ColumnDefinitions>
-                                <TextBlock Text="{Binding Axis2RotationText}" FontWeight="SemiBold" VerticalAlignment="Center"/>
-                                <local:CircularAxisIndicator Grid.Column="1"
-                                                             Angle="{Binding Axis2Pos, Mode=OneWay}"
-                                                             Width="56" Height="56" Margin="8,0,0,0"/>
-                            </Grid>
+                        <!-- 轴2：仅显示角度数字 -->
+                        <Border Style="{StaticResource AxisRowBorder}" Padding="10,6">
+                            <TextBlock Text="{Binding Axis2RotationText}" FontWeight="SemiBold"/>
                         </Border>
 
                         <!-- 轴3 -->
@@ -155,18 +216,36 @@
                             </StackPanel>
                         </Border>
 
-                        <!-- 轴4 -->
-                        <Border Style="{StaticResource AxisRowBorder}">
-                            <Grid>
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="*"/>
-                                    <ColumnDefinition Width="Auto"/>
-                                </Grid.ColumnDefinitions>
-                                <TextBlock Text="{Binding Axis4RotationText}" FontWeight="SemiBold" VerticalAlignment="Center"/>
-                                <local:CircularAxisIndicator Grid.Column="1"
-                                                             Angle="{Binding Axis4Pos, Mode=OneWay}"
-                                                             Width="56" Height="56" Margin="8,0,0,0"/>
-                            </Grid>
+                        <!-- 轴4：显示角度并提供按住点动控制 -->
+                        <Border Style="{StaticResource AxisRowBorder}" Padding="10,8">
+                            <StackPanel>
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Text="{Binding Axis4RotationText}" FontWeight="SemiBold"
+                                               VerticalAlignment="Center"/>
+                                    <StackPanel Grid.Column="1" Orientation="Horizontal">
+                                        <Button Content="后退" CommandParameter="-1"
+                                                IsEnabled="{Binding Axis4ManualControlAllowed}"
+                                                PreviewMouseLeftButtonDown="Axis4JogButton_PreviewMouseLeftButtonDown"
+                                                PreviewMouseLeftButtonUp="Axis4JogButton_PreviewMouseLeftButtonUp"
+                                                LostMouseCapture="Axis4JogButton_LostMouseCapture"
+                                                Padding="12,6" Margin="8,0,4,0"
+                                                ToolTip="按住时轴4后退，松开立即停止"/>
+                                        <Button Content="前进" CommandParameter="1"
+                                                IsEnabled="{Binding Axis4ManualControlAllowed}"
+                                                PreviewMouseLeftButtonDown="Axis4JogButton_PreviewMouseLeftButtonDown"
+                                                PreviewMouseLeftButtonUp="Axis4JogButton_PreviewMouseLeftButtonUp"
+                                                LostMouseCapture="Axis4JogButton_LostMouseCapture"
+                                                Padding="12,6" Margin="4,0,0,0"
+                                                ToolTip="按住时轴4前进，松开立即停止"/>
+                                    </StackPanel>
+                                </Grid>
+                                <TextBlock Text="{Binding Axis4ManualStatusText}"
+                                           Style="{StaticResource CaptionText}" Margin="0,5,0,0"/>
+                            </StackPanel>
                         </Border>
 
                         <!-- 轴5 -->
@@ -189,31 +268,206 @@
                             </StackPanel>
                         </Border>
 
-                        <!-- 轴7 -->
-                        <Border Style="{StaticResource AxisRowBorder}" Margin="0">
-                            <Grid>
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="*"/>
-                                    <ColumnDefinition Width="Auto"/>
-                                </Grid.ColumnDefinitions>
-                                <TextBlock Text="{Binding Axis7RotationText}" FontWeight="SemiBold" VerticalAlignment="Center"/>
-                                <local:CircularAxisIndicator Grid.Column="1"
-                                                             Angle="{Binding Axis7Pos, Mode=OneWay}"
-                                                             Width="56" Height="56" Margin="8,0,0,0"/>
-                            </Grid>
+                        <!-- 轴7：仅显示角度数字 -->
+                        <Border Style="{StaticResource AxisRowBorder}" Padding="10,6" Margin="0">
+                            <TextBlock Text="{Binding Axis7RotationText}" FontWeight="SemiBold"/>
                         </Border>
+
                     </StackPanel>
-                </ScrollViewer>
-            </GroupBox>
+                </GroupBox>
+
+                <GroupBox Header="定位臂手动控制" Margin="0,12,0,0">
+                    <StackPanel Margin="2">
+                        <Grid Margin="2,0,2,8">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+                            <ToggleButton Content="总使能"
+                                          IsChecked="{Binding ArmManualEnabled, Mode=OneWay}"
+                                          IsEnabled="{Binding ArmManualAvailable}"
+                                          Click="ArmManualEnable_Click"
+                                          MinWidth="86" MinHeight="34" Margin="0,0,10,0"/>
+                            <TextBlock Grid.Column="1" Text="{Binding ArmManualStatusText}"
+                                       Style="{StaticResource CaptionText}"
+                                       VerticalAlignment="Center" TextWrapping="Wrap"/>
+                        </Grid>
+
+                        <ItemsControl ItemsSource="{Binding ArmAxes}">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <Border Style="{StaticResource AxisRowBorder}">
+                                        <StackPanel>
+                                            <WrapPanel VerticalAlignment="Center">
+                                                <TextBlock Text="{Binding AxisLabel}"
+                                                           FontWeight="SemiBold" MinWidth="88"
+                                                           VerticalAlignment="Center"/>
+                                                <ToggleButton Content="上电"
+                                                              Tag="{Binding AxisNumber}"
+                                                              IsChecked="{Binding EnableRequested, Mode=OneWay}"
+                                                              IsEnabled="{Binding DataContext.ArmAxisControlsEnabled, RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
+                                                              Click="ArmAxisEnable_Click"
+                                                              MinWidth="52" MinHeight="31" Margin="3"/>
+                                                <Button Content="复位" Tag="{Binding AxisNumber}"
+                                                        IsEnabled="{Binding DataContext.ArmAxisControlsEnabled, RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
+                                                        Click="ArmAxisReset_Click"
+                                                        Padding="10,5" Margin="3"/>
+                                                <Button Content="Jog-" Tag="{Binding AxisNumber}" CommandParameter="-1"
+                                                        IsEnabled="{Binding DataContext.ArmAxisControlsEnabled, RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
+                                                        PreviewMouseLeftButtonDown="ArmJogButton_PreviewMouseLeftButtonDown"
+                                                        PreviewMouseLeftButtonUp="ArmJogButton_PreviewMouseLeftButtonUp"
+                                                        LostMouseCapture="ArmJogButton_LostMouseCapture"
+                                                        Padding="10,5" Margin="3"
+                                                        ToolTip="按住反向点动，松开立即停止"/>
+                                                <Button Content="Jog+" Tag="{Binding AxisNumber}" CommandParameter="1"
+                                                        IsEnabled="{Binding DataContext.ArmAxisControlsEnabled, RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
+                                                        PreviewMouseLeftButtonDown="ArmJogButton_PreviewMouseLeftButtonDown"
+                                                        PreviewMouseLeftButtonUp="ArmJogButton_PreviewMouseLeftButtonUp"
+                                                        LostMouseCapture="ArmJogButton_LostMouseCapture"
+                                                        Padding="10,5" Margin="3"
+                                                        ToolTip="按住正向点动，松开立即停止"/>
+                                            </WrapPanel>
+
+                                            <WrapPanel Margin="0,5,0,0" VerticalAlignment="Center"
+                                                       IsEnabled="{Binding DataContext.ArmAxisControlsEnabled, RelativeSource={RelativeSource AncestorType={x:Type Window}}}">
+                                                <TextBlock Text="Vel" Style="{StaticResource CaptionText}" VerticalAlignment="Center"/>
+                                                <TextBox Text="{Binding VelocityInput, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                                         Width="55" Margin="4,0,8,0" ToolTip="点动速度，单位跟随 NC Axis"/>
+                                                <TextBlock Text="Acc" Style="{StaticResource CaptionText}" VerticalAlignment="Center"/>
+                                                <TextBox Text="{Binding AccelerationInput, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                                         Width="55" Margin="4,0,8,0" ToolTip="点动加速度，单位跟随 NC Axis"/>
+                                                <TextBlock Text="Dec" Style="{StaticResource CaptionText}" VerticalAlignment="Center"/>
+                                                <TextBox Text="{Binding DecelerationInput, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                                         Width="55" Margin="4,0,8,0" ToolTip="点动减速度，单位跟随 NC Axis"/>
+                                                <TextBlock Text="Jerk" Style="{StaticResource CaptionText}" VerticalAlignment="Center"/>
+                                                <TextBox Text="{Binding JerkInput, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                                         Width="64" Margin="4,0,8,0" ToolTip="点动加加速度，单位跟随 NC Axis"/>
+                                                <Button Content="应用" Click="ApplyArmJogParameters_Click"
+                                                        Padding="10,4"/>
+                                            </WrapPanel>
+
+                                            <WrapPanel Margin="0,5,0,0">
+                                                <TextBlock Text="位置 " Style="{StaticResource CaptionText}"/>
+                                                <TextBlock Text="{Binding PositionText}" FontWeight="SemiBold"/>
+                                                <TextBlock Text="    速度 " Style="{StaticResource CaptionText}"/>
+                                                <TextBlock Text="{Binding VelocityText}" FontWeight="SemiBold"/>
+                                                <TextBlock Text="    " />
+                                                <TextBlock Text="{Binding StatusText}" Style="{StaticResource CaptionText}"/>
+                                            </WrapPanel>
+                                            <TextBlock Text="{Binding ParameterErrorText}"
+                                                       Style="{StaticResource ErrorText}"
+                                                       Margin="0,3,0,0" TextWrapping="Wrap"/>
+                                        </StackPanel>
+                                    </Border>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </StackPanel>
+                </GroupBox>
+                </StackPanel>
+            </ScrollViewer>
 
             <!-- 右侧控制 -->
             <ScrollViewer Grid.Column="1" Margin="8,0,0,0"
                           VerticalScrollBarVisibility="Auto"
                           HorizontalScrollBarVisibility="Disabled">
-                <StackPanel>
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                    </Grid.RowDefinitions>
+
+                    <!-- 启动准备 -->
+                    <GroupBox Grid.Row="0" Header="启动准备">
+                        <StackPanel Margin="2">
+                            <Grid Margin="0,2,0,4">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="128"/>
+                                    <ColumnDefinition Width="*"/>
+                                </Grid.ColumnDefinitions>
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="Auto"/>
+                                </Grid.RowDefinitions>
+
+                                <TextBlock Grid.Row="0" Grid.Column="0" Text="轴1 (5–95 mm)" Style="{StaticResource FieldLabelText}"/>
+                                <TextBox   Grid.Row="0" Grid.Column="1" x:Name="TbAxis1" Text="20"  Margin="8,3"/>
+                                <TextBlock Grid.Row="1" Grid.Column="0" Text="轴3 (10–650 mm)" Style="{StaticResource FieldLabelText}"/>
+                                <TextBox   Grid.Row="1" Grid.Column="1" x:Name="TbAxis3" Text="649" Margin="8,3"/>
+                                <TextBlock Grid.Row="2" Grid.Column="0" Text="轴5 (10–670 mm)" Style="{StaticResource FieldLabelText}"/>
+                                <TextBox   Grid.Row="2" Grid.Column="1" x:Name="TbAxis5" Text="649" Margin="8,3"/>
+                                <TextBlock Grid.Row="3" Grid.Column="0" Text="轴6 (10–670 mm)" Style="{StaticResource FieldLabelText}"/>
+                                <TextBox   Grid.Row="3" Grid.Column="1" x:Name="TbAxis6" Text="650" Margin="8,3"/>
+                                <TextBlock Grid.Row="4" Grid.Column="0" Text="轴2 (−360~360°)" Style="{StaticResource FieldLabelText}"/>
+                                <TextBox   Grid.Row="4" Grid.Column="1" x:Name="TbAxis2" Text="0"   Margin="8,3"/>
+                                <TextBlock Grid.Row="5" Grid.Column="0" Text="轴7 (−360~360°)" Style="{StaticResource FieldLabelText}"/>
+                                <TextBox   Grid.Row="5" Grid.Column="1" x:Name="TbAxis7" Text="0"   Margin="8,3"/>
+                                <TextBlock Grid.Row="6" Grid.Column="0" Text="速度比例" Style="{StaticResource FieldLabelText}"/>
+                                <TextBox   Grid.Row="6" Grid.Column="1" x:Name="TbSpeed" Text="0.03" Margin="8,3"/>
+                            </Grid>
+
+                            <TextBlock x:Name="StartupError" Style="{StaticResource ErrorText}" Margin="0,4,0,8"/>
+                            <StackPanel Orientation="Horizontal">
+                                <Button Content="执行启动准备 (S)" Click="ExecuteStartup_Click"
+                                        Style="{StaticResource PrimaryButton}" Padding="16,8" Margin="0,0,8,0"/>
+                                <Button Content="直接控制 (C)" Click="DirectControl_Click" Padding="16,8"/>
+                            </StackPanel>
+                        </StackPanel>
+                    </GroupBox>
+
+                    <!-- 力反馈 -->
+                    <GroupBox Grid.Row="1" Header="力反馈">
+                        <StackPanel Margin="2">
+                            <WrapPanel>
+                                <Button Content="零点采集"   Click="Zero_Click"      Margin="0,0,8,6" Padding="12,7"/>
+                                <Button Content="力反馈开关" Click="FfToggle_Click"  Margin="0,0,8,6" Padding="12,7"/>
+                                <Button Content="实际反馈窗口" Click="ShowForce_Click" Margin="0,0,8,6" Padding="12,7"/>
+                                <Button Content="纯净力感窗口" Click="ShowCleanForce_Click" Margin="0,0,8,6" Padding="12,7"/>
+                                <Button Content="力过渡实验" Click="ShowFtExp_Click" Margin="0,0,8,6" Padding="12,7"/>
+                                <ToggleButton x:Name="GravityCompCheckBox" Content="重力补偿"
+                                              IsChecked="{Binding GravityCompEnabled, Mode=OneWay}"
+                                              Click="GravityComp_Click" Margin="0,0,8,6" Padding="12,7"/>
+                            </WrapPanel>
+                            <TextBlock x:Name="ForcePlotError" Style="{StaticResource ErrorText}" Margin="0,0,0,8"/>
+
+                            <Border Background="{StaticResource SurfaceAltBrush}" CornerRadius="6" Padding="12,10">
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="*"/>
+                                    </Grid.ColumnDefinitions>
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="Auto"/>
+                                    </Grid.RowDefinitions>
+
+                                    <StackPanel Grid.Row="0" Grid.Column="0" Margin="0,0,8,8">
+                                        <TextBlock Text="实际下发轴向力" Style="{StaticResource CaptionText}" Margin="0,0,0,2"/>
+                                        <TextBlock Text="{Binding Force582F, StringFormat='{}{0:F3} N'}"
+                                                   Style="{StaticResource DataValueText}" FontSize="16" FontWeight="SemiBold"
+                                                   Foreground="{StaticResource SeriesForceBrush}"/>
+                                    </StackPanel>
+                                    <StackPanel Grid.Row="0" Grid.Column="1" Margin="8,0,0,8">
+                                        <TextBlock Text="实际下发力矩" Style="{StaticResource CaptionText}" Margin="0,0,0,2"/>
+                                        <TextBlock Text="{Binding Force582N, StringFormat='{}{0:F5} N·m'}"
+                                                   Style="{StaticResource DataValueText}" FontSize="16" FontWeight="SemiBold"
+                                                   Foreground="{StaticResource SeriesTorqueBrush}"/>
+                                    </StackPanel>
+
+                                    <TextBlock Grid.Row="1" Grid.ColumnSpan="2"
+                                               Text="{Binding CalZeroed, StringFormat='已标零：{0}'}"
+                                               Style="{StaticResource CaptionText}" Margin="0,8,0,0"/>
+                                </Grid>
+                            </Border>
+                        </StackPanel>
+                    </GroupBox>
 
                     <!-- 统一实验记录 -->
-                    <GroupBox Header="实验记录">
+                    <GroupBox Grid.Row="2" Header="实验记录">
                         <StackPanel Margin="2">
                             <TextBlock Text="实验名称" Style="{StaticResource FieldLabelText}" Margin="0,0,0,4"/>
                             <TextBox x:Name="TbExperimentName"
@@ -260,149 +514,8 @@
                         </StackPanel>
                     </GroupBox>
 
-                    <!-- 电缸 -->
-                    <GroupBox Header="电缸控制" IsEnabled="{Binding SpacingRecoveryInactive}">
-                        <UniformGrid Columns="2" Margin="2">
-                            <ToggleButton Content="电缸 1" IsChecked="{Binding Cyl1Open, Mode=OneWay}" Click="Cyl1_Click" Margin="3" MinHeight="40"/>
-                            <ToggleButton Content="电缸 2" IsChecked="{Binding Cyl2Open, Mode=OneWay}" Click="Cyl2_Click" Margin="3" MinHeight="40"/>
-                            <ToggleButton Content="电缸 3" IsChecked="{Binding Cyl3Open, Mode=OneWay}" Click="Cyl3_Click" Margin="3" MinHeight="40"/>
-                            <ToggleButton Content="电缸 4" IsChecked="{Binding Cyl4Open, Mode=OneWay}" Click="Cyl4_Click" Margin="3" MinHeight="40"/>
-                        </UniformGrid>
-                    </GroupBox>
-
-                    <!-- 模式 -->
-                    <GroupBox Header="模式切换">
-                        <StackPanel>
-                            <UniformGrid Columns="2" Margin="2">
-                                <RadioButton Content="导管递送" GroupName="Mode" Style="{StaticResource ModeChipRadio}"
-                                             Click="ModeCathFwd_Click" IsChecked="{Binding ModeCathFwdSelected, Mode=OneWay}"
-                                             IsEnabled="{Binding ModeSwitchAllowed}"/>
-                                <RadioButton Content="导管撤出" GroupName="Mode" Style="{StaticResource ModeChipRadio}"
-                                             Click="ModeCathRev_Click" IsChecked="{Binding ModeCathRevSelected, Mode=OneWay}"
-                                             IsEnabled="{Binding ModeSwitchAllowed}"/>
-                                <RadioButton Content="导丝递送" GroupName="Mode" Style="{StaticResource ModeChipRadio}"
-                                             Click="ModeGuideFwd_Click" IsChecked="{Binding ModeGuideFwdSelected, Mode=OneWay}"
-                                             IsEnabled="{Binding ModeSwitchAllowed}"/>
-                                <RadioButton Content="导丝撤出" GroupName="Mode" Style="{StaticResource ModeChipRadio}"
-                                             Click="ModeGuideRev_Click" IsChecked="{Binding ModeGuideRevSelected, Mode=OneWay}"
-                                             IsEnabled="{Binding ModeSwitchAllowed}"/>
-                            </UniformGrid>
-                            <RadioButton Content="协同递送" GroupName="Mode" Style="{StaticResource ModeChipRadio}"
-                                         Click="ModeCooperativeDelivery_Click" IsChecked="{Binding ModeCooperativeDeliverySelected, Mode=OneWay}"
-                                         IsEnabled="{Binding CooperativeModeEnabled}"
-                                         Margin="3" MinHeight="40"/>
-                            <RadioButton Content="协同撤出" GroupName="Mode" Style="{StaticResource ModeChipRadio}"
-                                         Click="ModeCooperativeRetraction_Click" IsChecked="{Binding ModeCooperativeRetractionSelected, Mode=OneWay}"
-                                         IsEnabled="{Binding CooperativeModeEnabled}"
-                                         Margin="3" MinHeight="40"/>
-							<TextBlock Text="{Binding CooperativeStatusText}"
-									   Style="{StaticResource CaptionText}"
-									   Margin="6,0,6,4"
-									   TextWrapping="Wrap"/>
-							<TextBlock Text="{Binding PhysicalButtonNoticeText}"
-									   Style="{StaticResource ErrorText}"
-									   FontSize="11" Margin="6,0,6,4"
-									   TextWrapping="Wrap"/>
-                            <Grid Margin="3,6,3,3">
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="Auto"/>
-                                    <ColumnDefinition Width="*"/>
-                                </Grid.ColumnDefinitions>
-                                <ToggleButton Content="屈曲恢复"
-                                              IsChecked="{Binding SpacingRecoveryActive, Mode=OneWay}"
-                                              Click="SpacingRecovery_Click"
-                                              MinWidth="118" MinHeight="40"/>
-                                <TextBlock Grid.Column="1"
-                                           Text="{Binding SpacingRecoveryStatusText}"
-                                           Style="{StaticResource CaptionText}"
-                                           Margin="12,0,0,0"
-                                           VerticalAlignment="Center"
-                                           TextWrapping="Wrap"/>
-                            </Grid>
-                        </StackPanel>
-                    </GroupBox>
-
-                    <!-- 导管回退后先行 -->
-                    <GroupBox Header="导管回退后轴1先行">
-                        <StackPanel Margin="2">
-                            <Grid Margin="0,0,0,4">
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="180"/>
-                                    <ColumnDefinition Width="*"/>
-                                    <ColumnDefinition Width="Auto"/>
-                                </Grid.ColumnDefinitions>
-                                <TextBlock Grid.Column="0" Text="轴1回退后先行 (-10~10 mm)" Style="{StaticResource FieldLabelText}"/>
-                                <TextBox Grid.Column="1" x:Name="TbAxis1PostReturnLead" Text="1.00" Margin="8,3" MinWidth="72"/>
-                                <Button Grid.Column="2" Content="应用" Click="ApplyAxis1PostReturnLead_Click" Padding="12,7" Margin="8,0,0,0"/>
-                            </Grid>
-                            <TextBlock x:Name="Axis1LeadError" Style="{StaticResource ErrorText}" Margin="0,0,0,4"/>
-                            <TextBlock Text="{Binding Axis6SoftLimitText}" Style="{StaticResource CaptionText}" TextWrapping="Wrap"/>
-                        </StackPanel>
-                    </GroupBox>
-
-                    <!-- 力反馈 -->
-                    <GroupBox Header="力反馈">
-                        <StackPanel Margin="2">
-                            <WrapPanel>
-                                <Button Content="零点采集"   Click="Zero_Click"      Margin="0,0,8,6" Padding="12,7"/>
-                                <Button Content="力反馈开关" Click="FfToggle_Click"  Margin="0,0,8,6" Padding="12,7"/>
-                                <Button Content="实际反馈窗口" Click="ShowForce_Click" Margin="0,0,8,6" Padding="12,7"/>
-                                <Button Content="纯净力感窗口" Click="ShowCleanForce_Click" Margin="0,0,8,6" Padding="12,7"/>
-                                <Button Content="力过渡实验" Click="ShowFtExp_Click" Margin="0,0,8,6" Padding="12,7"/>
-                                <ToggleButton x:Name="GravityCompCheckBox" Content="重力补偿"
-                                              IsChecked="{Binding GravityCompEnabled, Mode=OneWay}"
-                                              Click="GravityComp_Click" Margin="0,0,8,6" Padding="12,7"/>
-                            </WrapPanel>
-                            <TextBlock x:Name="ForcePlotError" Style="{StaticResource ErrorText}" Margin="0,0,0,8"/>
-
-                            <Border Background="{StaticResource SurfaceAltBrush}" CornerRadius="6" Padding="12,10">
-                                <Grid>
-                                    <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="*"/>
-                                        <ColumnDefinition Width="*"/>
-                                    </Grid.ColumnDefinitions>
-                                    <Grid.RowDefinitions>
-                                        <RowDefinition Height="Auto"/>
-                                        <RowDefinition Height="Auto"/>
-                                        <RowDefinition Height="Auto"/>
-                                    </Grid.RowDefinitions>
-
-                                    <StackPanel Grid.Row="0" Grid.Column="0" Margin="0,0,8,8">
-                                        <TextBlock Text="实际下发轴向力" Style="{StaticResource CaptionText}" Margin="0,0,0,2"/>
-                                        <TextBlock Text="{Binding Force582F, StringFormat='{}{0:F3} N'}"
-                                                   Style="{StaticResource DataValueText}" FontSize="16" FontWeight="SemiBold"
-                                                   Foreground="{StaticResource SeriesForceBrush}"/>
-                                    </StackPanel>
-                                    <StackPanel Grid.Row="0" Grid.Column="1" Margin="8,0,0,8">
-                                        <TextBlock Text="实际下发力矩" Style="{StaticResource CaptionText}" Margin="0,0,0,2"/>
-                                        <TextBlock Text="{Binding Force582N, StringFormat='{}{0:F5} N·m'}"
-                                                   Style="{StaticResource DataValueText}" FontSize="16" FontWeight="SemiBold"
-                                                   Foreground="{StaticResource SeriesTorqueBrush}"/>
-                                    </StackPanel>
-
-                                    <StackPanel Grid.Row="1" Grid.Column="0" Margin="0,0,8,4">
-                                        <TextBlock Text="反馈目标轴向力" Style="{StaticResource CaptionText}" Margin="0,0,0,2"/>
-                                        <TextBlock Text="{Binding Force582TheoryF, StringFormat='{}{0:F3} N'}"
-                                                   Style="{StaticResource DataValueText}"
-                                                   Foreground="{StaticResource TextSecondaryBrush}"/>
-                                    </StackPanel>
-                                    <StackPanel Grid.Row="1" Grid.Column="1" Margin="8,0,0,4">
-                                        <TextBlock Text="反馈目标力矩" Style="{StaticResource CaptionText}" Margin="0,0,0,2"/>
-                                        <TextBlock Text="{Binding Force582TheoryN, StringFormat='{}{0:F5} N·m'}"
-                                                   Style="{StaticResource DataValueText}"
-                                                   Foreground="{StaticResource TextSecondaryBrush}"/>
-                                    </StackPanel>
-
-                                    <TextBlock Grid.Row="2" Grid.ColumnSpan="2"
-                                               Text="{Binding CalZeroed, StringFormat='已标零：{0}'}"
-                                               Style="{StaticResource CaptionText}" Margin="0,8,0,0"/>
-                                </Grid>
-                            </Border>
-                        </StackPanel>
-                    </GroupBox>
-
                     <!-- 主从位移补偿 -->
-                    <GroupBox Header="主从位移补偿">
+                    <GroupBox Grid.Row="3" Header="主从位移补偿">
                         <StackPanel Margin="2">
                             <WrapPanel Margin="0,0,0,6">
                                 <ToggleButton Content="位移补偿"
@@ -455,45 +568,17 @@
                         </StackPanel>
                     </GroupBox>
 
-                    <!-- 启动准备 -->
-                    <GroupBox Header="启动准备">
-                        <StackPanel Margin="2">
-                            <Grid Margin="0,2,0,4">
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="128"/>
-                                    <ColumnDefinition Width="*"/>
-                                </Grid.ColumnDefinitions>
-                                <Grid.RowDefinitions>
-                                    <RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/>
-                                    <RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/>
-                                    <RowDefinition Height="Auto"/>
-                                </Grid.RowDefinitions>
-
-                                <TextBlock Grid.Row="0" Grid.Column="0" Text="轴1 (5–95 mm)" Style="{StaticResource FieldLabelText}"/>
-                                <TextBox   Grid.Row="0" Grid.Column="1" x:Name="TbAxis1" Text="20"  Margin="8,3"/>
-                                <TextBlock Grid.Row="1" Grid.Column="0" Text="轴3 (10–650 mm)" Style="{StaticResource FieldLabelText}"/>
-                                <TextBox   Grid.Row="1" Grid.Column="1" x:Name="TbAxis3" Text="649" Margin="8,3"/>
-                                <TextBlock Grid.Row="2" Grid.Column="0" Text="轴5 (10–670 mm)" Style="{StaticResource FieldLabelText}"/>
-                                <TextBox   Grid.Row="2" Grid.Column="1" x:Name="TbAxis5" Text="649" Margin="8,3"/>
-                                <TextBlock Grid.Row="3" Grid.Column="0" Text="轴6 (10–670 mm)" Style="{StaticResource FieldLabelText}"/>
-                                <TextBox   Grid.Row="3" Grid.Column="1" x:Name="TbAxis6" Text="650" Margin="8,3"/>
-                                <TextBlock Grid.Row="4" Grid.Column="0" Text="轴2 (−360~360°)" Style="{StaticResource FieldLabelText}"/>
-                                <TextBox   Grid.Row="4" Grid.Column="1" x:Name="TbAxis2" Text="0"   Margin="8,3"/>
-                                <TextBlock Grid.Row="5" Grid.Column="0" Text="轴7 (−360~360°)" Style="{StaticResource FieldLabelText}"/>
-                                <TextBox   Grid.Row="5" Grid.Column="1" x:Name="TbAxis7" Text="0"   Margin="8,3"/>
-                                <TextBlock Grid.Row="6" Grid.Column="0" Text="速度比例" Style="{StaticResource FieldLabelText}"/>
-                                <TextBox   Grid.Row="6" Grid.Column="1" x:Name="TbSpeed" Text="0.03" Margin="8,3"/>
-                            </Grid>
-
-                            <TextBlock x:Name="StartupError" Style="{StaticResource ErrorText}" Margin="0,4,0,8"/>
-                            <StackPanel Orientation="Horizontal">
-                                <Button Content="执行启动准备 (S)" Click="ExecuteStartup_Click"
-                                        Style="{StaticResource PrimaryButton}" Padding="16,8" Margin="0,0,8,0"/>
-                                <Button Content="直接控制 (C)" Click="DirectControl_Click" Padding="16,8"/>
-                            </StackPanel>
-                        </StackPanel>
+                    <!-- 电缸 -->
+                    <GroupBox Grid.Row="4" Header="电缸控制" IsEnabled="{Binding SpacingRecoveryInactive}">
+                        <UniformGrid Columns="2" Margin="2">
+                            <ToggleButton Content="电缸 1" IsChecked="{Binding Cyl1Open, Mode=OneWay}" Click="Cyl1_Click" Margin="3" MinHeight="40"/>
+                            <ToggleButton Content="电缸 2" IsChecked="{Binding Cyl2Open, Mode=OneWay}" Click="Cyl2_Click" Margin="3" MinHeight="40"/>
+                            <ToggleButton Content="电缸 3" IsChecked="{Binding Cyl3Open, Mode=OneWay}" Click="Cyl3_Click" Margin="3" MinHeight="40"/>
+                            <ToggleButton Content="电缸 4" IsChecked="{Binding Cyl4Open, Mode=OneWay}" Click="Cyl4_Click" Margin="3" MinHeight="40"/>
+                        </UniformGrid>
                     </GroupBox>
-                </StackPanel>
+
+                </Grid>
             </ScrollViewer>
         </Grid>
     </Grid>

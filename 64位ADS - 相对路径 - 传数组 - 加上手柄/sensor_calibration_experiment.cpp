@@ -1,5 +1,7 @@
 #include "sensor_calibration_experiment.h"
 
+#include "force_calibration.h"
+#include "force_feedback.h"
 #include "plc_io.h"
 
 #include <ADSComm1.h>
@@ -773,6 +775,264 @@ namespace
 			composed_k * sample + composed_b,
 			old_k * (positive_fit.slope * sample + positive_fit.intercept) + old_b,
 			1e-12), "兼容原标定曲线展开");
+
+		ForceCalibrationConfig direct_cfg;
+		direct_cfg.gravity_comp_enabled = false;
+		direct_cfg.deadband_f_n = 0.0;
+		direct_cfg.deadband_t_nm = 0.0;
+		direct_cfg.f_max_n = 100.0;
+		direct_cfg.t_max_nm = 100.0;
+
+		ForceCalibrationState unset_zero;
+		const CleanForce unset_clean = calculate_clean_force(1.0, 1.0, direct_cfg, unset_zero);
+		check(nearly_equal(unset_clean.force_n, 0.0, 1e-15) &&
+			nearly_equal(unset_clean.handle_torque_nm, 0.0, 1e-15),
+			"运行时未调零不输出物理力");
+
+		ForceCalibrationState direct_zero;
+		direct_zero.f_zero = -0.82962; // 传感器2本次0 g均值。
+		direct_zero.ft_zero = -0.02503; // 传感器1本次0 g均值。
+		direct_zero.fn_2_zero = -1.39613; // 传感器3本次0 g均值。
+		direct_zero.ft_2_zero = 0.20103; // 传感器4本次0 g均值。
+		direct_zero.zeroed = true;
+		const CleanForce zero_clean = calculate_clean_force(
+			direct_zero.f_zero, direct_zero.ft_zero, direct_cfg, direct_zero);
+		check(nearly_equal(zero_clean.force_n, 0.0, 1e-15) &&
+			nearly_equal(zero_clean.handle_torque_nm, 0.0, 1e-15),
+			"导管F_direct动态零点严格归零");
+		const CalibratedForce guidewire_zero_feedback = calibrate_guidewire_force(
+			direct_zero.fn_2_zero, direct_zero.ft_2_zero, 0.0, direct_cfg, direct_zero);
+		check(nearly_equal(guidewire_zero_feedback.f_feedback_n, 0.0, 1e-15) &&
+			nearly_equal(guidewire_zero_feedback.t_feedback_nm, 0.0, 1e-15),
+			"导丝F_direct动态零点严格归零");
+
+		const double fn_1_50g_v = -0.03059;
+		const double ft_1_50g_v = 0.67303;
+		const double expected_axial_n = 0.490953762385746;
+		const double expected_tangential_n = 0.491213129859387;
+		const CleanForce loaded_clean = calculate_clean_force(
+			fn_1_50g_v, ft_1_50g_v, direct_cfg, direct_zero);
+		check(nearly_equal(loaded_clean.force_n, expected_axial_n, 1e-12),
+			"传感器2轴向力F_direct映射");
+		check(nearly_equal(
+			loaded_clean.handle_torque_nm,
+			expected_tangential_n * direct_cfg.handle_radius_mm * 0.001,
+			1e-12), "传感器1切向力到手柄扭矩映射");
+
+		const CalibratedForce loaded_feedback = calibrate_force(
+			fn_1_50g_v, ft_1_50g_v, 0.0, direct_cfg, direct_zero);
+		check(nearly_equal(loaded_feedback.f_feedback_n, loaded_clean.force_n, 1e-12) &&
+			nearly_equal(loaded_feedback.t_feedback_nm, loaded_clean.handle_torque_nm, 1e-12),
+			"纯净力与反馈力共用F_direct");
+
+		const double fn_2_50g_v = -0.38615;
+		const double ft_2_50g_v = 1.53886;
+		const double expected_guidewire_axial_n = 0.489042103289968;
+		const double expected_guidewire_tangential_n = 0.4903529688982;
+		const CalibratedForce guidewire_loaded_feedback = calibrate_guidewire_force(
+			fn_2_50g_v, ft_2_50g_v, 0.0, direct_cfg, direct_zero);
+		check(nearly_equal(
+			guidewire_loaded_feedback.f_feedback_n, expected_guidewire_axial_n, 1e-12),
+			"传感器3轴向力到导丝手柄F_direct映射");
+		check(nearly_equal(
+			guidewire_loaded_feedback.t_feedback_nm,
+			expected_guidewire_tangential_n * direct_cfg.handle_radius_mm * 0.001,
+			1e-12), "传感器4切向力到导丝手柄扭矩映射");
+
+		ControlConfig routing_cfg;
+		Handle unopened_catheter_handle(582);
+		Handle unopened_guidewire_handle(587);
+		ForceSampleFrame routing_sample;
+		routing_sample.fn_1_value_v = fn_1_50g_v;
+		routing_sample.ft_1_value_v = ft_1_50g_v;
+		routing_sample.fn_2_value_v = fn_2_50g_v;
+		routing_sample.ft_2_value_v = ft_2_50g_v;
+		routing_sample.valid = true;
+		ForceFeedbackState routing_ff;
+		routing_ff.enabled = true;
+		process_force_feedback(
+			routing_ff, routing_sample,
+			unopened_catheter_handle, unopened_guidewire_handle,
+			GuidewireMode::None,
+			true, false, false, false, false, 0,
+			routing_cfg, direct_cfg, direct_zero);
+		check(nearly_equal(routing_ff.force_582_f, expected_axial_n, 1e-12) &&
+			nearly_equal(routing_ff.force_587_f, 0.0, 1e-15),
+			"导管模式仅路由传感器2/1到582");
+
+		routing_ff.reset();
+		process_force_feedback(
+			routing_ff, routing_sample,
+			unopened_catheter_handle, unopened_guidewire_handle,
+			GuidewireMode::Independent,
+			true, false, false, false, false, 0,
+			routing_cfg, direct_cfg, direct_zero);
+		check(nearly_equal(routing_ff.force_582_f, 0.0, 1e-15) &&
+			nearly_equal(routing_ff.force_587_f, expected_guidewire_axial_n, 1e-12),
+			"独立导丝模式仅路由传感器3/4到587");
+
+		routing_ff.reset();
+		process_force_feedback(
+			routing_ff, routing_sample,
+			unopened_catheter_handle, unopened_guidewire_handle,
+			GuidewireMode::Cooperative,
+			true, false, false, false, false, 0,
+			routing_cfg, direct_cfg, direct_zero);
+		check(nearly_equal(routing_ff.force_582_f, expected_axial_n, 1e-12) &&
+			nearly_equal(routing_ff.force_587_f, expected_guidewire_axial_n, 1e-12),
+			"协同模式同时路由582与587");
+
+		routing_ff.reset();
+		process_force_feedback(
+			routing_ff, routing_sample,
+			unopened_catheter_handle, unopened_catheter_handle,
+			GuidewireMode::Independent,
+			true, false, false, false, false, 0,
+			routing_cfg, direct_cfg, direct_zero);
+		check(nearly_equal(routing_ff.force_582_f, 0.0, 1e-15) &&
+			nearly_equal(routing_ff.force_587_f, expected_guidewire_axial_n, 1e-12),
+			"单手柄别名保持当前导丝语义输出");
+		routing_ff.reset();
+		process_force_feedback(
+			routing_ff, routing_sample,
+			unopened_catheter_handle, unopened_catheter_handle,
+			GuidewireMode::Cooperative,
+			true, false, false, false, false, 0,
+			routing_cfg, direct_cfg, direct_zero);
+		check(nearly_equal(routing_ff.force_582_f, 0.0, 1e-15) &&
+			nearly_equal(routing_ff.force_587_f, 0.0, 1e-15),
+			"单手柄异常进入协同模式时安全归零");
+
+		routing_ff.reset();
+		process_force_feedback(
+			routing_ff, routing_sample,
+			unopened_catheter_handle, unopened_guidewire_handle,
+			GuidewireMode::Cooperative,
+			true, false, false, true, false, 0,
+			routing_cfg, direct_cfg, direct_zero);
+		const double frozen_582_f = routing_ff.force_582_f;
+		const double frozen_587_f = routing_ff.force_587_f;
+		ForceSampleFrame changed_routing_sample = routing_sample;
+		changed_routing_sample.fn_1_value_v += 0.5;
+		changed_routing_sample.fn_2_value_v += 0.5;
+		process_force_feedback(
+			routing_ff, changed_routing_sample,
+			unopened_catheter_handle, unopened_guidewire_handle,
+			GuidewireMode::Cooperative,
+			true, false, false, true, false, 0,
+			routing_cfg, direct_cfg, direct_zero);
+		check(nearly_equal(routing_ff.force_582_f, frozen_582_f, 1e-12) &&
+			nearly_equal(routing_ff.force_587_f, frozen_587_f, 1e-12),
+			"协同快退同时锁存582与587输出");
+		process_force_feedback(
+			routing_ff, changed_routing_sample,
+			unopened_catheter_handle, unopened_guidewire_handle,
+			GuidewireMode::Cooperative,
+			true, false, false, false, false, 0,
+			routing_cfg, direct_cfg, direct_zero);
+		check(!nearly_equal(routing_ff.force_582_f, frozen_582_f, 1e-12) &&
+			!nearly_equal(routing_ff.force_587_f, frozen_587_f, 1e-12),
+			"快退结束后582与587恢复实时映射");
+
+		ForceCalibrationConfig locked_gravity_cfg = direct_cfg;
+		locked_gravity_cfg.gravity_comp_enabled = true;
+		locked_gravity_cfg.gravity_comp_validated = false;
+		const CalibratedForce locked_gravity_feedback = calibrate_force(
+			fn_1_50g_v, ft_1_50g_v, 180.0, locked_gravity_cfg, direct_zero);
+		check(nearly_equal(locked_gravity_feedback.f_feedback_n, loaded_feedback.f_feedback_n, 1e-12) &&
+			nearly_equal(locked_gravity_feedback.t_feedback_nm, loaded_feedback.t_feedback_nm, 1e-12),
+			"未复标重力模型被有效门槛锁定");
+
+		const double fn_absolute_loaded =
+			force_direct_calibration::fn_1_slope_n_per_count * (fn_1_50g_v * 1000.0) +
+			force_direct_calibration::fn_1_intercept_n;
+		const double fn_absolute_zero =
+			force_direct_calibration::fn_1_slope_n_per_count * (direct_zero.f_zero * 1000.0) +
+			force_direct_calibration::fn_1_intercept_n;
+		const double ft_absolute_loaded =
+			force_direct_calibration::ft_1_slope_n_per_count * (ft_1_50g_v * 1000.0) +
+			force_direct_calibration::ft_1_intercept_n;
+		const double ft_absolute_zero =
+			force_direct_calibration::ft_1_slope_n_per_count * (direct_zero.ft_zero * 1000.0) +
+			force_direct_calibration::ft_1_intercept_n;
+		check(nearly_equal(fn_absolute_loaded, 0.489688315853313, 1e-12) &&
+			nearly_equal(fn_absolute_zero, -0.0012654465324331, 1e-12) &&
+			nearly_equal(ft_absolute_loaded, 0.490683826766822, 1e-12) &&
+			nearly_equal(ft_absolute_zero, -0.000529303092565662, 1e-12),
+			"报告F_direct绝对值锚点");
+		check(nearly_equal(fn_absolute_loaded - fn_absolute_zero, loaded_clean.force_n, 1e-12) &&
+			nearly_equal(ft_absolute_loaded - ft_absolute_zero, expected_tangential_n, 1e-12),
+			"导管F_direct截距在动态调零中抵消");
+		const double fn_2_absolute_loaded =
+			force_direct_calibration::fn_2_slope_n_per_count * (fn_2_50g_v * 1000.0) +
+			force_direct_calibration::fn_2_intercept_n;
+		const double fn_2_absolute_zero =
+			force_direct_calibration::fn_2_slope_n_per_count * (direct_zero.fn_2_zero * 1000.0) +
+			force_direct_calibration::fn_2_intercept_n;
+		const double ft_2_absolute_loaded =
+			force_direct_calibration::ft_2_slope_n_per_count * (ft_2_50g_v * 1000.0) +
+			force_direct_calibration::ft_2_intercept_n;
+		const double ft_2_absolute_zero =
+			force_direct_calibration::ft_2_slope_n_per_count * (direct_zero.ft_2_zero * 1000.0) +
+			force_direct_calibration::ft_2_intercept_n;
+		check(nearly_equal(
+			fn_2_absolute_loaded - fn_2_absolute_zero, expected_guidewire_axial_n, 1e-12) &&
+			nearly_equal(
+				ft_2_absolute_loaded - ft_2_absolute_zero, expected_guidewire_tangential_n, 1e-12),
+			"导丝F_direct截距在动态调零中抵消");
+
+		ForceCalibrationState rezero = direct_zero;
+		rezero.f_zero = -0.70000;
+		rezero.ft_zero = 0.12500;
+		const CleanForce rezero_clean = calculate_clean_force(
+			rezero.f_zero, rezero.ft_zero, direct_cfg, rezero);
+		const CleanForce rezero_delta = calculate_clean_force(
+			rezero.f_zero - 0.1, rezero.ft_zero + 0.1, direct_cfg, rezero);
+		check(nearly_equal(rezero_clean.force_n, 0.0, 1e-15) &&
+			nearly_equal(rezero_clean.handle_torque_nm, 0.0, 1e-15) &&
+			nearly_equal(rezero_delta.force_n, -0.1 * direct_cfg.axial_direct_n_per_v, 1e-12) &&
+			nearly_equal(
+				rezero_delta.handle_torque_nm,
+				0.1 * direct_cfg.tangential_direct_n_per_v * direct_cfg.handle_radius_mm * 0.001,
+				1e-12), "重复调零只改变动态截距");
+
+		const double int16_full_span_v = 65.535;
+		check(nearly_equal(
+			force_direct_calibration::zeroed_force_n(
+				32.767, -32.768, direct_cfg.axial_direct_n_per_v),
+			force_direct_calibration::fn_1_slope_n_per_count * 65535.0,
+			1e-10) &&
+			nearly_equal(32.767 - (-32.768), int16_full_span_v, 1e-12),
+			"INT16极值先转double再做差");
+
+		ForceCalibrationConfig limited_cfg;
+		check(nearly_equal(limited_cfg.f_max_n, 5.0, 1e-12) &&
+			nearly_equal(limited_cfg.t_max_nm, 0.020, 1e-12),
+			"用户指定运行限幅为正负5N和正负20Nmm");
+		ForceCalibrationState origin_zero;
+		origin_zero.zeroed = true;
+		const CalibratedForce limited_feedback = calibrate_force(
+			10.0, 20.0, 0.0, limited_cfg, origin_zero);
+		const CalibratedForce negative_limited_feedback = calibrate_force(
+			-10.0, -20.0, 0.0, limited_cfg, origin_zero);
+		check(nearly_equal(limited_feedback.f_feedback_n, limited_cfg.f_max_n, 1e-12) &&
+			nearly_equal(limited_feedback.t_feedback_nm, limited_cfg.t_max_nm, 1e-12) &&
+			nearly_equal(negative_limited_feedback.f_feedback_n, -limited_cfg.f_max_n, 1e-12) &&
+			nearly_equal(negative_limited_feedback.t_feedback_nm, -limited_cfg.t_max_nm, 1e-12),
+			"导管F_direct反馈按运行上限正负限幅");
+		const CalibratedForce guidewire_limited_feedback = calibrate_guidewire_force(
+			20.0, 20.0, 0.0, limited_cfg, origin_zero);
+		const CalibratedForce guidewire_negative_limited_feedback = calibrate_guidewire_force(
+			-20.0, -20.0, 0.0, limited_cfg, origin_zero);
+		check(nearly_equal(
+			guidewire_limited_feedback.f_feedback_n, limited_cfg.f_max_n, 1e-12) &&
+			nearly_equal(
+				guidewire_limited_feedback.t_feedback_nm, limited_cfg.t_max_nm, 1e-12) &&
+			nearly_equal(
+				guidewire_negative_limited_feedback.f_feedback_n, -limited_cfg.f_max_n, 1e-12) &&
+			nearly_equal(
+				guidewire_negative_limited_feedback.t_feedback_nm, -limited_cfg.t_max_nm, 1e-12),
+			"导丝F_direct反馈按运行上限正负限幅");
 
 		std::array<OriginalCalibration, kSensorCount> report_originals;
 		std::array<SensorResult, kSensorCount> report_results;

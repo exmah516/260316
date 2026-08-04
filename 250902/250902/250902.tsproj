@@ -3504,6 +3504,14 @@ External Setpoint Generation:
 							<Type GUID="{25521FAA-EA5F-4C7F-8864-BBCCDACD2E98}" Namespace="MC">NCTOPLC_AXIS_REF</Type>
 						</Var>
 						<Var>
+							<Name>G.inject_axis[1].NcToPlc</Name>
+							<Type GUID="{25521FAA-EA5F-4C7F-8864-BBCCDACD2E98}" Namespace="MC">NCTOPLC_AXIS_REF</Type>
+						</Var>
+						<Var>
+							<Name>G.inject_axis[2].NcToPlc</Name>
+							<Type GUID="{25521FAA-EA5F-4C7F-8864-BBCCDACD2E98}" Namespace="MC">NCTOPLC_AXIS_REF</Type>
+						</Var>
+						<Var>
 							<Name>G.ft_1_value</Name>
 							<Type>INT</Type>
 						</Var>
@@ -3568,6 +3576,14 @@ External Setpoint Generation:
 						</Var>
 						<Var>
 							<Name>G.arm_axis[5].PlcToNc</Name>
+							<Type GUID="{96B75FEB-2D84-43BE-A3EC-D9A681F27D52}" Namespace="MC">PLCTONC_AXIS_REF</Type>
+						</Var>
+						<Var>
+							<Name>G.inject_axis[1].PlcToNc</Name>
+							<Type GUID="{96B75FEB-2D84-43BE-A3EC-D9A681F27D52}" Namespace="MC">PLCTONC_AXIS_REF</Type>
+						</Var>
+						<Var>
+							<Name>G.inject_axis[2].PlcToNc</Name>
 							<Type GUID="{96B75FEB-2D84-43BE-A3EC-D9A681F27D52}" Namespace="MC">PLCTONC_AXIS_REF</Type>
 						</Var>
 						<Var>
@@ -7353,6 +7369,14 @@ External Setpoint Generation:
 			<OwnerB Name="TINC^NC-Task 1 SAF^Axes^Axis 12">
 				<Link VarA="PlcTask Inputs^G.axis[7].NcToPlc" VarB="Outputs^ToPlc"/>
 				<Link VarA="PlcTask Outputs^G.axis[7].PlcToNc" VarB="Inputs^FromPlc"/>
+			</OwnerB>
+			<OwnerB Name="TINC^NC-Task 1 SAF^Axes^Axis 13">
+				<Link VarA="PlcTask Inputs^G.inject_axis[1].NcToPlc" VarB="Outputs^ToPlc"/>
+				<Link VarA="PlcTask Outputs^G.inject_axis[1].PlcToNc" VarB="Inputs^FromPlc"/>
+			</OwnerB>
+			<OwnerB Name="TINC^NC-Task 1 SAF^Axes^Axis 14">
+				<Link VarA="PlcTask Inputs^G.inject_axis[2].NcToPlc" VarB="Outputs^ToPlc"/>
+				<Link VarA="PlcTask Outputs^G.inject_axis[2].PlcToNc" VarB="Inputs^FromPlc"/>
 			</OwnerB>
 			<OwnerB Name="TINC^NC-Task 1 SAF^Axes^Axis 2">
 				<Link VarA="PlcTask Inputs^G.arm_axis[2].NcToPlc" VarB="Outputs^ToPlc"/>
