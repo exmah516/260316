@@ -350,6 +350,13 @@ int main(int argc, char* argv[])
 	double axis1_return_settle_rel = 0.0;
 	double axis6_return_entry_rel = 0.0;
 	double axis6_return_settle_rel = 0.0;
+	// axis6 换手诊断：区分重复下发回退与回退到位后的非手柄反向运动。
+	std::uint64_t axis6_return_diag_sequence = 0;
+	bool axis6_return_diag_active = false;
+	bool axis6_return_diag_seen_target = false;
+	bool axis6_return_diag_departure_logged = false;
+	double axis6_return_diag_target_abs = 0.0;
+	DWORD axis6_return_diag_started_ms = 0;
 	// axis6 回退后采用“同方向重入”门控，避免刚回退完就立刻重复触发。
 	// axis1 回退期间，镜像轴(3/5)保持在回退触发时刻的值。
 	double axis1_return_hold_axis3_rel = 0.0;
@@ -1432,6 +1439,11 @@ int main(int argc, char* argv[])
 					axis6_effective_reverse_pressed ? axis6_crawl.end_abs : axis6_crawl.start_abs;
 				axis6_reverse_switch_guard_active =
 					(std::abs(axis6_abs_now_for_guard - axis6_new_trigger_edge_abs) <= cfg.reverse_switch_trigger_guard_mm);
+				// 模式切换不应把切换前遗留的低通滤波增量当成新手柄输入。
+				axis6_prev_linear_filtered = axis6_handle_filter.axis0_filtered;
+				axis6_prev_rot_filtered = axis6_handle_filter.axis1_filtered;
+				axis6_prev_abs_for_trigger = axis6_abs_now_for_guard;
+				axis6_prev_abs_valid = true;
 				if (axis6_reverse_switch_guard_active)
 				{
 					std::cout
@@ -1977,6 +1989,45 @@ int main(int argc, char* argv[])
 				axis3_from_left_mm <= (cfg.axis3_delivery_stop_from_left_mm + cfg.crawl_arrive_tol_mm);
 
 			const double axis6_abs = plc_act_pos[5] + plc_init_pos[5]; // 轴6绝对位置(mm)
+			const bool axis6_return_diag_in_progress =
+				axis6_crawl.phase == CrawlState::Phase::SwitchWait ||
+				axis6_crawl.phase == CrawlState::Phase::FastMove ||
+				axis6_crawl.phase == CrawlState::Phase::RestoreWait;
+			if (axis6_return_diag_active && axis6_return_diag_in_progress)
+			{
+				constexpr double axis6_diag_target_tol_mm = 0.5;
+				constexpr double axis6_diag_departure_mm = 1.0;
+				constexpr DWORD axis6_diag_observe_ms = 1200;
+				const double axis6_diag_distance_mm =
+					std::abs(axis6_abs - axis6_return_diag_target_abs);
+				if (axis6_diag_distance_mm <= axis6_diag_target_tol_mm)
+				{
+					axis6_return_diag_seen_target = true;
+				}
+				else if (axis6_return_diag_seen_target &&
+					!axis6_return_diag_departure_logged &&
+					axis6_diag_distance_mm >= axis6_diag_departure_mm)
+				{
+					axis6_return_diag_departure_logged = true;
+					std::cout << "[AXIS6-DIAG] #" << axis6_return_diag_sequence
+						<< " 异常：已到回退目标后再次向"
+						<< (axis6_abs < axis6_return_diag_target_abs ? "左" : "右")
+						<< "离开，actual_abs=" << axis6_abs
+						<< ", target_abs=" << axis6_return_diag_target_abs
+						<< ", deviation=" << axis6_diag_distance_mm
+						<< " mm，phase=" << static_cast<int>(axis6_crawl.phase)
+						<< std::endl;
+				}
+				if (now_ms - axis6_return_diag_started_ms >= axis6_diag_observe_ms)
+				{
+					axis6_return_diag_active = false;
+				}
+			}
+			else if (axis6_return_diag_active)
+			{
+				// 已恢复 Follow 后的正常下一段运动不属于回退收尾异常。
+				axis6_return_diag_active = false;
+			}
 			if (axis6_soft_limit_reason == Axis6SoftLimitReason::ActualPosition &&
 				!axis6_target_exceeds_soft_limit(axis6_abs))
 			{
@@ -2173,6 +2224,10 @@ int main(int argc, char* argv[])
 				{
 					cooperative_return_owner = CooperativeReturnOwner::None;
 				}
+				std::cout << "[AXIS6-TRACE] 回退后重同步完成：mode="
+					<< (guidewire_mode == GuidewireMode::Cooperative ? "cooperative" : "independent")
+					<< ", actual_abs=" << (plc_act_pos[5] + plc_init_pos[5])
+					<< ", follow_cmd_abs=" << axis6_follow_cmd_abs << std::endl;
 				return true;
 			};
 
@@ -2278,13 +2333,12 @@ int main(int argc, char* argv[])
 						{
 							axis6_reverse_switch_guard_active = false;
 						}
-						const bool axis6_switch_guard_blocked =
-							axis6_reverse_switch_guard_active &&
-							(std::abs(axis6_abs - axis6_trigger_edge_abs) <= cfg.reverse_switch_trigger_guard_mm);
 						const bool axis6_toward_trigger =
 							axis6_reverse_mode ? (axis6_increment_mm > 0.0) : (axis6_increment_mm < 0.0);
 						const bool axis6_trigger_user_ok =
 							(!require_user_increment_for_trigger) || axis6_user_increment_active;
+						const bool axis6_at_trigger_edge =
+							std::abs(axis6_abs - axis6_trigger_edge_abs) <= cfg.crawl_arrive_tol_mm;
 						const double axis6_prev_abs = axis6_prev_abs_valid ? axis6_prev_abs_for_trigger : axis6_abs;
 						// 按运动方向判断是否到达或跨过触发边，避免两个 ADS 采样点跨过窄容差窗时漏触发。
 						const bool axis6_enter_trigger_edge = axis6_reverse_mode
@@ -2292,13 +2346,29 @@ int main(int argc, char* argv[])
 								(axis6_abs >= (axis6_trigger_edge_abs - cfg.crawl_arrive_tol_mm)))
 							: ((axis6_prev_abs > (axis6_trigger_edge_abs + cfg.crawl_arrive_tol_mm)) &&
 								(axis6_abs <= (axis6_trigger_edge_abs + cfg.crawl_arrive_tol_mm)));
+						// 在窗口端点切换递送/撤出时，正确方向的手柄输入会被窗口夹住，
+						// 无法满足“从窗口内部进入”的普通触发条件。此处仅允许切换后的
+						// 首次有效同向输入消耗保护并触发一次换手；切换本身不会产生运动。
+						const bool axis6_guarded_edge_input =
+							axis6_reverse_switch_guard_active &&
+							axis6_at_trigger_edge &&
+							axis6_increment_active &&
+							axis6_toward_trigger &&
+							axis6_trigger_user_ok;
+						const bool axis6_switch_guard_blocked =
+							axis6_reverse_switch_guard_active && !axis6_guarded_edge_input &&
+							(std::abs(axis6_abs - axis6_trigger_edge_abs) <= cfg.reverse_switch_trigger_guard_mm);
+						if (axis6_guarded_edge_input)
+						{
+							axis6_reverse_switch_guard_active = false;
+						}
 						// 独立导丝每个方向只有一个换手触发边：必须由窗口内部实际进入该边。
-						// 不能因停在边界后持续推手柄重复触发，否则会造成回退往复。
+						// 不能因停在边界后持续推手柄重复触发；方向切换后的一次性边界输入除外。
 						axis6_ready_to_trigger =
 							axis6_trigger_user_ok &&
 							axis6_increment_active &&
 							axis6_toward_trigger &&
-							axis6_enter_trigger_edge &&
+							(axis6_enter_trigger_edge || axis6_guarded_edge_input) &&
 							!axis6_switch_guard_blocked;
 					}
 					if (axis6_ready_to_trigger &&
@@ -2342,6 +2412,28 @@ int main(int argc, char* argv[])
 						}
 						axis6_crawl.target_abs = axis6_return_target_abs;
 						axis6_return_entry_rel = plc_act_pos[5];
+						++axis6_return_diag_sequence;
+						axis6_return_diag_active = true;
+						axis6_return_diag_seen_target = false;
+						axis6_return_diag_departure_logged = false;
+						axis6_return_diag_target_abs = axis6_return_target_abs;
+						axis6_return_diag_started_ms = now_ms;
+						std::cout << "[AXIS6-DIAG] #" << axis6_return_diag_sequence
+							<< " 回退命令：mode="
+							<< (cooperative_axis6_mode ? "cooperative" : "independent")
+							<< ", reverse=" << (axis6_reverse_mode ? "TRUE" : "FALSE")
+							<< ", actual_abs=" << axis6_abs
+							<< ", target_abs=" << axis6_return_target_abs
+							<< std::endl;
+						std::cout << "[AXIS6-TRACE] 换手触发：mode="
+							<< (cooperative_axis6_mode ? "cooperative" : "independent")
+							<< ", reverse=" << (axis6_reverse_mode ? "TRUE" : "FALSE")
+							<< ", actual_abs=" << axis6_abs
+							<< ", target_abs=" << axis6_return_target_abs
+							<< ", window=[" << axis6_window_left_abs_now
+							<< ", " << axis6_window_right_abs_now << "]"
+							<< ", increment=" << axis6_increment_mm
+							<< std::endl;
 						clear_cylinder_manual_overrides("axis6 自动换手");
 						axis6_crawl.phase = CrawlState::Phase::SwitchWait;
 						if (cooperative_axis6_mode)
@@ -2400,6 +2492,9 @@ int main(int argc, char* argv[])
 							cfg.axis6_return_jerk_mm_s3))
 						{
 							axis6_crawl.plc_move_requested = true;
+							std::cout << "[AXIS6-TRACE] PLC 回退请求已下发：target_abs="
+								<< axis6_crawl.target_abs
+								<< ", actual_abs=" << axis6_abs << std::endl;
 						}
 						else
 						{
@@ -2441,18 +2536,10 @@ int main(int argc, char* argv[])
 							axis6_crawl.phase_t0 = now_ms;
 							axis6_crawl.cyl_seq_stage = 0;
 							axis6_crawl.cyl_seq_t0 = now_ms;
+							std::cout << "[AXIS6-TRACE] PLC 回退完成：actual_abs="
+								<< axis6_abs << ", target_abs=" << axis6_crawl.target_abs
+								<< "，正在恢复夹爪并重同步。" << std::endl;
 						}
-					}
-					if (axis6_crawl.phase == CrawlState::Phase::FastMove &&
-						std::abs(axis6_abs - axis6_crawl.target_abs) <= cfg.crawl_arrive_tol_mm)
-					{
-						clear_axis_return_request(AdsSymbol::axis6_return);
-						axis6_crawl.plc_move_requested = false;
-						axis6_return_settle_rel = axis6_crawl.target_abs - plc_init_pos[5];
-						axis6_crawl.phase = CrawlState::Phase::RestoreWait;
-						axis6_crawl.phase_t0 = now_ms;
-						axis6_crawl.cyl_seq_stage = 0;
-						axis6_crawl.cyl_seq_t0 = now_ms;
 					}
 				}
 				else if (axis6_crawl.phase == CrawlState::Phase::RestoreWait)

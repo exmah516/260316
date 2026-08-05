@@ -529,6 +529,13 @@ FOR i:=1 TO 7 DO
 			return_finish_error[i] := FALSE;
 			return_error_id_pending[i] := 0;
 		ELSIF (NOT G.return_cmd[i].Done) AND (NOT G.return_cmd[i].Error) THEN
+			// Req 由上位机在完整写入参数后最后置位；此处只锁存一次，
+			// 本次 MC_MoveAbsolute 后续不再直接读取可被 ADS 改写的命令参数。
+			return_target_abs[i] := G.return_cmd[i].TargetAbs;
+			return_velocity[i] := G.return_cmd[i].Velocity;
+			return_acc[i] := G.return_cmd[i].Acc;
+			return_dec[i] := G.return_cmd[i].Dec;
+			return_jerk[i] := G.return_cmd[i].Jerk;
 			return_state[i] := 10;
 		END_IF
 	END_IF
@@ -545,11 +552,6 @@ FOR i:=1 TO 7 DO
 	20:
 		G.return_cmd[i].Busy := TRUE;
 		return_exec[i] := TRUE;
-		return_target_abs[i] := G.return_cmd[i].TargetAbs;
-		return_velocity[i] := G.return_cmd[i].Velocity;
-		return_acc[i] := G.return_cmd[i].Acc;
-		return_dec[i] := G.return_cmd[i].Dec;
-		return_jerk[i] := G.return_cmd[i].Jerk;
 		G.refer_from_left[i] := return_target_abs[i] - G.leftlimit[i];
 
 		IF fb_return_move_abs[i].Done OR
@@ -580,23 +582,28 @@ FOR i:=1 TO 7 DO
 			traj_pos[i] := G.Act_pos[i];
 			traj_vel[i] := 0.0;
 			traj_acc[i] := 0.0;
-			spg_enable_exec[i] := TRUE;
-			IF G.SetPointGenEnable[i].Done THEN
-				ext_setpoint_enabled[i] := TRUE;
-				G.return_cmd[i].Busy := FALSE;
-				IF return_finish_error[i] THEN
-					G.return_cmd[i].Done := FALSE;
-					G.return_cmd[i].Error := TRUE;
-					G.return_cmd[i].ErrorId := return_error_id_pending[i];
-				ELSE
-					G.return_cmd[i].Done := TRUE;
-					G.return_cmd[i].Error := FALSE;
-					G.return_cmd[i].ErrorId := 0;
-				END_IF
-				return_finish_error[i] := FALSE;
-				return_error_id_pending[i] := 0;
-				return_state[i] := 0;
+			// 先留出一个完整 PLC 扫描周期预送当前设定值，再重新使能外部设定值发生器。
+			return_state[i] := 31;
+		END_IF
+
+	31:
+		G.return_cmd[i].Busy := TRUE;
+		spg_enable_exec[i] := TRUE;
+		IF G.SetPointGenEnable[i].Done THEN
+			ext_setpoint_enabled[i] := TRUE;
+			G.return_cmd[i].Busy := FALSE;
+			IF return_finish_error[i] THEN
+				G.return_cmd[i].Done := FALSE;
+				G.return_cmd[i].Error := TRUE;
+				G.return_cmd[i].ErrorId := return_error_id_pending[i];
+			ELSE
+				G.return_cmd[i].Done := TRUE;
+				G.return_cmd[i].Error := FALSE;
+				G.return_cmd[i].ErrorId := 0;
 			END_IF
+			return_finish_error[i] := FALSE;
+			return_error_id_pending[i] := 0;
+			return_state[i] := 0;
 		END_IF
 	END_CASE
 END_FOR
@@ -727,7 +734,9 @@ FOR i:=1 TO 7 DO
 END_FOR
 
 FOR i:=1 TO 7 DO
-	IF ext_setpoint_enabled[i] THEN
+	// 计划回退结束后，状态 31 的预送周期和 SetPointGenEnable 过渡周期都必须喂入当前设定值。
+	// 否则 NC 重新接管时会短暂使用禁用前遗留的左窗口设定值，造成约一个窗口宽度的反向尖峰。
+	IF ext_setpoint_enabled[i] OR (return_state[i] = 31) OR spg_enable_exec[i] THEN
 		IF traj_enable[i] AND NOT G.startup_smoothing_bypass THEN
 			pos_abs := traj_pos[i] + G.init_pos[i];
 			MC_ExtSetPointGenFeed(
