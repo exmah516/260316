@@ -19,7 +19,8 @@ namespace
 
 	constexpr const char* kForceHeader =
 		"sample_index,elapsed_us,sample_valid,calibrated_valid,"
-		"fn_1_raw_v,ft_1_raw_v,fn_1_zero_v,ft_1_zero_v,clean_force_n,clean_handle_torque_nm\n";
+		"fn_1_raw_v,ft_1_raw_v,fn_1_zero_v,ft_1_zero_v,clean_force_n,clean_handle_torque_nm,"
+		"fn_2_raw_v,ft_2_raw_v,fn_2_zero_v,ft_2_zero_v,clean_force_2_n,clean_handle_torque_2_nm\n";
 	constexpr const char* kMotionHeader =
 		"sample_index,elapsed_us,position_valid,"
 		"axis1_from_left_mm,axis2_from_left_mm,axis3_from_left_mm,axis4_from_left_mm,"
@@ -243,6 +244,12 @@ void ExperimentRecorder::normalize_force_row(ForceCsvRow& row)
 		row.ft_1_zero_v = nan;
 		row.clean_force_n = nan;
 		row.clean_handle_torque_nm = nan;
+		row.fn_2_raw_v = nan;
+		row.ft_2_raw_v = nan;
+		row.fn_2_zero_v = nan;
+		row.ft_2_zero_v = nan;
+		row.clean_force_2_n = nan;
+		row.clean_handle_torque_2_nm = nan;
 		return;
 	}
 	if (!row.calibrated_valid)
@@ -251,6 +258,10 @@ void ExperimentRecorder::normalize_force_row(ForceCsvRow& row)
 		row.ft_1_zero_v = nan;
 		row.clean_force_n = nan;
 		row.clean_handle_torque_nm = nan;
+		row.fn_2_zero_v = nan;
+		row.ft_2_zero_v = nan;
+		row.clean_force_2_n = nan;
+		row.clean_handle_torque_2_nm = nan;
 	}
 }
 
@@ -306,7 +317,9 @@ bool ExperimentRecorder::write_force_row(std::FILE* fp, const ForceCsvRow& row)
 	}
 	const double values[] = {
 		normalized.fn_1_raw_v, normalized.ft_1_raw_v, normalized.fn_1_zero_v, normalized.ft_1_zero_v,
-		normalized.clean_force_n, normalized.clean_handle_torque_nm
+		normalized.clean_force_n, normalized.clean_handle_torque_nm,
+		normalized.fn_2_raw_v, normalized.ft_2_raw_v, normalized.fn_2_zero_v, normalized.ft_2_zero_v,
+		normalized.clean_force_2_n, normalized.clean_handle_torque_2_nm
 	};
 	for (std::size_t i = 0; i < sizeof(values) / sizeof(values[0]); ++i)
 	{

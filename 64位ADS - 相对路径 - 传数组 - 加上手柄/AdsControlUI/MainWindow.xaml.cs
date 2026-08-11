@@ -294,14 +294,16 @@ namespace AdsControlUI
                 return;
             }
 
-            if (leadMm < -10.0 || leadMm > 10.0)
+            if (leadMm < 0.0 || leadMm > 10.0)
             {
-                Axis1LeadError.Text = "轴1回退后先行量必须在 -10 到 10 mm 之间。";
+                Axis1LeadError.Text = "轴1回退完成后的自动先行量必须在 0 到 10 mm 之间。";
                 return;
             }
 
             _vm.SetAxis1PostReturnLead(leadMm);
-            Axis1LeadError.Text = "先行量已发送；正值沿递送方向，负值反向。";
+            Axis1LeadError.Text = leadMm <= 0.0
+                ? "自动先行已关闭。"
+                : "自动先行量已发送，将沿递送方向执行。";
         }
 
         private void DirectControl_Click(object sender, RoutedEventArgs e) => _vm.SelectDirectControl();

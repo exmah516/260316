@@ -3,9 +3,9 @@
 > 本文档梳理上位机与倍福 PLC 之间的 ADS 通讯实现：连接、符号表、读写封装、断线/重同步路径，以及与主循环的契约。
 > 修改 `ads_communication.cpp/.h`、`plc_io.cpp/.h`、`ADSComm.cpp`、`sensor_calibration_experiment.cpp/.h`、符号表、或新增 PLC 变量时，请同步在最末"变更日志"追加条目。
 
-更新时间：2026-08-04
+更新时间：2026-08-11
 适用工程：`64位ADS - 相对路径 - 传数组 - 加上手柄\ADS.sln`
-对应代码版本：2026-08-04 当前工作区（100 Hz 主链路、定位臂 20 Hz 独立 ADS 服务与 WPF 控制）
+对应代码版本：2026-08-11 当前工作区（100 Hz 主链路、定位臂 20 Hz 独立 ADS 服务与 WPF 控制）
 
 ***
 
@@ -100,15 +100,17 @@ PLC 统一使用 `G.return_cmd[1..7]` 数组；上位机将启用回退的第 1�
 | 字段 | PLC 符号模板 | 类型 | 读写 | 含义 |
 |---|---|---|---|---|
 | `req` | `G.return_cmd[N].Req` | bool | 写 | 触发位（true=下发一次回退） |
-| `busy` | `G.return_cmd[N].Busy` | bool | 读 | 正在执行 |
-| `done` | `G.return_cmd[N].Done` | bool | 读 | 完成 |
-| `error` | `G.return_cmd[N].Error` | bool | 读 | 报错 |
-| `error_id` | `G.return_cmd[N].ErrorId` | unsigned long | 读 | 错误码 |
+| `busy` | `G.return_cmd[N].Busy` | bool | axis1 Notification + 初值读；其他轴按需读 | 正在执行 |
+| `done` | `G.return_cmd[N].Done` | bool | axis1 Notification + 初值读；其他轴按需读 | 完成 |
+| `error` | `G.return_cmd[N].Error` | bool | axis1 Notification + 初值读；其他轴按需读 | 报错 |
+| `error_id` | `G.return_cmd[N].ErrorId` | unsigned long | axis1 Notification + 初值读；其他轴按需读 | 错误码 |
 | `target_abs` | `G.return_cmd[N].TargetAbs` | double | 写 | 目标绝对位置（mm） |
 | `velocity` | `G.return_cmd[N].Velocity` | double | 写 | 速度（mm/s） |
 | `acc` | `G.return_cmd[N].Acc` | double | 写 | 加速度（mm/s²） |
 | `dec` | `G.return_cmd[N].Dec` | double | 写 | 减速度（mm/s²） |
 | `jerk` | `G.return_cmd[N].Jerk` | double | 写 | 加加速度（mm/s³） |
+
+axis1 运行期计划回退结果由通信服务的 OnChange Notification 更新；回调除保存当前值外，还分别锁存最近一次 `Busy=TRUE`、`Done=FALSE`、`Done=TRUE` 与 `Error=TRUE` 的真实边沿序号，并锁存最近一次非零 `ErrorId`。前两者用于确认 PLC 已接收本次请求；主循环锁存请求后的第一个有效确认边沿，并要求最终 `Done=TRUE` 上升沿严格晚于该确认。故障只接受本次请求之后的新 Error 上升沿，不能被旧状态或 `ErrorId` 等无关通知代替。100 Hz 快速快照同时提供实际位置和 `NcToPlc.ActVelo`。axis1 主循环不再为了等待 `Done/Error` 每拍提交专项状态 Sum Read；axis6 等其他计划动作仍保留按需状态读取。
 
 ### 3.5 axis4 手动点动
 
@@ -207,7 +209,7 @@ if (ads.OpenCommInsideReadOnly()) {
 | `AdsCommunicationService::write_output_cycle` | 目标 100 Hz | 一次 Sum Write 始终写 `host_session_id` / `host_heartbeat_sequence`；运动有效时同包写 `refer` 和快退位，离散输出只在变化时追加，恢复握手按需追加 `host_recover_req`。 |
 | `read_plc_state` | 主循环按需复制 | 绑定通信服务后只复制最新有效位置快照和坐标缓存，不再发起新的 ADS 读取；无服务的兼容路径才直接 Sum Read。 |
 | `read_force_sample` | 力反馈/专项门控按需复制 | ADS 模式绑定通信服务后只复制最新有效力快照并完成 `INT -> V`；TCP_DAQ 模式另取 TCP worker 最新帧。 |
-| OnChange Notifications | 变量变化时 | `self_check_done`、重初始化、急停/看门狗、启动资格、axis4 状态和 `gen_state` 由回调更新；注册完成后先用一次 Sum Read 填充初值。回调线程只复制数据，不发起 ADS 请求。 |
+| OnChange Notifications | 变量变化时 | `self_check_done`、axis1 计划回退 Busy/Done/Error、重初始化、急停/看门狗、启动资格、axis4 状态和 `gen_state` 由回调更新；注册完成后先批量填充初值。回调线程只复制数据，不发起 ADS 请求。 |
 | `sensor_calibration_experiment::read_all_channels` | 仅 `--sensor-calibration` 实机模式；每点按单调时钟 50 ms 截止时间调度，目标 20 Hz、5 秒，共 100 次尝试 | 一次 `ADSReadSum` 同步读取 `ft_1 / fn_1 / fn_2 / ft_2` 四个 `short` 原始计数；错过截止时间后重建节拍而不突发追赶，不写 PLC 状态或变量，并在报告中记录实际耗时、尝试频率和调度超期次数；低于 18 Hz 强制重测。 |
 | 运行期专项请求队列 | 计划回退、启动准备和低频状态操作 | 主循环提交请求并等待有界结果；实际单项/Sum ADS 调用由通信工作线程执行，不与快速周期并发访问端口。 |
 | `read_v_limit` / `write_v_limit` | 启动准备 | 服务启动后经专项请求队列读 / 写 `G.v_limit`。 |
@@ -224,9 +226,10 @@ request_axis_return(symbols, target_abs, vel, acc, dec, jerk)
   // -> 一次 ADSWriteSum 写 5 个运动参数和 Req=false -> 下一事务 Req=true
   // 任一步失败都会保持 Req=false，上层保持实际位置并停止运动控制
 
-// 状态机需要时批量读取
-read_axis_return_status(symbols, status)
-  // 通信线程一次 ADSReadSum 读 Busy/Done/Error/ErrorId
+// 运行期状态更新
+AdsEventState.axis1_return_busy / axis1_return_done / axis1_return_error / axis1_return_error_id
+  // axis1 OnChange Notification 更新回退结果
+  // 100 Hz 快照的位置/速度用于到位与停稳确认
 
 // 完成或出错后
 clear_axis_return_request(symbols)
@@ -243,8 +246,7 @@ clear_axis_return_request(symbols)
 - 启动：自检完成或直接控制进入时 `sync_all(30)`。
 - PLC 主动请求：读到 `G.handle_reinit_req == true` -> 清除该位 + `sync_all(30)`。
 - PLC 急停保持解除：`sync_all(20)`。
-- 轴回退报错后：单轴 `sync_axis1(3)` 或 `sync_axis6(3, ...)`。
-- 轴回退正常完成 RestoreWait 阶段后：单轴 sync。
+- axis1 正常回退完成与自动先行完成：使用当前新鲜 100 Hz 快照和已滤波手柄值执行非阻塞内存基准重建，不再调用 `sync_axis1(3)`；axis6 及故障恢复路径仍按各自安全流程同步。
 - 导丝模式进入前：先清 `G.return_cmd[6].Req` 并确认 `Busy=false`，随后执行 `sync_axis6` 或独立模式同步；退出时执行 `sync_axis1`。
 - 主循环兜底：`startup.completed && !control_active && !freeze && !estop_hold` 时每拍 `sync_all(20)` 尝试恢复。
 
@@ -261,7 +263,7 @@ clear_axis_return_request(symbols)
 | 设备状态检查 | 每 10 个通信周期，约 100 ms | 确认仍为 `ADSSTATE_RUN`；非 RUN 按 PLC 重启/停机处理 |
 | 首次失败软保持 | 第 1 个失败周期立即 | 停止发布运动有效命令、清力反馈并丢弃故障期间手柄增量，但暂不关闭连接 |
 | 硬超时与重连 | 距最后完整成功 100 ms | 关闭端口并按 `250/500/1000/2000 ms` 上限退避重连 |
-| OnChange Notifications | 状态变化触发 | 替代旧的主循环分频轮询；回调只更新内存状态 |
+| OnChange Notifications | 状态变化触发 | 更新 axis1 计划回退结果及其他低频状态，替代对应的主循环轮询；回调只更新内存状态 |
 | 定位臂 `G.arm_*` | C++ `ArmManualAdsService` 独立 20 Hz | 命令仅在变化时 Sum Write，状态批量 Sum Read；与 7 轴 100 Hz 服务解耦。ADS 不健康、主机看门狗超时或程序退出时撤销总使能、单轴上电与点动请求。 |
 
 ### 6.1 WPF ADS 诊断
@@ -280,10 +282,11 @@ clear_axis_return_request(symbols)
 - 第一次快照或输出失败即进入 `SoftHold`：保持最后参考、停止把运动命令标记为有效、清力反馈，并在恢复前丢弃手柄增量，避免断线期间位移一次性补入。
 - 若 100 ms 内恢复完整读写，连接可直接回到 `Running`；主循环从实际位置重建 refer 和手柄基准。
 - 若持续 100 ms 未完整成功，服务关闭 ADS 端口并自动重连。**同一运行实例的链路重连**会刷新坐标缓存、执行 PLC 看门狗恢复握手，取消中断中的计划回退、屈曲恢复、力过渡和 PI 瞬态，但保留稳定模式与方向。
+- 小于 100 ms 的短时 ADS 软保持恢复同样只恢复稳定模式：重新建立实际位置和手柄基准后，明确清除回退握手、交接 generation 与自动先行阶段，不续跑断拍前的瞬态。
 - **PLC 重启/应用重载**不是普通链路重连：设备非 RUN、DcTaskTime/CycleCount 回退或应用名变化都会进入 `PlcRestarted`。上位机清除力零点、关闭力反馈和 PI、退出控制并锁定启动，必须重新完成 PLC 自检、力感调零和人工启动。
 - PLC 看门狗超时后，即使 ADS 已重新连上，也必须等心跳恢复、PLC 受控停止完成并完成 `host_recover_req -> handle_reinit_req -> handle_reinit_done` 握手，不能直接续跑旧运动。
 - `request_axis_return` 中间任意一步写失败，会 `clear_axis_return_request` 后返回 false，下一拍重试。
-- `read_axis_return_status` 的批量读取失败时返回 false，不使用不完整的 Busy/Done/Error 拼接结果。
+- 计划回退状态的 Notification 注册或初值读取失败时不拼接不完整的 Busy/Done/Error；通信服务按连接故障路径处理，主循环保持实际位置。暂停、急停、自检重建或 ADS 故障取消活动换手时，会一次性清除轴群回退请求、两轴状态和快退标志；只有本拍存在新鲜快照时才按实际位置非阻塞重建基准。清请求失败会进入回退 ADS 故障保持，并在通信恢复后按 250 ms 间隔重试清除，禁止把主机侧“已清理”误当成 PLC 已接受取消。
 - 无效的 100 Hz 快照仍进入主机侧记录队列，CSV 以有效位和 `NaN` 表达空洞；不会让后续新鲜数据伪装成故障时刻的数据。
 - 标定工具将一次四路 `ADSReadSum` 失败计为一次 ADS 失败，该时刻四路数据均不进入统计，不用不完整快照拼接样本。每点完成 100 次采样尝试后，目标通道经"中位数 ±300 counts"过滤的有效样本少于 80 个时必须重测。
 - 标定工具连接失败、设备状态不是 `ADSSTATE_RUN` 或状态读取失败时不会开始实验，并尽量保存带 `_未完成` 后缀的连接诊断 TXT；用户在任一交互阶段中止时也保存 `_未完成` 文件。只要四路整体未完成，报告就抑制全部拟合公式、`可用` 结论和部署建议。
@@ -317,12 +320,6 @@ clear_axis_return_request(symbols)
 5. 若改了连接拓扑（如新增冗余 NetId、TLS），更新 §1 拓扑图 + §4 连接建立。
 
 ## 10. 变更日志
-
-### 2026-08-04 — 四路 ADS 电压进入双手柄力反馈
-- 作者：AI（Codex）。
-- 行为变化：ADS 四路 `INT16` 均在 `ForceSampleFrame` 中转换为电压；传感器2/1驱动导管582，传感器3/4驱动导丝587，一次ADS调零同步保存四路零点。
-- 边界：TCP采集卡仍只确认 `v[0]/v[1]`，不推测 `v[2]/v[3]` 的物理映射，因此继续拒绝TCP调零和本次F_direct反馈。
-- 运行限幅：按用户要求为轴向 `±5 N`、扭矩 `±20 N·mm`；该数值超过0–50g标定验证范围。
 
 ### 2026-08-03 — 实机 F_direct 接入正常力反馈
 - 作者：AI（Codex）。
@@ -393,8 +390,8 @@ clear_axis_return_request(symbols)
 ### 2026-07-27 — axis6 软件限位状态与 axis1 回退后先行（无 PLC ADS 符号变更）
 - 作者：AI（Codex）。
 - 涉及文件：`main.cpp`、`control_types.h`、`vis_server.h`、`AdsControlUI/VisProtocol.cs`、`AdsControlUI/VisPipeClient.cs`、WPF 参数输入区。
-- 行为变化：axis6 的 `670 mm from-left` 保护完全在上位机控制层计算，未增加 ADS 读写符号。预测到 axis6 手柄/计划回退/axis1 联动回退的最终目标越限时，不写对应 PLC `return_cmd`，只阻断当前危险动作并在后续周期重新评估；实际位置越限时继续冻结相关链路，直到回到限制内。现有 PLC 与 NC 的硬限位、`G.refer[1..7]` 及定位臂通道均不改变。axis1 回退后先行量仅经本地命名管道写入 C++ 配置，不通过 ADS 下传到 PLC。
-- 协议变化：新增 `SetAxis1PostReturnLead=24`，`param1 = mm * 1000`，范围 `[-10,10]`；`VisState` 末尾追加 `bool axis6_soft_limit_hold`。Pack=1 布局由 327 字节扩展为 **328 字节**，C++ 与 WPF 必须同时更新并重启，禁止与 327 字节版本混用。
+- 行为变化：axis6 的 `670 mm from-left` 保护完全在上位机控制层计算，未增加 ADS 读写符号。预测到 axis6 手柄/计划回退/axis1 联动回退的最终目标越限时，不写对应 PLC `return_cmd`，只阻断当前危险动作并在后续周期重新评估；实际位置越限时继续冻结相关链路，直到回到限制内。现有 PLC 与 NC 的硬限位、`G.refer[1..7]` 及定位臂通道均不改变。axis1 回退完成后的自动先行量仅经本地命名管道写入 C++ 配置，不通过 ADS 下传到 PLC。
+- 协议变化：新增 `SetAxis1PostReturnLead=24`，`param1 = mm * 1000`；当前允许范围为 `[0,10]`，命令号未改变。`VisState` 末尾追加 `bool axis6_soft_limit_hold`。Pack=1 布局由 327 字节扩展为 **328 字节**，C++ 与 WPF 必须同时更新并重启，禁止与 327 字节版本混用。
 
 ### （此处持续追加）
 
@@ -408,3 +405,9 @@ clear_axis_return_request(symbols)
 - 作者：AI（Codex）。
 - 行为变化：上位机启动最终默认值改为 axis1/3/5/6=`20/649/649/650 mm`，标准启动中间 axis5/6 间距改为 `15 mm`，运行时 axis6 窗口改为 `[axis5+1,axis5+21]`。axis1/axis6 在重启或重同步后已到达/略微越过触发边时，可由新的有效同向输入重触发换手。
 - 接口影响：无新增或修改 ADS 符号；不改变 `G.refer[1..7]`、计划回退结构、TwinCAT 状态机、NC 映射、定位臂通道或 328 字节 WPF/C++ 管道布局。
+
+### 2026-08-11 — 计划回退状态 Notification 与 axis1 自动先行
+- 作者：AI（Codex）。
+- 通讯变化：axis1 计划回退的 Busy/Done/Error/ErrorId 改由 OnChange Notification 更新，实际位置与 `NcToPlc.ActVelo` 使用 100 Hz 快照；axis1 主循环不再按拍发起专项状态 Sum Read，其他轴的按需状态读取不变。
+- 运动变化：普通导管正向递送的 axis1 回退完成后自动执行 `[0,10] mm` 配置先行，默认 `1 mm`；取消先行前 `40 ms` 和到位后 `30 ms` 固定计时，改用新鲜快照、输出 generation 与连续到位样本驱动；回退前电缸 `50 ms` 稳定等待保留。
+- 接口影响：继续使用 `SetAxis1PostReturnLead=24`，命令号、`VisState` 与 PLC ADS 符号布局不变。

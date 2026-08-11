@@ -118,24 +118,11 @@ void process_force_feedback(
 	// 单手柄模式的两个逻辑角色会指向同一对象，此时只下发当前模式对应的一条命令。
 	if (&catheter_feedback_handle == &guidewire_feedback_handle)
 	{
-		if (guidewire_mode == GuidewireMode::Cooperative)
-		{
-			// 协同模式要求两只独立物理手柄；若上游门控失效则在此处安全归零。
-			out_cmd = ForceOutputCmd{};
-			ff.force_582_theory_f = 0.0;
-			ff.force_582_theory_n = 0.0;
-			ff.freeze_582_active = false;
-			ff.freeze_587_active = false;
-			catheter_feedback_handle.setforce_axis(0.0, cfg.axial_force_axis, 0.0);
-		}
-		else
-		{
-			const bool use_guidewire_output = guidewire_mode == GuidewireMode::Independent;
-			catheter_feedback_handle.setforce_axis(
-				use_guidewire_output ? out_cmd.force_587_f : out_cmd.force_582_f,
-				cfg.axial_force_axis,
-				use_guidewire_output ? out_cmd.force_587_n : out_cmd.force_582_n);
-		}
+		const bool use_guidewire_output = guidewire_mode != GuidewireMode::None;
+		catheter_feedback_handle.setforce_axis(
+			use_guidewire_output ? out_cmd.force_587_f : out_cmd.force_582_f,
+			cfg.axial_force_axis,
+			use_guidewire_output ? out_cmd.force_587_n : out_cmd.force_582_n);
 	}
 	else
 	{

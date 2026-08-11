@@ -157,7 +157,7 @@
                                    FontSize="11" Margin="6,0,6,4"
                                    TextWrapping="Wrap"/>
 
-                        <!-- 屈曲恢复与导管回退后的轴1先行量 -->
+                        <!-- 屈曲恢复与导管回退完成后的轴1自动先行量 -->
                         <Border BorderBrush="{StaticResource BorderBrush}"
                                 BorderThickness="0,1,0,0"
                                 Margin="2,6,2,0" Padding="0,10,0,0">
@@ -167,14 +167,14 @@
                                                   IsChecked="{Binding SpacingRecoveryActive, Mode=OneWay}"
                                                   Click="SpacingRecovery_Click"
                                                   MinWidth="112" MinHeight="38" Margin="0,0,12,0"/>
-                                    <TextBlock Text="回退后轴1先行量"
+                                    <TextBlock Text="回退完成后轴1自动先行量"
                                                Style="{StaticResource FieldLabelText}"
                                                VerticalAlignment="Center"
-                                               ToolTip="导管回退后轴1先行量，范围 -10~10 mm"/>
+                                               ToolTip="导管回退完成后轴1自动沿递送方向先行，范围 0~10 mm"/>
                                     <TextBox x:Name="TbAxis1PostReturnLead"
                                              Text="1.00" Width="72" Margin="8,2,0,2"
                                              VerticalContentAlignment="Center"
-                                             ToolTip="单位 mm，允许范围 -10~10"/>
+                                             ToolTip="单位 mm，允许范围 0~10；输入 0 可关闭自动先行"/>
                                     <Button Content="应用" Click="ApplyAxis1PostReturnLead_Click"
                                             Padding="12,7" Margin="8,0,0,0"/>
                                 </WrapPanel>

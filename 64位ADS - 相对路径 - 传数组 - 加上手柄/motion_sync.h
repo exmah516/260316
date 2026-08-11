@@ -27,6 +27,9 @@ namespace motion_sync
 	bool rebuild_axis6_window_from_axis5(AppContext& ctx, bool log_result);
 
 	bool sync_axis1(AppContext& ctx, int samples);
+	// 计划回退交接专用：使用当前100 Hz位置快照和已滤波手柄值重建内存基准，
+	// 不轮询手柄、不等待、不直接写ADS。
+	bool rebase_axis1_after_return(AppContext& ctx);
 	bool sync_axis6(
 		AppContext& ctx,
 		int samples,

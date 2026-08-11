@@ -32,6 +32,10 @@ namespace
 	constexpr std::uint32_t kNotifyAxis4Error = 9;
 	constexpr std::uint32_t kNotifyAxis4ErrorId = 10;
 	constexpr std::uint32_t kNotifyGenState = 11;
+	constexpr std::uint32_t kNotifyAxis1ReturnBusy = 12;
+	constexpr std::uint32_t kNotifyAxis1ReturnDone = 13;
+	constexpr std::uint32_t kNotifyAxis1ReturnError = 14;
+	constexpr std::uint32_t kNotifyAxis1ReturnErrorId = 15;
 
 	enum FastWriteHandleIndex : std::size_t
 	{
@@ -175,6 +179,7 @@ bool AdsCommunicationService::start(const double* initial_init_pos, const double
 		desired_output_ = AdsOutputCommand{};
 		has_desired_output_ = false;
 		has_last_sent_output_ = false;
+		desired_output_generation_ = 0;
 	}
 	if (initial_init_pos != nullptr && initial_leftlimit != nullptr)
 	{
@@ -242,11 +247,21 @@ void AdsCommunicationService::drain_snapshots(std::vector<AdsFastSnapshot>& snap
 	}
 }
 
-void AdsCommunicationService::publish_output(const AdsOutputCommand& command)
+std::uint64_t AdsCommunicationService::publish_output(const AdsOutputCommand& command)
 {
 	std::lock_guard<std::mutex> lock(output_mutex_);
+	++next_output_generation_;
+	// 0 保留为“尚未发布”，实际运行中几乎不可能回卷；即使回卷也跳过 0。
+	if (next_output_generation_ == 0) ++next_output_generation_;
 	desired_output_ = command;
+	desired_output_generation_ = next_output_generation_;
 	has_desired_output_ = true;
+	return desired_output_generation_;
+}
+
+std::uint64_t AdsCommunicationService::applied_output_generation() const
+{
+	return applied_output_generation_.load(std::memory_order_acquire);
 }
 
 void AdsCommunicationService::request_coordinate_refresh()
@@ -511,6 +526,9 @@ void AdsCommunicationService::on_notification(
 {
 	std::lock_guard<std::mutex> lock(event_mutex_);
 	bool updated = false;
+	const bool previous_axis1_return_busy = event_state_.axis1_return_busy;
+	const bool previous_axis1_return_done = event_state_.axis1_return_done;
+	const bool previous_axis1_return_error = event_state_.axis1_return_error;
 	switch (event_id)
 	{
 	case kNotifySelfCheckDone:
@@ -546,12 +564,63 @@ void AdsCommunicationService::on_notification(
 	case kNotifyGenState:
 		updated = notification_value(data, size, event_state_.gen_state);
 		break;
+	case kNotifyAxis1ReturnBusy:
+		updated = notification_value(data, size, event_state_.axis1_return_busy);
+		break;
+	case kNotifyAxis1ReturnDone:
+		updated = notification_value(data, size, event_state_.axis1_return_done);
+		break;
+	case kNotifyAxis1ReturnError:
+		updated = notification_value(data, size, event_state_.axis1_return_error);
+		break;
+	case kNotifyAxis1ReturnErrorId:
+		updated = notification_value(data, size, event_state_.axis1_return_error_id);
+		break;
 	default:
 		break;
 	}
 	if (updated && event_id < 32)
 	{
 		notification_update_mask_ |= (1u << event_id);
+	}
+	if (updated && event_id >= kNotifyAxis1ReturnBusy && event_id <= kNotifyAxis1ReturnErrorId)
+	{
+		++axis1_return_event_sequence_counter_;
+		if (axis1_return_event_sequence_counter_ == 0) ++axis1_return_event_sequence_counter_;
+		if (event_id == kNotifyAxis1ReturnBusy &&
+			!previous_axis1_return_busy && event_state_.axis1_return_busy)
+		{
+			event_state_.axis1_return_busy_true_sequence = axis1_return_event_sequence_counter_;
+		}
+		else if (event_id == kNotifyAxis1ReturnDone &&
+			previous_axis1_return_done != event_state_.axis1_return_done)
+		{
+			if (event_state_.axis1_return_done)
+			{
+				event_state_.axis1_return_done_true_sequence = axis1_return_event_sequence_counter_;
+			}
+			else
+			{
+				event_state_.axis1_return_done_false_sequence = axis1_return_event_sequence_counter_;
+			}
+		}
+		else if (event_id == kNotifyAxis1ReturnError &&
+			!previous_axis1_return_error && event_state_.axis1_return_error)
+		{
+			event_state_.axis1_return_error_true_sequence = axis1_return_event_sequence_counter_;
+		}
+		else if (event_id == kNotifyAxis1ReturnErrorId &&
+			event_state_.axis1_return_error_id != 0)
+		{
+			event_state_.axis1_return_last_nonzero_error_id =
+				event_state_.axis1_return_error_id;
+			event_state_.axis1_return_last_nonzero_error_id_sequence =
+				axis1_return_event_sequence_counter_;
+		}
+		LARGE_INTEGER now{};
+		QueryPerformanceCounter(&now);
+		event_state_.axis1_return_event_sequence = axis1_return_event_sequence_counter_;
+		event_state_.axis1_return_event_qpc_ticks = now.QuadPart;
 	}
 }
 
@@ -841,6 +910,7 @@ bool AdsCommunicationService::initialize_connection()
 	{
 		std::lock_guard<std::mutex> lock(event_mutex_);
 		event_state_ = AdsEventState{};
+		event_state_.axis1_return_event_sequence = axis1_return_event_sequence_counter_;
 		notification_update_mask_ = 0;
 	}
 	if (!register_notifications()) return false;
@@ -857,7 +927,11 @@ bool AdsCommunicationService::initialize_connection()
 		"G.axis4_manual_done",
 		AdsSymbol::axis4_manual_error,
 		AdsSymbol::axis4_manual_error_id,
-		AdsSymbol::gen_state
+		AdsSymbol::gen_state,
+		AdsSymbol::axis1_return.busy,
+		AdsSymbol::axis1_return.done,
+		AdsSymbol::axis1_return.error,
+		AdsSymbol::axis1_return.error_id
 	};
 	AdsEventState initial{};
 	const unsigned long lengths[] = {
@@ -866,13 +940,17 @@ bool AdsCommunicationService::initialize_connection()
 		sizeof(initial.host_comm_timeout), sizeof(initial.startup_loading_ready),
 		sizeof(initial.axis4_manual_busy), sizeof(initial.axis4_manual_done),
 		sizeof(initial.axis4_manual_error), sizeof(initial.axis4_manual_error_id),
-		sizeof(initial.gen_state)
+		sizeof(initial.gen_state), sizeof(initial.axis1_return_busy),
+		sizeof(initial.axis1_return_done), sizeof(initial.axis1_return_error),
+		sizeof(initial.axis1_return_error_id)
 	};
 	void* outputs[] = {
 		&initial.self_check_done, &initial.handle_reinit_req, &initial.handle_reinit_done,
 		&initial.estop_hold_req, &initial.host_comm_timeout, &initial.startup_loading_ready,
 		&initial.axis4_manual_busy, &initial.axis4_manual_done, &initial.axis4_manual_error,
-		&initial.axis4_manual_error_id, &initial.gen_state
+		&initial.axis4_manual_error_id, &initial.gen_state,
+		&initial.axis1_return_busy, &initial.axis1_return_done,
+		&initial.axis1_return_error, &initial.axis1_return_error_id
 	};
 	if (!ads_.ADSReadSum(symbols, lengths, outputs, _countof(symbols))) return false;
 	bool host_comm_timeout = false;
@@ -893,6 +971,39 @@ bool AdsCommunicationService::initialize_connection()
 		if (untouched(kNotifyAxis4Error)) event_state_.axis4_manual_error = initial.axis4_manual_error;
 		if (untouched(kNotifyAxis4ErrorId)) event_state_.axis4_manual_error_id = initial.axis4_manual_error_id;
 		if (untouched(kNotifyGenState)) event_state_.gen_state = initial.gen_state;
+		if (untouched(kNotifyAxis1ReturnBusy)) event_state_.axis1_return_busy = initial.axis1_return_busy;
+		if (untouched(kNotifyAxis1ReturnDone)) event_state_.axis1_return_done = initial.axis1_return_done;
+		if (untouched(kNotifyAxis1ReturnError)) event_state_.axis1_return_error = initial.axis1_return_error;
+		if (untouched(kNotifyAxis1ReturnErrorId)) event_state_.axis1_return_error_id = initial.axis1_return_error_id;
+		++axis1_return_event_sequence_counter_;
+		if (axis1_return_event_sequence_counter_ == 0) ++axis1_return_event_sequence_counter_;
+		if (event_state_.axis1_return_busy)
+		{
+			event_state_.axis1_return_busy_true_sequence = axis1_return_event_sequence_counter_;
+		}
+		if (!event_state_.axis1_return_done)
+		{
+			event_state_.axis1_return_done_false_sequence = axis1_return_event_sequence_counter_;
+		}
+		else
+		{
+			event_state_.axis1_return_done_true_sequence = axis1_return_event_sequence_counter_;
+		}
+		if (event_state_.axis1_return_error)
+		{
+			event_state_.axis1_return_error_true_sequence = axis1_return_event_sequence_counter_;
+		}
+		if (event_state_.axis1_return_error_id != 0)
+		{
+			event_state_.axis1_return_last_nonzero_error_id =
+				event_state_.axis1_return_error_id;
+			event_state_.axis1_return_last_nonzero_error_id_sequence =
+				axis1_return_event_sequence_counter_;
+		}
+		LARGE_INTEGER event_now{};
+		QueryPerformanceCounter(&event_now);
+		event_state_.axis1_return_event_sequence = axis1_return_event_sequence_counter_;
+		event_state_.axis1_return_event_qpc_ticks = event_now.QuadPart;
 		host_comm_timeout = event_state_.host_comm_timeout;
 		notification_update_mask_ = 0;
 	}
@@ -914,6 +1025,7 @@ bool AdsCommunicationService::resolve_fast_handles()
 	unsigned long cycle = 0;
 	unsigned long dc_time = 0;
 	unsigned long act_pos = 0;
+	unsigned long axis1_act_velocity = 0;
 	unsigned long ft_1 = 0;
 	unsigned long fn_1 = 0;
 	unsigned long fn_2 = 0;
@@ -923,6 +1035,7 @@ bool AdsCommunicationService::resolve_fast_handles()
 	if (!required_handle("TwinCAT_SystemInfoVarList._TaskInfo[1].CycleCount", cycle) ||
 		!required_handle("TwinCAT_SystemInfoVarList._TaskInfo[1].DcTaskTime", dc_time) ||
 		!required_handle(AdsSymbol::act_pos, act_pos) ||
+		!required_handle("G.axis[1].NcToPlc.ActVelo", axis1_act_velocity) ||
 		!required_handle(AdsSymbol::ft_1_value, ft_1) ||
 		!required_handle(AdsSymbol::fn_1_value, fn_1) ||
 		!required_handle(AdsSymbol::fn_2_value, fn_2) ||
@@ -935,17 +1048,19 @@ bool AdsCommunicationService::resolve_fast_handles()
 	}
 
 	fast_fallback_read_handles_ = {
-		cycle, dc_time, act_pos, ft_1, fn_1, fn_2, ft_2, estop, host_timeout, cycle
+		cycle, dc_time, act_pos, axis1_act_velocity,
+		ft_1, fn_1, fn_2, ft_2, estop, host_timeout, cycle
 	};
 	fast_direct_read_handles_[0] = cycle;
 	fast_direct_read_handles_[1] = dc_time;
-	fast_direct_read_handles_[9] = ft_1;
-	fast_direct_read_handles_[10] = fn_1;
-	fast_direct_read_handles_[11] = fn_2;
-	fast_direct_read_handles_[12] = ft_2;
-	fast_direct_read_handles_[13] = estop;
-	fast_direct_read_handles_[14] = host_timeout;
-	fast_direct_read_handles_[15] = cycle;
+	fast_direct_read_handles_[9] = axis1_act_velocity;
+	fast_direct_read_handles_[10] = ft_1;
+	fast_direct_read_handles_[11] = fn_1;
+	fast_direct_read_handles_[12] = fn_2;
+	fast_direct_read_handles_[13] = ft_2;
+	fast_direct_read_handles_[14] = estop;
+	fast_direct_read_handles_[15] = host_timeout;
+	fast_direct_read_handles_[16] = cycle;
 	use_direct_nc_position_ = true;
 	for (int axis = 0; axis < 7; ++axis)
 	{
@@ -1017,8 +1132,8 @@ bool AdsCommunicationService::read_fast_snapshot(AdsFastSnapshot& snapshot, bool
 	QueryPerformanceCounter(&before);
 	double nc_absolute[7] = {};
 	double relative_fallback[7] = {};
-	std::array<unsigned long, 16> lengths{};
-	std::array<void*, 16> outputs{};
+	std::array<unsigned long, 17> lengths{};
+	std::array<void*, 17> outputs{};
 	auto read_snapshot = [&](const unsigned long* handles, bool direct_nc_position)
 	{
 		std::size_t count = 0;
@@ -1041,6 +1156,7 @@ bool AdsCommunicationService::read_fast_snapshot(AdsFastSnapshot& snapshot, bool
 		{
 			append(sizeof(relative_fallback), relative_fallback);
 		}
+		append(sizeof(snapshot.axis1_act_velocity_mm_s), &snapshot.axis1_act_velocity_mm_s);
 		append(sizeof(snapshot.ft_1_value), &snapshot.ft_1_value);
 		append(sizeof(snapshot.fn_1_value), &snapshot.fn_1_value);
 		append(sizeof(snapshot.fn_2_value), &snapshot.fn_2_value);
@@ -1087,7 +1203,9 @@ bool AdsCommunicationService::read_fast_snapshot(AdsFastSnapshot& snapshot, bool
 			std::isfinite(snapshot.act_pos_rel[axis]) &&
 			std::isfinite(snapshot.act_pos_from_left[axis]);
 	}
-	snapshot.position_valid = positions_finite && snapshot.plc_cycle_span <= kMaxAcceptedPlcCycleSpan;
+	snapshot.position_valid = positions_finite &&
+		std::isfinite(snapshot.axis1_act_velocity_mm_s) &&
+		snapshot.plc_cycle_span <= kMaxAcceptedPlcCycleSpan;
 	snapshot.force_valid = snapshot.plc_cycle_span <= kMaxAcceptedPlcCycleSpan;
 	snapshot.valid = snapshot.position_valid && snapshot.force_valid;
 
@@ -1129,10 +1247,12 @@ bool AdsCommunicationService::write_output_cycle()
 	AdsOutputCommand last_sent_output{};
 	bool has_output = false;
 	bool has_last_sent_output = false;
+	std::uint64_t output_generation = 0;
 	{
 		std::lock_guard<std::mutex> lock(output_mutex_);
 		output = desired_output_;
 		has_output = has_desired_output_;
+		output_generation = desired_output_generation_;
 		last_sent_output = last_sent_output_;
 		has_last_sent_output = has_last_sent_output_;
 	}
@@ -1197,6 +1317,11 @@ bool AdsCommunicationService::write_output_cycle()
 		last_sent_output_ = output;
 		has_last_sent_output_ = true;
 	}
+	if (output_generation != 0)
+	{
+		// 仅在包含该命令语义的 Sum Write 成功后推进；发布更快时允许跳过中间代次。
+		applied_output_generation_.store(output_generation, std::memory_order_release);
+	}
 	return true;
 }
 
@@ -1220,7 +1345,11 @@ bool AdsCommunicationService::register_notifications()
 		{ "G.axis4_manual_done", sizeof(bool), kNotifyAxis4Done },
 		{ AdsSymbol::axis4_manual_error, sizeof(bool), kNotifyAxis4Error },
 		{ AdsSymbol::axis4_manual_error_id, sizeof(std::uint32_t), kNotifyAxis4ErrorId },
-		{ AdsSymbol::gen_state, sizeof(int), kNotifyGenState }
+		{ AdsSymbol::gen_state, sizeof(int), kNotifyGenState },
+		{ AdsSymbol::axis1_return.busy, sizeof(bool), kNotifyAxis1ReturnBusy },
+		{ AdsSymbol::axis1_return.done, sizeof(bool), kNotifyAxis1ReturnDone },
+		{ AdsSymbol::axis1_return.error, sizeof(bool), kNotifyAxis1ReturnError },
+		{ AdsSymbol::axis1_return.error_id, sizeof(std::uint32_t), kNotifyAxis1ReturnErrorId }
 	};
 	try
 	{
@@ -1292,6 +1421,7 @@ void AdsCommunicationService::clear_runtime_connection_state()
 		desired_output_ = AdsOutputCommand{};
 		has_desired_output_ = false;
 		has_last_sent_output_ = false;
+		desired_output_generation_ = 0;
 	}
 	{
 		std::lock_guard<std::mutex> lock(coordinate_mutex_);
@@ -1303,6 +1433,12 @@ void AdsCommunicationService::clear_runtime_connection_state()
 		// 断连时安全状态未知，按保持/超时有效处理，避免其他消费者误判为安全解除。
 		event_state_.estop_hold_req = true;
 		event_state_.host_comm_timeout = true;
+		++axis1_return_event_sequence_counter_;
+		if (axis1_return_event_sequence_counter_ == 0) ++axis1_return_event_sequence_counter_;
+		LARGE_INTEGER event_now{};
+		QueryPerformanceCounter(&event_now);
+		event_state_.axis1_return_event_sequence = axis1_return_event_sequence_counter_;
+		event_state_.axis1_return_event_qpc_ticks = event_now.QuadPart;
 		notification_update_mask_ = 0;
 	}
 }

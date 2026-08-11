@@ -35,6 +35,7 @@ struct AdsFastSnapshot
 	std::uint64_t rtt_us = 0;
 	double act_pos_rel[7] = {};
 	double act_pos_from_left[7] = {};
+	double axis1_act_velocity_mm_s = 0.0;
 	short ft_1_value = 0;
 	short fn_1_value = 0;
 	short fn_2_value = 0;
@@ -73,6 +74,21 @@ struct AdsEventState
 	bool axis4_manual_error = false;
 	std::uint32_t axis4_manual_error_id = 0;
 	int gen_state = 0;
+	bool axis1_return_busy = false;
+	bool axis1_return_done = false;
+	bool axis1_return_error = false;
+	std::uint32_t axis1_return_error_id = 0;
+	std::uint64_t axis1_return_event_sequence = 0;
+	// 锁存最近一次接收确认边沿，避免Busy短脉冲在两次主循环读取之间丢失。
+	std::uint64_t axis1_return_busy_true_sequence = 0;
+	std::uint64_t axis1_return_done_false_sequence = 0;
+	// 完成和故障必须使用各自的新上升沿，不能由ErrorId等无关通知代替。
+	std::uint64_t axis1_return_done_true_sequence = 0;
+	std::uint64_t axis1_return_error_true_sequence = 0;
+	// ErrorId 可能晚于Error到达并很快被Req清零，额外锁存最近一次非零值。
+	std::uint32_t axis1_return_last_nonzero_error_id = 0;
+	std::uint64_t axis1_return_last_nonzero_error_id_sequence = 0;
+	std::int64_t axis1_return_event_qpc_ticks = 0;
 };
 
 struct AdsCommunicationStats
@@ -101,7 +117,8 @@ public:
 	bool wait_for_snapshot(std::uint64_t after_sequence, DWORD timeout_ms, AdsFastSnapshot& snapshot);
 	bool latest_snapshot(AdsFastSnapshot& snapshot) const;
 	void drain_snapshots(std::vector<AdsFastSnapshot>& snapshots);
-	void publish_output(const AdsOutputCommand& command);
+	std::uint64_t publish_output(const AdsOutputCommand& command);
+	std::uint64_t applied_output_generation() const;
 	void request_coordinate_refresh();
 	bool refresh_coordinates(DWORD timeout_ms = 250);
 	void request_watchdog_recovery();
@@ -200,11 +217,15 @@ private:
 	AdsOutputCommand last_sent_output_{};
 	bool has_desired_output_ = false;
 	bool has_last_sent_output_ = false;
+	std::uint64_t next_output_generation_ = 0;
+	std::uint64_t desired_output_generation_ = 0;
+	std::atomic<std::uint64_t> applied_output_generation_{ 0 };
 	std::atomic<bool> watchdog_recovery_pending_{ false };
 
 	mutable std::mutex event_mutex_;
 	AdsEventState event_state_{};
 	std::uint32_t notification_update_mask_ = 0;
+	std::uint64_t axis1_return_event_sequence_counter_ = 0;
 
 	mutable std::mutex stats_mutex_;
 	AdsCommunicationStats stats_{};
@@ -225,8 +246,8 @@ private:
 	bool coordinate_cache_valid_ = false;
 	std::atomic<bool> coordinate_refresh_pending_{ false };
 	bool use_direct_nc_position_ = true;
-	std::array<unsigned long, 16> fast_direct_read_handles_{};
-	std::array<unsigned long, 10> fast_fallback_read_handles_{};
+	std::array<unsigned long, 17> fast_direct_read_handles_{};
+	std::array<unsigned long, 11> fast_fallback_read_handles_{};
 	std::array<unsigned long, 14> fast_write_handles_{};
 	bool fast_handles_valid_ = false;
 	std::vector<NotificationRegistration> notification_registrations_;

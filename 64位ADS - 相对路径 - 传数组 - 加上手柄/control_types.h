@@ -111,14 +111,14 @@ struct ControlConfig
 	double axis3_delivery_stop_from_left_mm = 20.0;
 	double axis3_delivery_release_hysteresis_mm = 2.0;
 	double guidewire_entry_axis6_from_left_max_mm = 667.0;
-	// 普通导管正向递送中，axis1 每次计划回退后首次有效前推前的单独先行量。
-	// 正值表示递送方向（axis1 绝对坐标减小），负值表示反向；UI 与内部均限制在 [-10, 10] mm。
+	// 普通导管正向递送中，axis1 每次计划回退完成后自动执行的单独先行量。
+	// 0 表示关闭；正值表示递送方向（axis1 绝对坐标减小），UI 与内部均限制在 [0, 10] mm。
 	double axis1_post_return_lead_mm = 1.0;
 	double axis1_post_return_lead_limit_mm = 10.0;
-	// 回退旁路撤销后先让 PLC 正常平滑链稳定，再接受持续推动产生的先行触发。
-	DWORD axis1_post_return_lead_handoff_settle_ms = 40;
+	// 自动先行不再使用固定交接/到位等待；连续新鲜快照同时满足位置和速度条件才完成。
 	double axis1_post_return_lead_arrive_tol_mm = 0.01;
-	DWORD axis1_post_return_lead_arrive_settle_ms = 30;
+	double axis1_post_return_lead_arrive_velocity_mm_s = 0.1;
+	unsigned int axis1_post_return_lead_arrive_samples = 2;
 	// axis6 距自身左限位的上位机内部软限位。达到预测越限条件后仅锁止上位机链路，
 	// 不改变 PLC/NC 内已有的硬限位与安全逻辑。
 	double axis6_soft_limit_from_left_mm = 670.0;

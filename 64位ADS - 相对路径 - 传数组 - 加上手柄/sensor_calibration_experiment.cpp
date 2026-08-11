@@ -892,16 +892,6 @@ namespace
 		check(nearly_equal(routing_ff.force_582_f, 0.0, 1e-15) &&
 			nearly_equal(routing_ff.force_587_f, expected_guidewire_axial_n, 1e-12),
 			"单手柄别名保持当前导丝语义输出");
-		routing_ff.reset();
-		process_force_feedback(
-			routing_ff, routing_sample,
-			unopened_catheter_handle, unopened_catheter_handle,
-			GuidewireMode::Cooperative,
-			true, false, false, false, false, 0,
-			routing_cfg, direct_cfg, direct_zero);
-		check(nearly_equal(routing_ff.force_582_f, 0.0, 1e-15) &&
-			nearly_equal(routing_ff.force_587_f, 0.0, 1e-15),
-			"单手柄异常进入协同模式时安全归零");
 
 		routing_ff.reset();
 		process_force_feedback(

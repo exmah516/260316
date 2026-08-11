@@ -106,6 +106,26 @@ inline CleanForce calculate_clean_force(
 	return out;
 }
 
+// 导丝侧纯净力与导管侧保持相同语义：只扣除装机零点并应用本侧 F_direct 斜率。
+inline CleanForce calculate_clean_guidewire_force(
+	double fn_2_raw_v,
+	double ft_2_raw_v,
+	const ForceCalibrationConfig& cfg,
+	const ForceCalibrationState& state)
+{
+	CleanForce out;
+	if (!state.zeroed)
+	{
+		return out;
+	}
+	out.force_n = force_direct_calibration::zeroed_force_n(
+		fn_2_raw_v, state.fn_2_zero, cfg.guidewire_axial_direct_n_per_v);
+	const double tangential_force_n = force_direct_calibration::zeroed_force_n(
+		ft_2_raw_v, state.ft_2_zero, cfg.guidewire_tangential_direct_n_per_v);
+	out.handle_torque_nm = tangential_force_n * cfg.handle_radius_mm * 0.001;
+	return out;
+}
+
 inline CalibratedForce calibrate_direct_pair(
 	double f_sensor_v,
 	double ft_sensor_v,
