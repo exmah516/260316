@@ -39,6 +39,9 @@ object_script.*
 *.log
 *.svdx
 
+# 实验录像仅保留在本地
+**/records/**/video.mp4
+
 
 # Archives (usually backups or large binaries)
 *.zip
