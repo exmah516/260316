@@ -375,9 +375,12 @@ bool CADSComm::ADSWriteSumByHandle(
 	const unsigned long* handles,
 	const unsigned long* lengths,
 	const void* const* inputs,
-	unsigned long count)
+	unsigned long count,
+	unsigned long* itemResults,
+	bool* transportSucceeded)
 {
 	std::lock_guard<std::recursive_mutex> lock(m_mutex);
+	if (transportSucceeded != nullptr) *transportSucceeded = false;
 	if (!ValidateOpenLocked("ADSWriteSumByHandle"))
 	{
 		return false;
@@ -469,22 +472,33 @@ bool CADSComm::ADSWriteSumByHandle(
 		sprintf_s(m_lastError, sizeof(m_lastError), "Error: ADSWriteSumByHandle short response (%lu/%lu)\n", cbReturn, responseBytes);
 		return false;
 	}
+	if (transportSucceeded != nullptr) *transportSucceeded = true;
 
+	bool allItemsSucceeded = true;
+	unsigned long firstItemError = 0;
+	unsigned long firstItemErrorIndex = 0;
 	for (unsigned long i = 0; i < count; ++i)
 	{
 		unsigned long itemError = 0;
 		memcpy(&itemError, m_sumResponseBuffer.data() + i * sizeof(unsigned long), sizeof(itemError));
-		if (itemError != 0)
+		if (itemResults != nullptr) itemResults[i] = itemError;
+		if (itemError != 0 && allItemsSucceeded)
 		{
-			sprintf_s(
-				m_lastError,
-				sizeof(m_lastError),
-				"Error: ADSWriteSumByHandle item %lu failed (code=%lu, handle=%lu)\n",
-				i,
-				itemError,
-				handles[i]);
-			return false;
+			allItemsSucceeded = false;
+			firstItemError = itemError;
+			firstItemErrorIndex = i;
 		}
+	}
+	if (!allItemsSucceeded)
+	{
+		sprintf_s(
+			m_lastError,
+			sizeof(m_lastError),
+			"Error: ADSWriteSumByHandle item %lu failed (code=%lu, handle=%lu)\n",
+			firstItemErrorIndex,
+			firstItemError,
+			handles[firstItemErrorIndex]);
+		return false;
 	}
 
 	ClearLastErrorLocked();

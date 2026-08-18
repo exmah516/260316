@@ -67,6 +67,10 @@ namespace plc_io
 
 	bool read_axis_return_status(AppContext& ctx, const AxisReturnAdsSymbols& symbols, AxisReturnStatus& status);
 	bool clear_axis_return_request(AppContext& ctx, const AxisReturnAdsSymbols& symbols);
+	bool clear_axis_return_requests(
+		AppContext& ctx,
+		const AxisReturnAdsSymbols* const* symbols,
+		int count);
 	bool request_axis_return(
 		AppContext& ctx,
 		const AxisReturnAdsSymbols& symbols,
@@ -75,6 +79,28 @@ namespace plc_io
 		double acc,
 		double dec,
 		double jerk);
+	bool prepare_axis_returns(
+		AppContext& ctx,
+		const AxisReturnAdsSymbols* const* symbols,
+		const double* target_abs,
+		const double* velocity,
+		const double* acc,
+		const double* dec,
+		const double* jerk,
+		int count);
+	bool commit_axis_return_requests(
+		AppContext& ctx,
+		const AxisReturnAdsSymbols* const* symbols,
+		int count);
+	bool request_axis_returns(
+		AppContext& ctx,
+		const AxisReturnAdsSymbols* const* symbols,
+		const double* target_abs,
+		const double* velocity,
+		const double* acc,
+		const double* dec,
+		const double* jerk,
+		int count);
 	bool clear_axis1_group_return_requests(AppContext& ctx);
 	bool write_axis4_manual_requests(AppContext& ctx, bool forward_req, bool reverse_req);
 	void clear_plc_reinit_req(AppContext& ctx);

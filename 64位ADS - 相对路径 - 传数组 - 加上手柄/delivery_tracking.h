@@ -66,7 +66,7 @@ struct DeliveryTrackingAxisSnapshot
 	double nominal_forward_increment_mm = 0.0;
 	double compensated_requested_forward_increment_mm = 0.0;
 	double effective_forward_increment_mm = 0.0;
-	// 仅在 SwitchWait/FastMove/RestoreWait 期间记录。回拉手柄时保持为 0。
+	// 仅在统一换手协调器的夹爪稳定、计划回退和交接阶段记录；回拉手柄时保持为 0。
 	double handover_forward_increment_mm = 0.0;
 	double session_handover_forward_mm = 0.0;
 

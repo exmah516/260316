@@ -30,6 +30,12 @@ namespace motion_sync
 	// 计划回退交接专用：使用当前100 Hz位置快照和已滤波手柄值重建内存基准，
 	// 不轮询手柄、不等待、不直接写ADS。
 	bool rebase_axis1_after_return(AppContext& ctx);
+	// 独立导丝回退交接：仅消费当前PLC快照内存和axis6已滤波手柄值，
+	// 重建axis6/7基准并保留入模时锁定的axis6窗口。
+	bool rebase_axis6_after_return(AppContext& ctx);
+	// 协同回退交接：用同一份PLC快照同时重建双手柄、双轴链基准，
+	// 并按axis5当前实际位置建立axis6动态窗口。
+	bool rebase_cooperative_after_return(AppContext& ctx);
 	bool sync_axis6(
 		AppContext& ctx,
 		int samples,

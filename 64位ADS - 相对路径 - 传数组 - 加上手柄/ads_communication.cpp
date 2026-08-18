@@ -36,6 +36,10 @@ namespace
 	constexpr std::uint32_t kNotifyAxis1ReturnDone = 13;
 	constexpr std::uint32_t kNotifyAxis1ReturnError = 14;
 	constexpr std::uint32_t kNotifyAxis1ReturnErrorId = 15;
+	constexpr std::uint32_t kNotifyAxis6ReturnBusy = 16;
+	constexpr std::uint32_t kNotifyAxis6ReturnDone = 17;
+	constexpr std::uint32_t kNotifyAxis6ReturnError = 18;
+	constexpr std::uint32_t kNotifyAxis6ReturnErrorId = 19;
 
 	enum FastWriteHandleIndex : std::size_t
 	{
@@ -128,6 +132,13 @@ namespace
 			lhs.axis4_reverse_req == rhs.axis4_reverse_req &&
 			lhs.startup_smoothing_bypass == rhs.startup_smoothing_bypass;
 	}
+
+	int planned_return_axis_slot(int axis_index)
+	{
+		if (axis_index == 0) return 0;
+		if (axis_index == 5) return 1;
+		return -1;
+	}
 }
 
 AdsCommunicationService::AdsCommunicationService(CADSComm& ads)
@@ -208,6 +219,8 @@ void AdsCommunicationService::stop()
 	if (was_running && stop_event_ != nullptr) SetEvent(stop_event_);
 	if (was_running) snapshot_cv_.notify_all();
 	if (worker_.joinable()) worker_.join();
+	// worker退出后再由当前线程排空，避免两个消费者同时推进固定环形队列。
+	fail_queued_planned_return_commands();
 	unregister_notifications();
 }
 
@@ -262,6 +275,125 @@ std::uint64_t AdsCommunicationService::publish_output(const AdsOutputCommand& co
 std::uint64_t AdsCommunicationService::applied_output_generation() const
 {
 	return applied_output_generation_.load(std::memory_order_acquire);
+}
+
+std::uint64_t AdsCommunicationService::applied_motion_output_generation() const
+{
+	return applied_motion_output_generation_.load(std::memory_order_acquire);
+}
+
+std::uint64_t AdsCommunicationService::submit_planned_return_command(
+	const AdsPlannedReturnCommand& command)
+{
+	if (!running_.load(std::memory_order_acquire) ||
+		command.leg_count < 1 || command.leg_count > 2)
+	{
+		return 0;
+	}
+	switch (command.operation)
+	{
+	case AdsPlannedReturnOperation::Prepare:
+	case AdsPlannedReturnOperation::Commit:
+	case AdsPlannedReturnOperation::Clear:
+		break;
+	default:
+		return 0;
+	}
+
+	bool axis1_seen = false;
+	bool axis6_seen = false;
+	for (int i = 0; i < command.leg_count; ++i)
+	{
+		const AdsPlannedReturnLegCommand& leg = command.legs[i];
+		const int axis_slot = planned_return_axis_slot(leg.axis_index);
+		if (axis_slot < 0) return 0;
+		bool& seen = axis_slot == 0 ? axis1_seen : axis6_seen;
+		if (seen) return 0;
+		seen = true;
+		if (command.operation == AdsPlannedReturnOperation::Prepare &&
+			(!std::isfinite(leg.target_abs) || !std::isfinite(leg.velocity) ||
+				!std::isfinite(leg.acc) || !std::isfinite(leg.dec) ||
+				!std::isfinite(leg.jerk)))
+		{
+			return 0;
+		}
+	}
+
+	const std::uint64_t write_index =
+		planned_return_write_index_.load(std::memory_order_relaxed);
+	const std::uint64_t read_index =
+		planned_return_read_index_.load(std::memory_order_acquire);
+	if (write_index - read_index >= kPlannedReturnQueueCapacity) return 0;
+
+	std::uint64_t sequence =
+		next_planned_return_sequence_.fetch_add(1, std::memory_order_relaxed) + 1;
+	// 0 永远保留为提交失败。实际运行无法触及64位回卷，仍显式跳过该值。
+	if (sequence == 0)
+	{
+		sequence = next_planned_return_sequence_.fetch_add(1, std::memory_order_relaxed) + 1;
+	}
+
+	PlannedReturnResultSlot& result =
+		planned_return_results_[sequence % kPlannedReturnResultCapacity];
+	result.state.store(
+		static_cast<unsigned char>(PlannedReturnResultState::Unknown),
+		std::memory_order_relaxed);
+	result.possibly_started_mask.store(0, std::memory_order_relaxed);
+	result.sequence.store(sequence, std::memory_order_release);
+	result.state.store(
+		static_cast<unsigned char>(PlannedReturnResultState::Pending),
+		std::memory_order_release);
+	if (command.operation == AdsPlannedReturnOperation::Clear)
+	{
+		for (int leg_index = 0; leg_index < command.leg_count; ++leg_index)
+		{
+			const int axis_slot = planned_return_axis_slot(command.legs[leg_index].axis_index);
+			auto& barrier = planned_return_clear_barrier_sequence_[
+				static_cast<std::size_t>(axis_slot)];
+			std::uint64_t previous = barrier.load(std::memory_order_relaxed);
+			while (previous < sequence && !barrier.compare_exchange_weak(
+				previous,
+				sequence,
+				std::memory_order_release,
+				std::memory_order_relaxed))
+			{
+			}
+		}
+	}
+
+	PlannedReturnQueueSlot& slot =
+		planned_return_queue_[write_index % kPlannedReturnQueueCapacity];
+	slot.command = command;
+	slot.sequence = sequence;
+	planned_return_write_index_.store(write_index + 1, std::memory_order_release);
+	return sequence;
+}
+
+bool AdsCommunicationService::planned_return_command_result(
+	std::uint64_t sequence,
+	bool& completed,
+	bool& success,
+	std::uint8_t& possibly_started_mask) const
+{
+	completed = false;
+	success = false;
+	possibly_started_mask = 0;
+	if (sequence == 0) return false;
+
+	const PlannedReturnResultSlot& result =
+		planned_return_results_[sequence % kPlannedReturnResultCapacity];
+	if (result.sequence.load(std::memory_order_acquire) != sequence) return false;
+	const auto state = static_cast<PlannedReturnResultState>(
+		result.state.load(std::memory_order_acquire));
+	possibly_started_mask = static_cast<std::uint8_t>(
+		result.possibly_started_mask.load(std::memory_order_acquire));
+	// 防止结果槽恰在查询期间被较新的序号复用。
+	if (result.sequence.load(std::memory_order_acquire) != sequence) return false;
+	if (state == PlannedReturnResultState::Unknown) return false;
+	if (state == PlannedReturnResultState::Pending) return true;
+	completed = true;
+	success = state == PlannedReturnResultState::Succeeded;
+	return true;
 }
 
 void AdsCommunicationService::request_coordinate_refresh()
@@ -529,6 +661,9 @@ void AdsCommunicationService::on_notification(
 	const bool previous_axis1_return_busy = event_state_.axis1_return_busy;
 	const bool previous_axis1_return_done = event_state_.axis1_return_done;
 	const bool previous_axis1_return_error = event_state_.axis1_return_error;
+	const bool previous_axis6_return_busy = event_state_.axis6_return_busy;
+	const bool previous_axis6_return_done = event_state_.axis6_return_done;
+	const bool previous_axis6_return_error = event_state_.axis6_return_error;
 	switch (event_id)
 	{
 	case kNotifySelfCheckDone:
@@ -576,6 +711,18 @@ void AdsCommunicationService::on_notification(
 	case kNotifyAxis1ReturnErrorId:
 		updated = notification_value(data, size, event_state_.axis1_return_error_id);
 		break;
+	case kNotifyAxis6ReturnBusy:
+		updated = notification_value(data, size, event_state_.axis6_return_busy);
+		break;
+	case kNotifyAxis6ReturnDone:
+		updated = notification_value(data, size, event_state_.axis6_return_done);
+		break;
+	case kNotifyAxis6ReturnError:
+		updated = notification_value(data, size, event_state_.axis6_return_error);
+		break;
+	case kNotifyAxis6ReturnErrorId:
+		updated = notification_value(data, size, event_state_.axis6_return_error_id);
+		break;
 	default:
 		break;
 	}
@@ -621,6 +768,45 @@ void AdsCommunicationService::on_notification(
 		QueryPerformanceCounter(&now);
 		event_state_.axis1_return_event_sequence = axis1_return_event_sequence_counter_;
 		event_state_.axis1_return_event_qpc_ticks = now.QuadPart;
+	}
+	if (updated && event_id >= kNotifyAxis6ReturnBusy && event_id <= kNotifyAxis6ReturnErrorId)
+	{
+		++axis6_return_event_sequence_counter_;
+		if (axis6_return_event_sequence_counter_ == 0) ++axis6_return_event_sequence_counter_;
+		if (event_id == kNotifyAxis6ReturnBusy &&
+			!previous_axis6_return_busy && event_state_.axis6_return_busy)
+		{
+			event_state_.axis6_return_busy_true_sequence = axis6_return_event_sequence_counter_;
+		}
+		else if (event_id == kNotifyAxis6ReturnDone &&
+			previous_axis6_return_done != event_state_.axis6_return_done)
+		{
+			if (event_state_.axis6_return_done)
+			{
+				event_state_.axis6_return_done_true_sequence = axis6_return_event_sequence_counter_;
+			}
+			else
+			{
+				event_state_.axis6_return_done_false_sequence = axis6_return_event_sequence_counter_;
+			}
+		}
+		else if (event_id == kNotifyAxis6ReturnError &&
+			!previous_axis6_return_error && event_state_.axis6_return_error)
+		{
+			event_state_.axis6_return_error_true_sequence = axis6_return_event_sequence_counter_;
+		}
+		else if (event_id == kNotifyAxis6ReturnErrorId &&
+			event_state_.axis6_return_error_id != 0)
+		{
+			event_state_.axis6_return_last_nonzero_error_id =
+				event_state_.axis6_return_error_id;
+			event_state_.axis6_return_last_nonzero_error_id_sequence =
+				axis6_return_event_sequence_counter_;
+		}
+		LARGE_INTEGER now{};
+		QueryPerformanceCounter(&now);
+		event_state_.axis6_return_event_sequence = axis6_return_event_sequence_counter_;
+		event_state_.axis6_return_event_qpc_ticks = now.QuadPart;
 	}
 }
 
@@ -693,6 +879,7 @@ void AdsCommunicationService::run()
 			if (!connection_initialized)
 			{
 				fail_queued_low_frequency_requests();
+				fail_queued_planned_return_commands();
 				AdsFastSnapshot unavailable_snapshot{};
 				unavailable_snapshot.attempt_sequence = ++attempt_sequence_;
 				unavailable_snapshot.qpc_ticks = now.QuadPart;
@@ -724,6 +911,7 @@ void AdsCommunicationService::run()
 			{
 				mark_plc_restart(false);
 				fail_queued_low_frequency_requests();
+				fail_queued_planned_return_commands();
 				AdsFastSnapshot stopped_snapshot{};
 				stopped_snapshot.attempt_sequence = ++attempt_sequence_;
 				QueryPerformanceCounter(&now);
@@ -743,6 +931,7 @@ void AdsCommunicationService::run()
 		if (!device_state_ok)
 		{
 			fail_queued_low_frequency_requests();
+			fail_queued_planned_return_commands();
 			AdsFastSnapshot state_failure_snapshot{};
 			state_failure_snapshot.attempt_sequence = ++attempt_sequence_;
 			QueryPerformanceCounter(&now);
@@ -777,8 +966,9 @@ void AdsCommunicationService::run()
 			// 每个有效快照都补发恢复请求，直到 PLC 完成停稳与重初始化握手。
 			watchdog_recovery_pending_.store(true, std::memory_order_release);
 		}
+		bool planned_return_processed = false;
 		const bool write_ok = read_ok && !restart_reconnect_pending_
-			? write_output_cycle()
+			? write_output_cycle(planned_return_processed)
 			: false;
 		const bool cycle_ok = device_state_ok && read_ok && write_ok;
 		update_rate(snapshot.qpc_ticks, snapshot.rtt_us, cycle_ok);
@@ -840,10 +1030,11 @@ void AdsCommunicationService::run()
 		publish_snapshot(snapshot);
 		if (process_low_frequency)
 		{
-			process_one_low_frequency_request();
+			if (!planned_return_processed) process_one_low_frequency_request();
 		}
 		else
 		{
+			fail_queued_planned_return_commands();
 			fail_queued_low_frequency_requests();
 		}
 		if (disconnect)
@@ -858,6 +1049,7 @@ void AdsCommunicationService::run()
 	}
 
 	clear_runtime_connection_state();
+	fail_queued_planned_return_commands();
 	fail_queued_low_frequency_requests();
 	set_connection_state(AdsConnectionState::Disconnected);
 }
@@ -911,6 +1103,7 @@ bool AdsCommunicationService::initialize_connection()
 		std::lock_guard<std::mutex> lock(event_mutex_);
 		event_state_ = AdsEventState{};
 		event_state_.axis1_return_event_sequence = axis1_return_event_sequence_counter_;
+		event_state_.axis6_return_event_sequence = axis6_return_event_sequence_counter_;
 		notification_update_mask_ = 0;
 	}
 	if (!register_notifications()) return false;
@@ -931,7 +1124,11 @@ bool AdsCommunicationService::initialize_connection()
 		AdsSymbol::axis1_return.busy,
 		AdsSymbol::axis1_return.done,
 		AdsSymbol::axis1_return.error,
-		AdsSymbol::axis1_return.error_id
+		AdsSymbol::axis1_return.error_id,
+		AdsSymbol::axis6_return.busy,
+		AdsSymbol::axis6_return.done,
+		AdsSymbol::axis6_return.error,
+		AdsSymbol::axis6_return.error_id
 	};
 	AdsEventState initial{};
 	const unsigned long lengths[] = {
@@ -942,7 +1139,9 @@ bool AdsCommunicationService::initialize_connection()
 		sizeof(initial.axis4_manual_error), sizeof(initial.axis4_manual_error_id),
 		sizeof(initial.gen_state), sizeof(initial.axis1_return_busy),
 		sizeof(initial.axis1_return_done), sizeof(initial.axis1_return_error),
-		sizeof(initial.axis1_return_error_id)
+		sizeof(initial.axis1_return_error_id), sizeof(initial.axis6_return_busy),
+		sizeof(initial.axis6_return_done), sizeof(initial.axis6_return_error),
+		sizeof(initial.axis6_return_error_id)
 	};
 	void* outputs[] = {
 		&initial.self_check_done, &initial.handle_reinit_req, &initial.handle_reinit_done,
@@ -950,7 +1149,9 @@ bool AdsCommunicationService::initialize_connection()
 		&initial.axis4_manual_busy, &initial.axis4_manual_done, &initial.axis4_manual_error,
 		&initial.axis4_manual_error_id, &initial.gen_state,
 		&initial.axis1_return_busy, &initial.axis1_return_done,
-		&initial.axis1_return_error, &initial.axis1_return_error_id
+		&initial.axis1_return_error, &initial.axis1_return_error_id,
+		&initial.axis6_return_busy, &initial.axis6_return_done,
+		&initial.axis6_return_error, &initial.axis6_return_error_id
 	};
 	if (!ads_.ADSReadSum(symbols, lengths, outputs, _countof(symbols))) return false;
 	bool host_comm_timeout = false;
@@ -975,6 +1176,10 @@ bool AdsCommunicationService::initialize_connection()
 		if (untouched(kNotifyAxis1ReturnDone)) event_state_.axis1_return_done = initial.axis1_return_done;
 		if (untouched(kNotifyAxis1ReturnError)) event_state_.axis1_return_error = initial.axis1_return_error;
 		if (untouched(kNotifyAxis1ReturnErrorId)) event_state_.axis1_return_error_id = initial.axis1_return_error_id;
+		if (untouched(kNotifyAxis6ReturnBusy)) event_state_.axis6_return_busy = initial.axis6_return_busy;
+		if (untouched(kNotifyAxis6ReturnDone)) event_state_.axis6_return_done = initial.axis6_return_done;
+		if (untouched(kNotifyAxis6ReturnError)) event_state_.axis6_return_error = initial.axis6_return_error;
+		if (untouched(kNotifyAxis6ReturnErrorId)) event_state_.axis6_return_error_id = initial.axis6_return_error_id;
 		++axis1_return_event_sequence_counter_;
 		if (axis1_return_event_sequence_counter_ == 0) ++axis1_return_event_sequence_counter_;
 		if (event_state_.axis1_return_busy)
@@ -1004,6 +1209,33 @@ bool AdsCommunicationService::initialize_connection()
 		QueryPerformanceCounter(&event_now);
 		event_state_.axis1_return_event_sequence = axis1_return_event_sequence_counter_;
 		event_state_.axis1_return_event_qpc_ticks = event_now.QuadPart;
+		++axis6_return_event_sequence_counter_;
+		if (axis6_return_event_sequence_counter_ == 0) ++axis6_return_event_sequence_counter_;
+		if (event_state_.axis6_return_busy)
+		{
+			event_state_.axis6_return_busy_true_sequence = axis6_return_event_sequence_counter_;
+		}
+		if (!event_state_.axis6_return_done)
+		{
+			event_state_.axis6_return_done_false_sequence = axis6_return_event_sequence_counter_;
+		}
+		else
+		{
+			event_state_.axis6_return_done_true_sequence = axis6_return_event_sequence_counter_;
+		}
+		if (event_state_.axis6_return_error)
+		{
+			event_state_.axis6_return_error_true_sequence = axis6_return_event_sequence_counter_;
+		}
+		if (event_state_.axis6_return_error_id != 0)
+		{
+			event_state_.axis6_return_last_nonzero_error_id =
+				event_state_.axis6_return_error_id;
+			event_state_.axis6_return_last_nonzero_error_id_sequence =
+				axis6_return_event_sequence_counter_;
+		}
+		event_state_.axis6_return_event_sequence = axis6_return_event_sequence_counter_;
+		event_state_.axis6_return_event_qpc_ticks = event_now.QuadPart;
 		host_comm_timeout = event_state_.host_comm_timeout;
 		notification_update_mask_ = 0;
 	}
@@ -1098,6 +1330,30 @@ bool AdsCommunicationService::resolve_fast_handles()
 			return false;
 		}
 	}
+	const AxisReturnAdsSymbols* return_symbols[] = {
+		&AdsSymbol::axis1_return,
+		&AdsSymbol::axis6_return
+	};
+	for (std::size_t axis_slot = 0; axis_slot < _countof(return_symbols); ++axis_slot)
+	{
+		const AxisReturnAdsSymbols& symbols = *return_symbols[axis_slot];
+		const char* fields[] = {
+			symbols.req,
+			symbols.target_abs,
+			symbols.velocity,
+			symbols.acc,
+			symbols.dec,
+			symbols.jerk
+		};
+		for (std::size_t field = 0; field < _countof(fields); ++field)
+		{
+			if (!required_handle(fields[field], planned_return_write_handles_[axis_slot][field]))
+			{
+				clear_fast_handles();
+				return false;
+			}
+		}
+	}
 	fast_handles_valid_ = true;
 	return true;
 }
@@ -1107,6 +1363,7 @@ void AdsCommunicationService::clear_fast_handles()
 	fast_direct_read_handles_.fill(0);
 	fast_fallback_read_handles_.fill(0);
 	fast_write_handles_.fill(0);
+	for (auto& handles : planned_return_write_handles_) handles.fill(0);
 	fast_handles_valid_ = false;
 }
 
@@ -1241,7 +1498,7 @@ bool AdsCommunicationService::read_fast_snapshot(AdsFastSnapshot& snapshot, bool
 	return snapshot.valid;
 }
 
-bool AdsCommunicationService::write_output_cycle()
+bool AdsCommunicationService::write_output_cycle(bool& planned_return_processed)
 {
 	AdsOutputCommand output{};
 	AdsOutputCommand last_sent_output{};
@@ -1256,20 +1513,75 @@ bool AdsCommunicationService::write_output_cycle()
 		last_sent_output = last_sent_output_;
 		has_last_sent_output = has_last_sent_output_;
 	}
-	++heartbeat_sequence_;
-	std::array<unsigned long, 16> handles{};
-	std::array<unsigned long, 16> lengths{};
-	std::array<const void*, 16> values{};
-	std::size_t count = 0;
-	auto append = [&](unsigned long handle, unsigned long length, const void* value)
+	const std::uint8_t output_clear_mask = has_output
+		? static_cast<std::uint8_t>(output.planned_return_clear_mask & 0x03u)
+		: 0;
+	planned_return_processed = output_clear_mask != 0;
+
+	std::uint64_t planned_read_index =
+		planned_return_read_index_.load(std::memory_order_relaxed);
+	PlannedReturnQueueSlot planned_slot{};
+	bool has_planned_return = false;
+	for (;;)
 	{
-		handles[count] = handle;
-		lengths[count] = length;
-		values[count] = value;
-		++count;
+		const std::uint64_t planned_write_index =
+			planned_return_write_index_.load(std::memory_order_acquire);
+		if (planned_read_index == planned_write_index) break;
+		planned_slot = planned_return_queue_[
+			planned_read_index % kPlannedReturnQueueCapacity];
+
+		bool superseded_by_clear = false;
+		if (planned_slot.command.operation == AdsPlannedReturnOperation::Prepare ||
+			planned_slot.command.operation == AdsPlannedReturnOperation::Commit)
+		{
+			for (int leg_index = 0;
+				leg_index < planned_slot.command.leg_count;
+				++leg_index)
+			{
+				const int axis_slot = planned_return_axis_slot(
+					planned_slot.command.legs[leg_index].axis_index);
+				const std::uint8_t axis_mask = axis_slot == 0 ? 0x01u : 0x02u;
+				if (axis_slot >= 0 &&
+					((output_clear_mask & axis_mask) != 0 ||
+						planned_return_clear_barrier_sequence_[static_cast<std::size_t>(axis_slot)]
+							.load(std::memory_order_acquire) > planned_slot.sequence))
+				{
+					superseded_by_clear = true;
+					break;
+				}
+			}
+		}
+		if (!superseded_by_clear)
+		{
+			has_planned_return = true;
+			planned_return_processed = true;
+			break;
+		}
+
+		// 被队列Clear屏障或当前输出清Req掩码覆盖的命令尚未开始，不占用本拍ADS写事务。
+		complete_planned_return_command(planned_slot.sequence, false);
+		++planned_read_index;
+		planned_return_read_index_.store(planned_read_index, std::memory_order_release);
+	}
+
+	++heartbeat_sequence_;
+	// 常规输出最多14项，双腿Prepare最多再增加12项。
+	std::array<unsigned long, 32> handles{};
+	std::array<unsigned long, 32> lengths{};
+	std::array<const void*, 32> values{};
+	std::array<unsigned long, 32> item_results{};
+	std::size_t count = 0;
+	auto append = [&](unsigned long handle, unsigned long length, const void* value) -> std::size_t
+	{
+		const std::size_t index = count++;
+		handles[index] = handle;
+		lengths[index] = length;
+		values[index] = value;
+		return index;
 	};
 
-	bool false_value = false;
+	const bool false_value = false;
+	const bool true_value = true;
 	if (has_output && output.motion_enabled)
 	{
 		append(fast_write_handles_[kWriteRefer], sizeof(output.refer), output.refer);
@@ -1299,14 +1611,169 @@ bool AdsCommunicationService::write_output_cycle()
 		append(fast_write_handles_[kWriteSmoothingBypass], sizeof(output.startup_smoothing_bypass), &output.startup_smoothing_bypass);
 	}
 
-	// 心跳放在本拍输出之后，尽量避免旧运动请求在输出失败时仍被提前续期。
+	bool planned_fields_valid = true;
+	std::uint8_t planned_req_false_mask = 0;
+	std::array<int, 2> planned_req_false_item_index{ -1, -1 };
+	std::uint8_t planned_commit_axis_mask = 0;
+	std::array<int, 2> planned_commit_req_item_index{ -1, -1 };
+	const std::size_t planned_fields_begin = count;
+	if (has_planned_return)
+	{
+		for (int leg_index = 0;
+			leg_index < planned_slot.command.leg_count;
+			++leg_index)
+		{
+			const AdsPlannedReturnLegCommand& leg = planned_slot.command.legs[leg_index];
+			const int axis_slot = planned_return_axis_slot(leg.axis_index);
+			if (axis_slot < 0)
+			{
+				planned_fields_valid = false;
+				break;
+			}
+			const auto& axis_handles =
+				planned_return_write_handles_[static_cast<std::size_t>(axis_slot)];
+			const std::uint8_t axis_mask = axis_slot == 0 ? 0x01u : 0x02u;
+			switch (planned_slot.command.operation)
+			{
+			case AdsPlannedReturnOperation::Prepare:
+				planned_req_false_item_index[static_cast<std::size_t>(axis_slot)] =
+					static_cast<int>(append(axis_handles[0], sizeof(false_value), &false_value));
+				planned_req_false_mask |= axis_mask;
+				append(axis_handles[1], sizeof(leg.target_abs), &leg.target_abs);
+				append(axis_handles[2], sizeof(leg.velocity), &leg.velocity);
+				append(axis_handles[3], sizeof(leg.acc), &leg.acc);
+				append(axis_handles[4], sizeof(leg.dec), &leg.dec);
+				append(axis_handles[5], sizeof(leg.jerk), &leg.jerk);
+				break;
+			case AdsPlannedReturnOperation::Commit:
+				planned_commit_req_item_index[static_cast<std::size_t>(axis_slot)] =
+					static_cast<int>(append(axis_handles[0], sizeof(true_value), &true_value));
+				planned_commit_axis_mask |= axis_mask;
+				break;
+			case AdsPlannedReturnOperation::Clear:
+				planned_req_false_item_index[static_cast<std::size_t>(axis_slot)] =
+					static_cast<int>(append(axis_handles[0], sizeof(false_value), &false_value));
+				planned_req_false_mask |= axis_mask;
+				break;
+			default:
+				planned_fields_valid = false;
+				break;
+			}
+			if (!planned_fields_valid) break;
+		}
+		if (!planned_fields_valid)
+		{
+			// 无效命令只失败出队，不能把半条Prepare混进常规输出事务。
+			count = planned_fields_begin;
+			planned_req_false_mask = 0;
+			planned_req_false_item_index = { -1, -1 };
+			planned_commit_axis_mask = 0;
+			planned_commit_req_item_index = { -1, -1 };
+		}
+	}
+	const std::size_t planned_fields_end = count;
+	std::array<int, 2> output_clear_item_index{ -1, -1 };
+	if ((output_clear_mask & 0x01u) != 0 && (planned_req_false_mask & 0x01u) == 0)
+	{
+		output_clear_item_index[0] = static_cast<int>(append(
+			planned_return_write_handles_[0][0],
+			sizeof(false_value),
+			&false_value));
+	}
+	else if ((output_clear_mask & 0x01u) != 0)
+	{
+		output_clear_item_index[0] = planned_req_false_item_index[0];
+	}
+	if ((output_clear_mask & 0x02u) != 0 && (planned_req_false_mask & 0x02u) == 0)
+	{
+		output_clear_item_index[1] = static_cast<int>(append(
+			planned_return_write_handles_[1][0],
+			sizeof(false_value),
+			&false_value));
+	}
+	else if ((output_clear_mask & 0x02u) != 0)
+	{
+		output_clear_item_index[1] = planned_req_false_item_index[1];
+	}
+
+	// 心跳与输出放在同一Sum事务；这里的排列只用于后续逐项结果分类，
+	// 不把SUMUP_WRITE子项顺序误认为PLC扫描级原子提交保证。
+	const std::size_t heartbeat_fields_begin = count;
 	append(fast_write_handles_[kWriteHostSession], sizeof(host_session_id_), &host_session_id_);
 	append(fast_write_handles_[kWriteHeartbeat], sizeof(heartbeat_sequence_), &heartbeat_sequence_);
 	const bool recover = watchdog_recovery_pending_.exchange(false, std::memory_order_acq_rel);
 	if (recover) append(fast_write_handles_[kWriteHostRecover], sizeof(recover), &recover);
-	const bool write_ok = fast_handles_valid_ && ads_.ADSWriteSumByHandle(
-		handles.data(), lengths.data(), values.data(), static_cast<unsigned long>(count));
-	if (!write_ok)
+	bool transport_succeeded = false;
+	const bool write_attempted = fast_handles_valid_;
+	const bool all_items_succeeded = write_attempted && ads_.ADSWriteSumByHandle(
+		handles.data(),
+		lengths.data(),
+		values.data(),
+		static_cast<unsigned long>(count),
+		item_results.data(),
+		&transport_succeeded);
+	(void)all_items_succeeded;
+	auto item_range_succeeded = [&](std::size_t begin, std::size_t end)
+	{
+		for (std::size_t index = begin; index < end; ++index)
+		{
+			if (item_results[index] != 0) return false;
+		}
+		return true;
+	};
+
+	// 核心拍包含常规输出、输出快照携带的清Req以及会话心跳。
+	// 只有队列专用字段可以在子项失败时与核心通信健康解耦。
+	bool core_write_ok = transport_succeeded &&
+		item_range_succeeded(0, planned_fields_begin) &&
+		item_range_succeeded(heartbeat_fields_begin, count);
+	for (std::size_t axis_slot = 0; axis_slot < output_clear_item_index.size(); ++axis_slot)
+	{
+		const std::uint8_t axis_mask = axis_slot == 0 ? 0x01u : 0x02u;
+		if ((output_clear_mask & axis_mask) == 0) continue;
+		const int item_index = output_clear_item_index[axis_slot];
+		if (item_index < 0 || item_results[static_cast<std::size_t>(item_index)] != 0)
+		{
+			core_write_ok = false;
+		}
+	}
+	if (has_planned_return)
+	{
+		const bool command_items_ok = transport_succeeded && planned_fields_valid &&
+			item_range_succeeded(planned_fields_begin, planned_fields_end);
+		const bool command_success = core_write_ok && command_items_ok &&
+			running_.load(std::memory_order_acquire);
+		std::uint8_t possibly_started_mask = 0;
+		if (planned_slot.command.operation == AdsPlannedReturnOperation::Commit &&
+			planned_fields_valid)
+		{
+			if (write_attempted && !transport_succeeded)
+			{
+				// 请求已交给ADS库但没有完整响应，无法证明各腿Req未生效；保守禁止重发。
+				possibly_started_mask = planned_commit_axis_mask;
+			}
+			else if (transport_succeeded)
+			{
+				for (std::size_t axis_slot = 0;
+					axis_slot < planned_commit_req_item_index.size();
+					++axis_slot)
+				{
+					const int item_index = planned_commit_req_item_index[axis_slot];
+					if (item_index >= 0 &&
+						item_results[static_cast<std::size_t>(item_index)] == 0)
+					{
+						possibly_started_mask |= axis_slot == 0 ? 0x01u : 0x02u;
+					}
+				}
+			}
+		}
+		complete_planned_return_command(
+			planned_slot.sequence,
+			command_success,
+			possibly_started_mask);
+		planned_return_read_index_.store(planned_read_index + 1, std::memory_order_release);
+	}
+	if (!core_write_ok)
 	{
 		if (recover) watchdog_recovery_pending_.store(true, std::memory_order_release);
 		return false;
@@ -1321,8 +1788,46 @@ bool AdsCommunicationService::write_output_cycle()
 	{
 		// 仅在包含该命令语义的 Sum Write 成功后推进；发布更快时允许跳过中间代次。
 		applied_output_generation_.store(output_generation, std::memory_order_release);
+		if (has_output && output.motion_enabled)
+		{
+			// motion_enabled保证本次事务实际包含refer，不能由仅心跳/清旁路的代次冒充。
+			applied_motion_output_generation_.store(output_generation, std::memory_order_release);
+		}
 	}
 	return true;
+}
+
+void AdsCommunicationService::complete_planned_return_command(
+	std::uint64_t sequence,
+	bool success,
+	std::uint8_t possibly_started_mask)
+{
+	if (sequence == 0) return;
+	PlannedReturnResultSlot& result =
+		planned_return_results_[sequence % kPlannedReturnResultCapacity];
+	if (result.sequence.load(std::memory_order_acquire) != sequence) return;
+	result.possibly_started_mask.store(possibly_started_mask, std::memory_order_release);
+	result.state.store(
+		static_cast<unsigned char>(success
+			? PlannedReturnResultState::Succeeded
+			: PlannedReturnResultState::Failed),
+		std::memory_order_release);
+}
+
+void AdsCommunicationService::fail_queued_planned_return_commands()
+{
+	std::uint64_t read_index =
+		planned_return_read_index_.load(std::memory_order_relaxed);
+	const std::uint64_t write_index =
+		planned_return_write_index_.load(std::memory_order_acquire);
+	while (read_index != write_index)
+	{
+		const PlannedReturnQueueSlot& slot =
+			planned_return_queue_[read_index % kPlannedReturnQueueCapacity];
+		complete_planned_return_command(slot.sequence, false);
+		++read_index;
+		planned_return_read_index_.store(read_index, std::memory_order_release);
+	}
 }
 
 bool AdsCommunicationService::register_notifications()
@@ -1349,7 +1854,11 @@ bool AdsCommunicationService::register_notifications()
 		{ AdsSymbol::axis1_return.busy, sizeof(bool), kNotifyAxis1ReturnBusy },
 		{ AdsSymbol::axis1_return.done, sizeof(bool), kNotifyAxis1ReturnDone },
 		{ AdsSymbol::axis1_return.error, sizeof(bool), kNotifyAxis1ReturnError },
-		{ AdsSymbol::axis1_return.error_id, sizeof(std::uint32_t), kNotifyAxis1ReturnErrorId }
+		{ AdsSymbol::axis1_return.error_id, sizeof(std::uint32_t), kNotifyAxis1ReturnErrorId },
+		{ AdsSymbol::axis6_return.busy, sizeof(bool), kNotifyAxis6ReturnBusy },
+		{ AdsSymbol::axis6_return.done, sizeof(bool), kNotifyAxis6ReturnDone },
+		{ AdsSymbol::axis6_return.error, sizeof(bool), kNotifyAxis6ReturnError },
+		{ AdsSymbol::axis6_return.error_id, sizeof(std::uint32_t), kNotifyAxis6ReturnErrorId }
 	};
 	try
 	{
@@ -1414,6 +1923,8 @@ void AdsCommunicationService::unregister_notifications()
 
 void AdsCommunicationService::clear_runtime_connection_state()
 {
+	// 断线/重连不能让旧回退事务在新连接上继续执行。
+	fail_queued_planned_return_commands();
 	unregister_notifications();
 	clear_fast_handles();
 	{
@@ -1435,10 +1946,14 @@ void AdsCommunicationService::clear_runtime_connection_state()
 		event_state_.host_comm_timeout = true;
 		++axis1_return_event_sequence_counter_;
 		if (axis1_return_event_sequence_counter_ == 0) ++axis1_return_event_sequence_counter_;
+		++axis6_return_event_sequence_counter_;
+		if (axis6_return_event_sequence_counter_ == 0) ++axis6_return_event_sequence_counter_;
 		LARGE_INTEGER event_now{};
 		QueryPerformanceCounter(&event_now);
 		event_state_.axis1_return_event_sequence = axis1_return_event_sequence_counter_;
 		event_state_.axis1_return_event_qpc_ticks = event_now.QuadPart;
+		event_state_.axis6_return_event_sequence = axis6_return_event_sequence_counter_;
+		event_state_.axis6_return_event_qpc_ticks = event_now.QuadPart;
 		notification_update_mask_ = 0;
 	}
 }

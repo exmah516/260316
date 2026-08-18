@@ -439,6 +439,43 @@ namespace plc_io
 		return false;
 	}
 
+	bool clear_axis_return_requests(
+		AppContext& ctx,
+		const AxisReturnAdsSymbols* const* symbols,
+		int count)
+	{
+		if (symbols == nullptr || count <= 0 || count > 2)
+		{
+			return false;
+		}
+
+		bool req = false;
+		const char* names[2] = {};
+		unsigned long lengths[2] = {};
+		const void* values[2] = {};
+		for (int i = 0; i < count; ++i)
+		{
+			if (symbols[i] == nullptr || symbols[i]->req == nullptr)
+			{
+				return false;
+			}
+			names[i] = symbols[i]->req;
+			lengths[i] = sizeof(req);
+			values[i] = &req;
+		}
+
+		if (!ads_write_sum(ctx, names, lengths, values, count))
+		{
+			std::cout << "计划回退 ADS 请求批量清除失败，错误：" << ads_error_text(ctx);
+			return false;
+		}
+		for (int i = 0; i < count; ++i)
+		{
+			invalidate_axis_return_cache(*symbols[i]);
+		}
+		return true;
+	}
+
 	bool request_axis_return(
 		AppContext& ctx,
 		const AxisReturnAdsSymbols& symbols,
@@ -448,47 +485,143 @@ namespace plc_io
 		double dec,
 		double jerk)
 	{
-		// 先清 Req，再完整写入参数，最后置位 Req，避免 PLC 消费到半更新参数。
-		bool req = false;
-		auto write_required = [&](const char* symbol, unsigned long length, const void* value) -> bool
-		{
-			if (ads_write(ctx, symbol, length, value))
-			{
-				return true;
-			}
-			std::cout << "计划回退 ADS 写入失败：" << symbol
-				<< "，错误：" << ads_error_text(ctx);
-			return false;
-		};
+		const AxisReturnAdsSymbols* symbol_list[] = { &symbols };
+		const double targets[] = { target_abs };
+		const double velocities[] = { velocity };
+		const double accelerations[] = { acc };
+		const double decelerations[] = { dec };
+		const double jerks[] = { jerk };
+		return request_axis_returns(
+			ctx,
+			symbol_list,
+			targets,
+			velocities,
+			accelerations,
+			decelerations,
+			jerks,
+			1);
+	}
 
-		const char* parameter_names[] = {
-			symbols.req, symbols.target_abs, symbols.velocity,
-			symbols.acc, symbols.dec, symbols.jerk
-		};
-		const unsigned long parameter_lengths[] = {
-			sizeof(req), sizeof(target_abs), sizeof(velocity),
-			sizeof(acc), sizeof(dec), sizeof(jerk)
-		};
-		const void* parameter_values[] = {
-			&req, &target_abs, &velocity, &acc, &dec, &jerk
-		};
-		if (!ads_write_sum(ctx, parameter_names, parameter_lengths, parameter_values, 6))
+	bool prepare_axis_returns(
+		AppContext& ctx,
+		const AxisReturnAdsSymbols* const* symbols,
+		const double* target_abs,
+		const double* velocity,
+		const double* acc,
+		const double* dec,
+		const double* jerk,
+		int count)
+	{
+		if (symbols == nullptr || target_abs == nullptr || velocity == nullptr ||
+			acc == nullptr || dec == nullptr || jerk == nullptr || count <= 0 || count > 2)
+		{
+			return false;
+		}
+
+		// 第一阶段：同一事务写入所有腿的 Req=FALSE 与完整参数。
+		bool req_false = false;
+		const char* parameter_names[12] = {};
+		unsigned long parameter_lengths[12] = {};
+		const void* parameter_values[12] = {};
+		for (int i = 0; i < count; ++i)
+		{
+			if (symbols[i] == nullptr || symbols[i]->req == nullptr ||
+				symbols[i]->target_abs == nullptr || symbols[i]->velocity == nullptr ||
+				symbols[i]->acc == nullptr || symbols[i]->dec == nullptr ||
+				symbols[i]->jerk == nullptr)
+			{
+				return false;
+			}
+			const int base = i * 6;
+			parameter_names[base + 0] = symbols[i]->req;
+			parameter_names[base + 1] = symbols[i]->target_abs;
+			parameter_names[base + 2] = symbols[i]->velocity;
+			parameter_names[base + 3] = symbols[i]->acc;
+			parameter_names[base + 4] = symbols[i]->dec;
+			parameter_names[base + 5] = symbols[i]->jerk;
+			parameter_lengths[base + 0] = sizeof(req_false);
+			parameter_lengths[base + 1] = sizeof(target_abs[i]);
+			parameter_lengths[base + 2] = sizeof(velocity[i]);
+			parameter_lengths[base + 3] = sizeof(acc[i]);
+			parameter_lengths[base + 4] = sizeof(dec[i]);
+			parameter_lengths[base + 5] = sizeof(jerk[i]);
+			parameter_values[base + 0] = &req_false;
+			parameter_values[base + 1] = &target_abs[i];
+			parameter_values[base + 2] = &velocity[i];
+			parameter_values[base + 3] = &acc[i];
+			parameter_values[base + 4] = &dec[i];
+			parameter_values[base + 5] = &jerk[i];
+		}
+		if (!ads_write_sum(
+			ctx,
+			parameter_names,
+			parameter_lengths,
+			parameter_values,
+			static_cast<unsigned long>(count * 6)))
 		{
 			std::cout << "计划回退 ADS 参数批量写入失败，错误：" << ads_error_text(ctx);
-			req = false;
-			(void)ads_write(ctx, symbols.req, sizeof(req), &req);
+			(void)clear_axis_return_requests(ctx, symbols, count);
+			return false;
+		}
+		return true;
+	}
+
+	bool commit_axis_return_requests(
+		AppContext& ctx,
+		const AxisReturnAdsSymbols* const* symbols,
+		int count)
+	{
+		if (symbols == nullptr || count <= 0 || count > 2)
+		{
 			return false;
 		}
 
-		req = true;
-		if (!write_required(symbols.req, sizeof(req), &req))
+		// 第二阶段：在参数和旧 Done/Error 已有机会清理后，同时置位全部 Req。
+		bool req_true = true;
+		const char* request_names[2] = {};
+		unsigned long request_lengths[2] = {};
+		const void* request_values[2] = {};
+		for (int i = 0; i < count; ++i)
 		{
-			req = false;
-			(void)ads_write(ctx, symbols.req, sizeof(req), &req);
+			request_names[i] = symbols[i]->req;
+			request_lengths[i] = sizeof(req_true);
+			request_values[i] = &req_true;
+		}
+		if (!ads_write_sum(
+			ctx,
+			request_names,
+			request_lengths,
+			request_values,
+			static_cast<unsigned long>(count)))
+		{
+			std::cout << "计划回退 ADS 请求批量置位失败，错误：" << ads_error_text(ctx);
+			(void)clear_axis_return_requests(ctx, symbols, count);
 			return false;
 		}
-		invalidate_axis_return_cache(symbols);
+
+		for (int i = 0; i < count; ++i)
+		{
+			invalidate_axis_return_cache(*symbols[i]);
+		}
 		return true;
+	}
+
+	bool request_axis_returns(
+		AppContext& ctx,
+		const AxisReturnAdsSymbols* const* symbols,
+		const double* target_abs,
+		const double* velocity,
+		const double* acc,
+		const double* dec,
+		const double* jerk,
+		int count)
+	{
+		if (!prepare_axis_returns(
+			ctx, symbols, target_abs, velocity, acc, dec, jerk, count))
+		{
+			return false;
+		}
+		return commit_axis_return_requests(ctx, symbols, count);
 	}
 
 	bool clear_axis1_group_return_requests(AppContext& ctx)

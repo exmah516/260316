@@ -59,6 +59,33 @@ struct AdsOutputCommand
 	bool axis4_forward_req = false;
 	bool axis4_reverse_req = false;
 	bool startup_smoothing_bypass = false;
+	// 仅供C++内部统一交接：bit0清axis1 Req，bit1清axis6 Req。
+	std::uint8_t planned_return_clear_mask = 0;
+};
+
+enum class AdsPlannedReturnOperation : unsigned char
+{
+	Prepare = 0,
+	Commit = 1,
+	Clear = 2
+};
+
+struct AdsPlannedReturnLegCommand
+{
+	// 沿用控制代码的零基轴号：0 表示 axis1，5 表示 axis6。
+	int axis_index = -1;
+	double target_abs = 0.0;
+	double velocity = 0.0;
+	double acc = 0.0;
+	double dec = 0.0;
+	double jerk = 0.0;
+};
+
+struct AdsPlannedReturnCommand
+{
+	AdsPlannedReturnOperation operation = AdsPlannedReturnOperation::Clear;
+	int leg_count = 0;
+	AdsPlannedReturnLegCommand legs[2] = {};
 };
 
 struct AdsEventState
@@ -89,6 +116,20 @@ struct AdsEventState
 	std::uint32_t axis1_return_last_nonzero_error_id = 0;
 	std::uint64_t axis1_return_last_nonzero_error_id_sequence = 0;
 	std::int64_t axis1_return_event_qpc_ticks = 0;
+	bool axis6_return_busy = false;
+	bool axis6_return_done = false;
+	bool axis6_return_error = false;
+	std::uint32_t axis6_return_error_id = 0;
+	std::uint64_t axis6_return_event_sequence = 0;
+	// 与轴1相同，锁存接收确认、完成和故障边沿，避免短脉冲被主循环漏掉。
+	std::uint64_t axis6_return_busy_true_sequence = 0;
+	std::uint64_t axis6_return_done_false_sequence = 0;
+	std::uint64_t axis6_return_done_true_sequence = 0;
+	std::uint64_t axis6_return_error_true_sequence = 0;
+	// ErrorId 可能晚于Error到达，保留本轮最近一次非零错误码及其事件序号。
+	std::uint32_t axis6_return_last_nonzero_error_id = 0;
+	std::uint64_t axis6_return_last_nonzero_error_id_sequence = 0;
+	std::int64_t axis6_return_event_qpc_ticks = 0;
 };
 
 struct AdsCommunicationStats
@@ -119,6 +160,17 @@ public:
 	void drain_snapshots(std::vector<AdsFastSnapshot>& snapshots);
 	std::uint64_t publish_output(const AdsOutputCommand& command);
 	std::uint64_t applied_output_generation() const;
+	// 仅在包含refer的motion_enabled输出成功写入后推进，用于确认实际位置保持语义。
+	std::uint64_t applied_motion_output_generation() const;
+	// 计划回退命令只复制进固定容量队列；0 表示参数非法、服务未运行或队列已满。
+	std::uint64_t submit_planned_return_command(const AdsPlannedReturnCommand& command);
+	// 返回 false 表示序号无效或结果历史已被覆盖；返回 true 时其余输出参数有效。
+	// possibly_started_mask仅用于失败/未知Commit的保守判定：bit0=axis1，bit1=axis6。
+	bool planned_return_command_result(
+		std::uint64_t sequence,
+		bool& completed,
+		bool& success,
+		std::uint8_t& possibly_started_mask) const;
 	void request_coordinate_refresh();
 	bool refresh_coordinates(DWORD timeout_ms = 250);
 	void request_watchdog_recovery();
@@ -152,7 +204,12 @@ private:
 	void clear_fast_handles();
 	bool refresh_coordinate_cache_now();
 	bool read_fast_snapshot(AdsFastSnapshot& snapshot, bool handles_fresh);
-	bool write_output_cycle();
+	bool write_output_cycle(bool& planned_return_processed);
+	void fail_queued_planned_return_commands();
+	void complete_planned_return_command(
+		std::uint64_t sequence,
+		bool success,
+		std::uint8_t possibly_started_mask = 0);
 	bool register_notifications();
 	void unregister_notifications();
 	void clear_runtime_connection_state();
@@ -192,6 +249,32 @@ private:
 		bool success = false;
 	};
 
+	static constexpr std::size_t kPlannedReturnQueueCapacity = 32;
+	static constexpr std::size_t kPlannedReturnResultCapacity = 128;
+	static constexpr std::size_t kPlannedReturnFieldsPerAxis = 6;
+
+	struct PlannedReturnQueueSlot
+	{
+		AdsPlannedReturnCommand command{};
+		std::uint64_t sequence = 0;
+	};
+
+	enum class PlannedReturnResultState : unsigned char
+	{
+		Unknown = 0,
+		Pending = 1,
+		Succeeded = 2,
+		Failed = 3
+	};
+
+	struct PlannedReturnResultSlot
+	{
+		std::atomic<std::uint64_t> sequence{ 0 };
+		std::atomic<unsigned char> possibly_started_mask{ 0 };
+		std::atomic<unsigned char> state{
+			static_cast<unsigned char>(PlannedReturnResultState::Unknown) };
+	};
+
 	bool submit_low_frequency_request(
 		const std::shared_ptr<LowFrequencyRequest>& request,
 		DWORD timeout_ms);
@@ -220,12 +303,14 @@ private:
 	std::uint64_t next_output_generation_ = 0;
 	std::uint64_t desired_output_generation_ = 0;
 	std::atomic<std::uint64_t> applied_output_generation_{ 0 };
+	std::atomic<std::uint64_t> applied_motion_output_generation_{ 0 };
 	std::atomic<bool> watchdog_recovery_pending_{ false };
 
 	mutable std::mutex event_mutex_;
 	AdsEventState event_state_{};
 	std::uint32_t notification_update_mask_ = 0;
 	std::uint64_t axis1_return_event_sequence_counter_ = 0;
+	std::uint64_t axis6_return_event_sequence_counter_ = 0;
 
 	mutable std::mutex stats_mutex_;
 	AdsCommunicationStats stats_{};
@@ -249,8 +334,23 @@ private:
 	std::array<unsigned long, 17> fast_direct_read_handles_{};
 	std::array<unsigned long, 11> fast_fallback_read_handles_{};
 	std::array<unsigned long, 14> fast_write_handles_{};
+	// 每行依次为 Req、TargetAbs、Velocity、Acc、Dec、Jerk；第0/1行为axis1/axis6。
+	std::array<std::array<unsigned long, kPlannedReturnFieldsPerAxis>, 2>
+		planned_return_write_handles_{};
 	bool fast_handles_valid_ = false;
 	std::vector<NotificationRegistration> notification_registrations_;
+
+	// 单生产者（主控制线程）/单消费者（100 Hz ADS线程）的固定容量环形队列。
+	std::array<PlannedReturnQueueSlot, kPlannedReturnQueueCapacity>
+		planned_return_queue_{};
+	std::array<PlannedReturnResultSlot, kPlannedReturnResultCapacity>
+		planned_return_results_{};
+	std::atomic<std::uint64_t> planned_return_write_index_{ 0 };
+	std::atomic<std::uint64_t> planned_return_read_index_{ 0 };
+	std::atomic<std::uint64_t> next_planned_return_sequence_{ 0 };
+	// Clear提交后，尚未开始且触及同轴的更早Prepare/Commit会在消费者侧失败出队。
+	std::array<std::atomic<std::uint64_t>, 2>
+		planned_return_clear_barrier_sequence_{};
 
 	std::mutex low_frequency_mutex_;
 	std::deque<std::shared_ptr<LowFrequencyRequest>> low_frequency_requests_;

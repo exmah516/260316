@@ -31,7 +31,15 @@ public:
 	bool ADSReadSum(const char* const* symbols, const unsigned long* lengths, void* const* outputs, unsigned long count);
 	bool ADSReadSumByHandle(const unsigned long* handles, const unsigned long* lengths, void* const* outputs, unsigned long count);
 	bool ADSWriteSum(const char* const* symbols, const unsigned long* lengths, const void* const* inputs, unsigned long count);
-	bool ADSWriteSumByHandle(const unsigned long* handles, const unsigned long* lengths, const void* const* inputs, unsigned long count);
+	// itemResults可接收每个子项的ADS结果码；transportSucceeded仅表示Sum事务传输和响应完整。
+	// 两个参数均可为空，旧四参数调用保持兼容。
+	bool ADSWriteSumByHandle(
+		const unsigned long* handles,
+		const unsigned long* lengths,
+		const void* const* inputs,
+		unsigned long count,
+		unsigned long* itemResults = nullptr,
+		bool* transportSucceeded = nullptr);
 	bool ADSWrite(unsigned long addr, unsigned long length, void * data);
 	bool ADSRead(unsigned long addr, unsigned long length, void * data);
 	unsigned long ADSGetAddr(const char * paraName);

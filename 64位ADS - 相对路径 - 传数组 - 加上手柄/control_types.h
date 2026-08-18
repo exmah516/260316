@@ -150,15 +150,15 @@ struct ControlConfig
 	double axis1_return_jerk_mm_s3 = 70000.0; // 原值 35000 mm/s^3
 	// 自动换手先同时下发电缸目标并稳定 50 ms，再启动电机轴；到位后不增加等待。
 	DWORD axis1_pre_move_cylinder_wait_ms = 50;
-	DWORD axis1_cylinder_interstep_wait_ms = 0; // 原值 50 ms
-	DWORD axis1_post_return_cylinder_wait_ms = 0; // 原值 100 ms
 	double axis6_return_velocity_mm_s = 400.0; // 原值 200 mm/s
 	double axis6_return_acc_mm_s2 = 4800.0; // 原值 2400 mm/s^2
 	double axis6_return_dec_mm_s2 = 4800.0; // 原值 2400 mm/s^2
 	double axis6_return_jerk_mm_s3 = 70000.0; // 原值 35000 mm/s^3
 	DWORD axis6_pre_move_cylinder_wait_ms = 50;
-	DWORD axis6_cylinder_interstep_wait_ms = 0; // 原值 50 ms
-	DWORD axis6_post_return_cylinder_wait_ms = 0; // 原值 100 ms
+	// 统一计划回退握手：只允许在PLC尚未启动动作时自动重试一次。
+	DWORD planned_return_ack_timeout_ms = 250;
+	DWORD planned_return_retry_clear_timeout_ms = 500;
+	DWORD planned_return_execution_timeout_ms = 5000;
 
 	// 手柄低通滤波。
 	double linear_handle_alpha = 0.25;
@@ -247,6 +247,182 @@ enum class CooperativeReturnOwner
 	Axis6
 };
 
+// 六种业务模式共用的计划回退生命周期。Follow 仍由各轴现有逻辑计算，
+// 这里只管理触发后的夹爪稳定、PLC握手、非阻塞交接和可选自动先行。
+enum class PlannedReturnPhase : unsigned char
+{
+	Idle,
+	ClampSettle,
+	SubmitRequest,
+	AwaitAccepted,
+	AwaitDone,
+	RetryClear,
+	CancelWait,
+	AwaitFreshSnapshot,
+	PublishHandoff,
+	AwaitHandoffApplied,
+	OptionalLead
+};
+
+enum class PlannedReturnMode : unsigned char
+{
+	None,
+	CatheterDelivery,
+	CatheterRetraction,
+	GuidewireDelivery,
+	GuidewireRetraction,
+	CooperativeDeliveryAxis1,
+	CooperativeDeliveryAxis6,
+	CooperativeRetractionAxis1,
+	CooperativeRetractionAxis6
+};
+
+enum class PlannedReturnRebaseScope : unsigned char
+{
+	Axis1,
+	Axis6,
+	Cooperative
+};
+
+enum class PlannedReturnPostAction : unsigned char
+{
+	None,
+	Axis1DeliveryLead
+};
+
+// 统一换手通过通信线程异步提交的 ADS 批量命令用途。
+// 状态机只保存序号并轮询完成结果，主控制线程不等待 ADS 调用。
+enum class PlannedReturnAdsCommandPurpose : unsigned char
+{
+	None,
+	Prepare,
+	Commit,
+	RetryClear,
+	CancelClear
+};
+
+struct PlannedReturnLeg
+{
+	bool active = false;
+	int axis_index = -1; // 0=axis1，5=axis6
+	double target_abs = 0.0;
+	double entry_rel = 0.0;
+	bool request_armed = false; // 已捕获本次commit前事件基线，允许解释后续Notification
+	bool acknowledged = false;
+	bool started = false;
+	// Commit部分成功或传输结果未知时锁存；即使Notification尚未到达也禁止整组自动重发。
+	bool possibly_started = false;
+	bool done = false;
+	std::uint64_t request_event_sequence = 0;
+	std::uint64_t ack_event_sequence = 0;
+	std::uint64_t error_event_sequence = 0;
+	std::uint32_t reported_error_id = 0;
+	std::uint64_t cancel_event_sequence = 0;
+	bool cancel_event_required = false;
+
+	void reset()
+	{
+		*this = PlannedReturnLeg{};
+	}
+};
+
+struct PlannedReturnCoordinator
+{
+	PlannedReturnPhase phase = PlannedReturnPhase::Idle;
+	PlannedReturnMode mode = PlannedReturnMode::None;
+	PlannedReturnRebaseScope rebase_scope = PlannedReturnRebaseScope::Axis1;
+	PlannedReturnPostAction post_action = PlannedReturnPostAction::None;
+	PlannedReturnLeg legs[2];
+	int leg_count = 0;
+	unsigned int retry_count = 0;
+	ULONGLONG phase_t0_ms = 0;
+	ULONGLONG request_t0_ms = 0;
+	ULONGLONG execution_t0_ms = 0;
+	ULONGLONG retry_clear_t0_ms = 0;
+	std::uint64_t clamp_output_generation = 0;
+	bool clamp_output_applied = false;
+	bool request_prepared = false;
+	std::uint64_t commit_guard_generation = 0;
+	bool retry_clear_issued = false;
+	std::uint64_t retry_clear_snapshot_sequence = 0;
+	PlannedReturnAdsCommandPurpose ads_command_purpose = PlannedReturnAdsCommandPurpose::None;
+	std::uint64_t ads_command_sequence = 0;
+	ULONGLONG ads_command_submit_ms = 0;
+	bool cancel_clear_confirmed = false;
+	bool completion_clear_confirmed = false;
+	std::uint64_t cancel_snapshot_sequence = 0;
+	ULONGLONG cancel_t0_ms = 0;
+	ULONGLONG cancel_clear_retry_after_ms = 0;
+	bool cancel_timeout_reported = false;
+	bool cancel_rebased = false;
+	std::uint64_t cancel_hold_generation = 0;
+	std::uint64_t done_snapshot_sequence = 0;
+	std::uint64_t handoff_generation = 0;
+	std::uint64_t lead_arrive_snapshot_sequence = 0;
+	unsigned int lead_arrive_samples = 0;
+	ULONGLONG lead_t0_ms = 0;
+	double lead_target_abs = 0.0;
+	double hold_axis3_rel = 0.0;
+	double hold_axis5_rel = 0.0;
+
+	bool active() const
+	{
+		return phase != PlannedReturnPhase::Idle;
+	}
+
+	bool contains_axis(int axis_index) const
+	{
+		for (int i = 0; i < leg_count; ++i)
+		{
+			if (legs[i].active && legs[i].axis_index == axis_index) return true;
+		}
+		return false;
+	}
+
+	bool cooperative() const
+	{
+		return mode == PlannedReturnMode::CooperativeDeliveryAxis1 ||
+			mode == PlannedReturnMode::CooperativeDeliveryAxis6 ||
+			mode == PlannedReturnMode::CooperativeRetractionAxis1 ||
+			mode == PlannedReturnMode::CooperativeRetractionAxis6;
+	}
+
+	CooperativeReturnOwner cooperative_owner() const
+	{
+		if (mode == PlannedReturnMode::CooperativeDeliveryAxis1 ||
+			mode == PlannedReturnMode::CooperativeRetractionAxis1)
+		{
+			return CooperativeReturnOwner::Axis1;
+		}
+		if (mode == PlannedReturnMode::CooperativeDeliveryAxis6 ||
+			mode == PlannedReturnMode::CooperativeRetractionAxis6)
+		{
+			return CooperativeReturnOwner::Axis6;
+		}
+		return CooperativeReturnOwner::None;
+	}
+
+	// 保持既有WPF数值契约：0=Follow，1=夹爪稳定，2=请求/运动，3=交接/先行。
+	int compatibility_phase_for_axis(int axis_index) const
+	{
+		if (!active() || !contains_axis(axis_index)) return 0;
+		if (phase == PlannedReturnPhase::ClampSettle) return 1;
+		if (phase == PlannedReturnPhase::SubmitRequest ||
+			phase == PlannedReturnPhase::AwaitAccepted ||
+			phase == PlannedReturnPhase::AwaitDone ||
+			phase == PlannedReturnPhase::RetryClear)
+		{
+			return 2;
+		}
+		return 3;
+	}
+
+	void reset()
+	{
+		*this = PlannedReturnCoordinator{};
+	}
+};
+
 enum class SpacingRecoveryPhase
 {
 	Idle,
@@ -307,18 +483,9 @@ enum class StartupPhase
 
 struct CrawlState
 {
-	// Follow：在激活窗口内直接映射手柄输入。
-	// Switch/Clamp/Restore：围绕快速回退/推进动作的夹爪时序封装。
-	enum class Phase
-	{
-		Follow,
-		SwitchWait,
-		FastMove,
-		RestoreWait
-	};
-
+	// 这里只保留 Follow 计算所需的手柄基准、轴基准和窗口。
+	// 自动换手阶段、计时、PLC请求和夹爪时序统一由 PlannedReturnCoordinator 管理。
 	bool enabled = false;
-	Phase phase = Phase::Follow;
 	bool window_active = false;
 	double handle_ref = 0.0; // 当前控制段的手柄线性基准（重同步/重建基线时更新）
 	double rot_ref = 0.0; // 当前控制段的手柄旋转基准
@@ -326,13 +493,6 @@ struct CrawlState
 	double rot_base_rel = 0.0; // 当前控制段的旋转轴相对基线
 	double start_abs = 0.0; // 窗口起点绝对坐标(mm)
 	double end_abs = 0.0; // 窗口终点绝对坐标(mm)
-	double target_abs = 0.0; // 本次快退目标绝对坐标(mm)
-	bool plc_move_requested = false;
-	DWORD phase_t0 = 0;
-	// 顺序切缸子阶段：
-	// 0=未启用/已完成，1=第一步已下发，2=第二步已下发（进入旧等待计时）
-	int cyl_seq_stage = 0;
-	DWORD cyl_seq_t0 = 0;
 
 	double min_abs() const { return (start_abs < end_abs) ? start_abs : end_abs; }
 	double max_abs() const { return (start_abs > end_abs) ? start_abs : end_abs; }
@@ -506,21 +666,6 @@ struct AppContext
 	double* axis3_base_rel = nullptr;
 	double* axis5_base_rel = nullptr;
 	double* axis6_mirror_base_rel = nullptr;
-	double* axis1_return_entry_rel = nullptr;
-	double* axis1_return_settle_rel = nullptr;
-	double* axis6_return_entry_rel = nullptr;
-	double* axis6_return_settle_rel = nullptr;
-	double* axis1_return_hold_axis3_rel = nullptr;
-	double* axis1_return_hold_axis5_rel = nullptr;
-	double* axis1_fast_entry_abs = nullptr;
-	double* axis6_fast_entry_abs = nullptr;
-	double* axis6_coupled_target_abs = nullptr;
-	double* axis6_coupled_settle_rel = nullptr;
-	bool* axis6_coupled_active = nullptr;
-	bool* axis6_coupled_requested = nullptr;
-	bool* axis6_coupled_done = nullptr;
-	bool* axis6_coupled_error = nullptr;
-	unsigned long* axis6_coupled_error_id = nullptr;
 	double* axis2_hold_rel = nullptr;
 	double* axis7_hold_rel = nullptr;
 	double* axis1_prev_linear_filtered = nullptr;

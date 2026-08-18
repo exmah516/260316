@@ -4,6 +4,7 @@
 // 3) 模式入口按轴5当前位置重建 axis6 窗口，不承载主循环状态机。
 #include "guidewire_mode.h"
 
+#include "ads_communication.h"
 #include "motion_sync.h"
 #include "plc_io.h"
 
@@ -19,6 +20,28 @@ namespace
 		{
 			std::cout << "导丝模式切换失败：无法清除轴6计划回退请求。" << std::endl;
 			return false;
+		}
+
+		if (ctx.ads_service != nullptr)
+		{
+			if (ctx.ads_service->stats().state != AdsConnectionState::Running)
+			{
+				std::cout << "导丝模式切换失败：ADS 通信服务未运行。" << std::endl;
+				return false;
+			}
+			const AdsEventState events = ctx.ads_service->event_state();
+			if (events.axis6_return_busy)
+			{
+				std::cout << "导丝模式切换已拒绝：轴6计划回退仍在执行，请等待 Busy 清除。" << std::endl;
+				return false;
+			}
+			if (events.axis6_return_error)
+			{
+				std::cout << "导丝模式切换已拒绝：轴6计划回退仍有未清除错误，错误码: "
+					<< events.axis6_return_error_id << std::endl;
+				return false;
+			}
+			return true;
 		}
 
 		AxisReturnStatus status;
@@ -70,12 +93,6 @@ namespace guidewire_mode_ctrl
 		{
 			return false;
 		}
-		ctx.axis6_crawl->target_abs = ctx.axis6_crawl->end_abs;
-		ctx.axis6_crawl->plc_move_requested = false;
-		ctx.axis6_crawl->phase = CrawlState::Phase::Follow;
-		ctx.axis6_crawl->phase_t0 = GetTickCount();
-		ctx.axis6_crawl->cyl_seq_stage = 0;
-		ctx.axis6_crawl->cyl_seq_t0 = ctx.axis6_crawl->phase_t0;
 		ctx.axis6_crawl->window_active = is_within_range(
 			ctx.plc_act_pos[5] + ctx.plc_init_pos[5],
 			ctx.axis6_crawl->min_abs(),
