@@ -216,36 +216,9 @@
                             </StackPanel>
                         </Border>
 
-                        <!-- 轴4：显示角度并提供按住点动控制 -->
-                        <Border Style="{StaticResource AxisRowBorder}" Padding="10,8">
-                            <StackPanel>
-                                <Grid>
-                                    <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="*"/>
-                                        <ColumnDefinition Width="Auto"/>
-                                    </Grid.ColumnDefinitions>
-                                    <TextBlock Text="{Binding Axis4RotationText}" FontWeight="SemiBold"
-                                               VerticalAlignment="Center"/>
-                                    <StackPanel Grid.Column="1" Orientation="Horizontal">
-                                        <Button Content="后退" CommandParameter="-1"
-                                                IsEnabled="{Binding Axis4ManualControlAllowed}"
-                                                PreviewMouseLeftButtonDown="Axis4JogButton_PreviewMouseLeftButtonDown"
-                                                PreviewMouseLeftButtonUp="Axis4JogButton_PreviewMouseLeftButtonUp"
-                                                LostMouseCapture="Axis4JogButton_LostMouseCapture"
-                                                Padding="12,6" Margin="8,0,4,0"
-                                                ToolTip="按住时轴4后退，松开立即停止"/>
-                                        <Button Content="前进" CommandParameter="1"
-                                                IsEnabled="{Binding Axis4ManualControlAllowed}"
-                                                PreviewMouseLeftButtonDown="Axis4JogButton_PreviewMouseLeftButtonDown"
-                                                PreviewMouseLeftButtonUp="Axis4JogButton_PreviewMouseLeftButtonUp"
-                                                LostMouseCapture="Axis4JogButton_LostMouseCapture"
-                                                Padding="12,6" Margin="4,0,0,0"
-                                                ToolTip="按住时轴4前进，松开立即停止"/>
-                                    </StackPanel>
-                                </Grid>
-                                <TextBlock Text="{Binding Axis4ManualStatusText}"
-                                           Style="{StaticResource CaptionText}" Margin="0,5,0,0"/>
-                            </StackPanel>
+                        <!-- 轴4 -->
+                        <Border Style="{StaticResource AxisRowBorder}">
+                            <TextBlock Text="{Binding Axis4RotationText}" FontWeight="SemiBold"/>
                         </Border>
 
                         <!-- 轴5 -->
@@ -378,6 +351,7 @@
                         <RowDefinition Height="Auto"/>
                         <RowDefinition Height="Auto"/>
                         <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
                     </Grid.RowDefinitions>
 
                     <!-- 启动准备 -->
@@ -431,7 +405,15 @@
                                 <ToggleButton x:Name="GravityCompCheckBox" Content="重力补偿"
                                               IsChecked="{Binding GravityCompEnabled, Mode=OneWay}"
                                               Click="GravityComp_Click" Margin="0,0,8,6" Padding="12,7"/>
+                                <ToggleButton x:Name="ForceFeedbackHoldCheckBox" Content="力反馈-保持"
+                                              IsChecked="{Binding ForceFeedbackHoldEnabled, Mode=OneWay}"
+                                              IsEnabled="{Binding IsConnected}"
+                                              Click="ForceFeedbackHold_Click" Margin="0,0,8,6" Padding="12,7"
+                                              ToolTip="自动换手恢复夹爪时，将当前反馈力/力矩保持200ms后再恢复实时反馈"/>
                             </WrapPanel>
+                            <TextBlock Text="{Binding ForceFeedbackHoldStatusText}"
+                                       Style="{StaticResource CaptionText}" Margin="0,0,0,8"
+                                       TextWrapping="Wrap"/>
                             <TextBlock x:Name="ForcePlotError" Style="{StaticResource ErrorText}" Margin="0,0,0,8"/>
 
                             <Border Background="{StaticResource SurfaceAltBrush}" CornerRadius="6" Padding="12,10">
@@ -577,6 +559,58 @@
                             <ToggleButton Content="电缸 4" IsChecked="{Binding Cyl4Open, Mode=OneWay}" Click="Cyl4_Click" Margin="3" MinHeight="40"/>
                         </UniformGrid>
                     </GroupBox>
+
+					<!-- 辅助执行器 -->
+					<GroupBox Grid.Row="5" Header="辅助执行器控制"
+							  IsEnabled="{Binding Axis4ManualControlAllowed}">
+						<Grid Margin="2">
+							<Grid.ColumnDefinitions>
+								<ColumnDefinition Width="92"/>
+								<ColumnDefinition Width="*"/>
+								<ColumnDefinition Width="*"/>
+							</Grid.ColumnDefinitions>
+							<Grid.RowDefinitions>
+								<RowDefinition Height="Auto"/>
+								<RowDefinition Height="Auto"/>
+								<RowDefinition Height="Auto"/>
+								<RowDefinition Height="Auto"/>
+							</Grid.RowDefinitions>
+
+							<TextBlock Grid.Row="0" Grid.Column="0" Text="球囊" Style="{StaticResource FieldLabelText}"/>
+							<Button Grid.Row="0" Grid.Column="1" Content="球囊撤出" CommandParameter="-1"
+									PreviewMouseLeftButtonDown="Axis4JogButton_PreviewMouseLeftButtonDown"
+									PreviewMouseLeftButtonUp="Axis4JogButton_PreviewMouseLeftButtonUp"
+									LostMouseCapture="Axis4JogButton_LostMouseCapture" Margin="3" MinHeight="38"/>
+							<Button Grid.Row="0" Grid.Column="2" Content="球囊输送" CommandParameter="1"
+									PreviewMouseLeftButtonDown="Axis4JogButton_PreviewMouseLeftButtonDown"
+									PreviewMouseLeftButtonUp="Axis4JogButton_PreviewMouseLeftButtonUp"
+									LostMouseCapture="Axis4JogButton_LostMouseCapture" Margin="3" MinHeight="38"/>
+
+							<TextBlock Grid.Row="1" Grid.Column="0" Text="Y阀" Style="{StaticResource FieldLabelText}"/>
+							<Button Grid.Row="1" Grid.Column="1" Content="Y阀打开" Click="YValveOpen_Click" Margin="3" MinHeight="38"/>
+							<Button Grid.Row="1" Grid.Column="2" Content="Y阀关闭" Click="YValveClose_Click" Margin="3" MinHeight="38"/>
+
+							<TextBlock Grid.Row="2" Grid.Column="0" Text="注射器1" Style="{StaticResource FieldLabelText}"/>
+							<Button Grid.Row="2" Grid.Column="1" Content="拉" Tag="1" CommandParameter="-1"
+									PreviewMouseLeftButtonDown="InjectorJogButton_PreviewMouseLeftButtonDown"
+									PreviewMouseLeftButtonUp="InjectorJogButton_PreviewMouseLeftButtonUp"
+									LostMouseCapture="InjectorJogButton_LostMouseCapture" Margin="3" MinHeight="38"/>
+							<Button Grid.Row="2" Grid.Column="2" Content="推" Tag="1" CommandParameter="1"
+									PreviewMouseLeftButtonDown="InjectorJogButton_PreviewMouseLeftButtonDown"
+									PreviewMouseLeftButtonUp="InjectorJogButton_PreviewMouseLeftButtonUp"
+									LostMouseCapture="InjectorJogButton_LostMouseCapture" Margin="3" MinHeight="38"/>
+
+							<TextBlock Grid.Row="3" Grid.Column="0" Text="注射器2" Style="{StaticResource FieldLabelText}"/>
+							<Button Grid.Row="3" Grid.Column="1" Content="拉" Tag="2" CommandParameter="-1"
+									PreviewMouseLeftButtonDown="InjectorJogButton_PreviewMouseLeftButtonDown"
+									PreviewMouseLeftButtonUp="InjectorJogButton_PreviewMouseLeftButtonUp"
+									LostMouseCapture="InjectorJogButton_LostMouseCapture" Margin="3" MinHeight="38"/>
+							<Button Grid.Row="3" Grid.Column="2" Content="推" Tag="2" CommandParameter="1"
+									PreviewMouseLeftButtonDown="InjectorJogButton_PreviewMouseLeftButtonDown"
+									PreviewMouseLeftButtonUp="InjectorJogButton_PreviewMouseLeftButtonUp"
+									LostMouseCapture="InjectorJogButton_LostMouseCapture" Margin="3" MinHeight="38"/>
+						</Grid>
+					</GroupBox>
 
                 </Grid>
             </ScrollViewer>

@@ -10,6 +10,8 @@ VAR
 	reset_		:		reset;
 	self_check_ :       SelfCheck;
 	arm_manual_ :       ArmManual;
+	axis2_sync_ :       Axis2Sync;
+	injector_manual_ :  InjectorManual;
 	axis6_enable_negative : BOOL := TRUE;
 	i:INT;
 END_VAR]]></Declaration>
@@ -18,7 +20,7 @@ END_VAR]]></Declaration>
 	G.axis[i]();	
 END_FOR
 
-// 注射器 NC 轴仅刷新 AXIS_REF，当前不进入业务状态机且不下发运动命令。
+// 注射器 NC 轴刷新 AXIS_REF，由独立点动 POU 控制，不进入业务状态机。
 FOR i:=1 TO 2 DO
 	G.inject_axis[i]();
 END_FOR
@@ -46,6 +48,8 @@ IF TwinCAT_SystemInfoVarList._TaskInfo[1].FirstCycle THEN
 END_IF
 	
 arm_manual_();
+axis2_sync_();
+injector_manual_();
 
 // 轴6自检触发左限位后只关闭负向许可，保留正向脱离限位的能力。
 axis6_enable_negative := NOT ((G.gen_state = _self_check) AND G.axis[6].Status.DriveLimitActive);

@@ -35,6 +35,8 @@ namespace AdsSymbol
 	extern const char* startup_smoothing_bypass;
 	extern const char* axis4_fwd_req;
 	extern const char* axis4_rev_req;
+	extern const char* inject_push_req;
+	extern const char* inject_pull_req;
 	extern const char* axis4_manual_busy;
 	extern const char* axis4_manual_done;
 	extern const char* axis4_manual_error;

@@ -59,7 +59,6 @@ VAR
 	return_dec : ARRAY[1..7] OF LREAL;
 	return_jerk : ARRAY[1..7] OF LREAL;
 	return_finish_error : ARRAY[1..7] OF BOOL;
-	return_cancelled : ARRAY[1..7] OF BOOL;
 	return_error_id_pending : ARRAY[1..7] OF UDINT;
 	fb_return_move_abs : ARRAY[1..7] OF MC_MoveAbsolute;
 
@@ -134,10 +133,7 @@ IF G.handle_reinit_req THEN
 		return_state[i] := 0;
 		return_exec[i] := FALSE;
 		return_finish_error[i] := FALSE;
-		return_cancelled[i] := FALSE;
 		return_error_id_pending[i] := 0;
-		host_return_stop_active[i] := FALSE;
-		host_return_stop_exec[i] := FALSE;
 		traj_pos[i] := 0.0;
 		traj_vel[i] := 0.0;
 		traj_acc[i] := 0.0;
@@ -526,14 +522,11 @@ FOR i:=1 TO 7 DO
 
 	IF return_state[i] = 0 THEN
 		G.return_cmd[i].Busy := FALSE;
-		host_return_stop_active[i] := FALSE;
-		host_return_stop_exec[i] := FALSE;
 		IF NOT G.return_cmd[i].Req THEN
 			G.return_cmd[i].Done := FALSE;
 			G.return_cmd[i].Error := FALSE;
 			G.return_cmd[i].ErrorId := 0;
 			return_finish_error[i] := FALSE;
-			return_cancelled[i] := FALSE;
 			return_error_id_pending[i] := 0;
 		ELSIF (NOT G.return_cmd[i].Done) AND (NOT G.return_cmd[i].Error) THEN
 			// Req 由上位机在完整写入参数后最后置位；此处只锁存一次，
@@ -543,27 +536,8 @@ FOR i:=1 TO 7 DO
 			return_acc[i] := G.return_cmd[i].Acc;
 			return_dec[i] := G.return_cmd[i].Dec;
 			return_jerk[i] := G.return_cmd[i].Jerk;
-			return_cancelled[i] := FALSE;
 			return_state[i] := 10;
 		END_IF
-	END_IF
-
-	// 上位机在任何尚未完成的阶段撤销请求时，都先受控停止轴。
-	// return_cancelled防止状态40复用30/31收尾后因Req仍为FALSE再次进入停止环。
-	IF ((return_state[i] = 10) OR (return_state[i] = 20) OR
-		(return_state[i] = 30) OR (return_state[i] = 31)) AND
-		(NOT G.return_cmd[i].Req) AND (NOT return_cancelled[i]) THEN
-		return_exec[i] := FALSE;
-		spg_enable_exec[i] := FALSE;
-		spg_disable_exec[i] := FALSE;
-		return_cancelled[i] := TRUE;
-		host_return_stop_active[i] := TRUE;
-		// 清除上一次执行沿；状态 40 首次处理时不会采信旧的 Done/Error。
-		host_return_stop_exec[i] := FALSE;
-		G.return_cmd[i].Done := FALSE;
-		G.return_cmd[i].Error := FALSE;
-		G.return_cmd[i].ErrorId := 0;
-		return_state[i] := 40;
 	END_IF
 
 	CASE return_state[i] OF
@@ -622,56 +596,14 @@ FOR i:=1 TO 7 DO
 				G.return_cmd[i].Done := FALSE;
 				G.return_cmd[i].Error := TRUE;
 				G.return_cmd[i].ErrorId := return_error_id_pending[i];
-			ELSIF return_cancelled[i] THEN
-				// 主动取消只表示已经安全停稳，不把取消伪装成原计划动作成功完成。
-				G.return_cmd[i].Done := FALSE;
-				G.return_cmd[i].Error := FALSE;
-				G.return_cmd[i].ErrorId := 0;
 			ELSE
 				G.return_cmd[i].Done := TRUE;
 				G.return_cmd[i].Error := FALSE;
 				G.return_cmd[i].ErrorId := 0;
 			END_IF
 			return_finish_error[i] := FALSE;
-			return_cancelled[i] := FALSE;
 			return_error_id_pending[i] := 0;
 			return_state[i] := 0;
-		END_IF
-
-	40:
-		G.return_cmd[i].Busy := TRUE;
-		G.return_cmd[i].Done := FALSE;
-		return_exec[i] := FALSE;
-		spg_enable_exec[i] := FALSE;
-		spg_disable_exec[i] := FALSE;
-		// 状态40仍以实际停稳为退出条件。若原运动或此前的MC_Stop已经报错，
-		// 在继续受控停止期间保持错误对上位机可见，不能用Busy掩盖故障。
-		IF return_finish_error[i] THEN
-			G.return_cmd[i].Error := TRUE;
-			G.return_cmd[i].ErrorId := return_error_id_pending[i];
-		END_IF
-
-		IF host_return_stop_exec[i] THEN
-			IF fb_host_return_stop[i].Done THEN
-				// 停稳后释放 MC_Stop，并复用状态 30/31 按实际位置重建和恢复外部设定值。
-				host_return_stop_exec[i] := FALSE;
-				host_return_stop_active[i] := FALSE;
-				return_state[i] := 30;
-			ELSIF fb_host_return_stop[i].Error THEN
-				// 原运动错误优先；否则锁存首次MC_Stop错误并立即通知上位机。
-				// Busy和停止任务保持有效，Execute拉低一拍后仍继续尝试受控停止，
-				// 只有真实Done才能进入位置重建，绝不把停止失败伪装成完成。
-				IF NOT return_finish_error[i] THEN
-					return_finish_error[i] := TRUE;
-					return_error_id_pending[i] := fb_host_return_stop[i].ErrorID;
-				END_IF
-				G.return_cmd[i].Error := TRUE;
-				G.return_cmd[i].ErrorId := return_error_id_pending[i];
-				host_return_stop_exec[i] := FALSE;
-			END_IF
-		ELSIF NOT fb_host_return_stop[i].Error THEN
-			// 首次进入或错误已由低电平清除后，启动（或重试）受控停止。
-			host_return_stop_exec[i] := TRUE;
 		END_IF
 	END_CASE
 END_FOR
@@ -841,12 +773,6 @@ FOR i:=1 TO 7 DO
 		Deceleration:=return_dec[i],
 		Jerk:=return_jerk[i],
 		Execute:=return_exec[i]
-	);
-	fb_host_return_stop[i](
-		Axis:=G.axis[i],
-		Execute:=host_return_stop_exec[i],
-		Deceleration:=100.0,
-		Jerk:=500.0
 	);
 END_FOR
 

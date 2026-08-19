@@ -206,7 +206,7 @@ if (ads.OpenCommInsideReadOnly()) {
 | 路径 | 调用频率 | 行为 |
 |---|---|---|
 | `AdsCommunicationService::read_fast_snapshot` | 目标 100 Hz | 一次 Sum Read 获取任务 CycleCount 首尾值、DcTaskTime、7 轴位置、四路力原始值、`estop_hold_req` 和 `host_comm_timeout`；QPC 调用前后中点作为整帧时刻。 |
-| `AdsCommunicationService::write_output_cycle` | 目标 100 Hz | 每周期只调用一次 Sum Write：始终写 `host_session_id` / `host_heartbeat_sequence`；运动有效时同包写 `refer` 和快退位，离散输出只在变化时追加，恢复握手、至多一条计划回退命令和正常完成清 Req 掩码按需并入。 |
+| `AdsCommunicationService::write_output_cycle` | 目标 100 Hz | 每周期只调用一次 Sum Write：始终写 `host_session_id` / `host_heartbeat_sequence`；运动有效时同包写 `refer` 和快退位，电缸、axis4、Y阀和注射器请求等离散输出只在变化时追加，恢复握手、至多一条计划回退命令和正常完成清 Req 掩码按需并入。 |
 | `read_plc_state` | 主循环按需复制 | 绑定通信服务后只复制最新有效位置快照和坐标缓存，不再发起新的 ADS 读取；无服务的兼容路径才直接 Sum Read。 |
 | `read_force_sample` | 力反馈/专项门控按需复制 | ADS 模式绑定通信服务后只复制最新有效力快照并完成 `INT -> V`；TCP_DAQ 模式另取 TCP worker 最新帧。 |
 | OnChange Notifications | 变量变化时 | `self_check_done`、axis1/axis6 计划回退 Busy/Done/Error/ErrorId、重初始化、急停/看门狗、启动资格、axis4 状态和 `gen_state` 由回调更新；注册完成后先批量填充初值。回调线程只复制数据，不发起 ADS 请求。 |
@@ -301,7 +301,7 @@ cancel / fault
 - 实时量：实际 Hz、数据龄、RTT；
 - 累计量：失败、重连、PLC 重启。
 
-只有命名管道已连接、`ads_state == Running` 且 `host_comm_timeout == false` 时，UI 才把 ADS 标为健康。当前 `VisState` 为 pack(1) 的 **877 字节**，C++ 与 WPF 必须成对更新。
+只有命名管道已连接、`ads_state == Running` 且 `host_comm_timeout == false` 时，UI 才把 ADS 标为健康。当前 `VisState` 为 pack(1) 的 **883 字节**，C++ 与 WPF 必须成对更新。
 
 ## 7. 失败/异常处理约定
 
@@ -330,7 +330,9 @@ cancel / fault
 
 ### 8.3 ADS 力输入映射需要现场确认
 
-当前默认 `force_sample_source == ADS`。`zero_force_sensor` 会同步读取一帧 ADS 样本后采零，不依赖力反馈开关；成功后立即清除旧的快退冻结反馈和手柄输出。现场必须确认 `G.fn_1_value`（轴向力）和 `G.ft_1_value`（切向力）均为有符号 `INT`，且满足 `1000 counts = 1 V`。装机零点通过 `p × (raw-raw_zero)` 消除，固定截距不再加入增量输出；符号或量程不一致仍会影响标定与反馈方向。TCP_DAQ 尚未证明与本次 ADS 标定同源，因此当前 TCP 模式明确拒绝采零和反馈输出。
+当前默认 `force_sample_source == ADS`。`zero_force_sensor` 会同步读取一帧 ADS 样本后采零，不依赖力反馈开关；成功后立即清除旧的快退冻结反馈和手柄输出。现场必须确认 `G.fn_1_value`（轴向力）和 `G.ft_1_value`（切向力）均为有符号 `INT`，且满足 `1000 counts = 1 V`。装机零点通过 `p × (raw-raw_zero)` 消除，固定截距不再加入增量输出；符号或量程不一致仍会影响标定与反馈方向。TCP_DAQ 尚未证明与本次 ADS 标定同源，因此当前 TCP 模式明确拒绝采零和反馈输出。力反馈区另有“力反馈-保持”开关，命令 `SetForceFeedbackHold=35`；自动换手恢复夹爪的交接拍对对应反馈锁存 200 ms，当前管道 `VisState` 为 883 字节。
+
+辅助执行器使用本地命令 `SetYValveOpen=36` 和 `SetInjectorManualJog=37`。Y阀打开/关闭分别写 `G.cylinder5_press_req=TRUE/FALSE`，对应 PLC 输出 `0/2000`；注射器1/2的推、拉请求作为 `G.inject_push_req[1..2]` / `G.inject_pull_req[1..2]` 两个 BOOL 数组，仅在变化时并入现有离散 Sum Write。新增命令不扩展 `VisState`，结构仍为 **883 字节**。
 
 ### 8.4 坐标缓存刷新边界
 
@@ -401,6 +403,11 @@ cancel / fault
 - 通讯与安全：定位臂读写移入独立 20 Hz ADS 工作线程，命令仅在变化时下发；WPF 按住点动时每 100 ms 续约，C++ 在 300 ms 未续约后自动停止。主机看门狗超时、ADS 不健康或程序退出时会清总使能、单轴上电和点动。原 7 轴 100 Hz `G.refer/return_cmd` 包没有新增字段。
 - 注射器：`G.inject_axis[1..2]` 仅链接 NC Axis 13/14（Drive 16/17），没有 `MC_Power`、运动命令或上位机 UI。
 - 本地协议：新增命令 29..34 和定位臂/axis4 状态，`VisState` 扩展为 pack(1) **877 字节**；C++ 与 WPF 必须同时更新并重启。Qt 定位臂界面保留为历史实现，不再作为维护入口。
+
+### 2026-08-19 — Axis15 同步与辅助执行器控制
+- `G.inject_push_req[1..2]` / `G.inject_pull_req[1..2]` 加入现有离散输出脏检测与 Sum Write；旧 `G.refer[1..7]` 高频数组不变。
+- WPF 新增球囊输送/撤出、Y阀打开/关闭、注射器1/2推拉控件；按住点动继续采用 100 ms 保活与 300 ms 租约。
+- 新增管道命令 36/37，不增加 `VisState` 字段，C++/WPF 结构继续为 883 字节。
 
 ### 2026-07-26 — 主从位移实验与 ADS 力采样首选迁移
 - 作者：AI（Codex）。

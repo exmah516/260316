@@ -15,7 +15,7 @@ from play_session import _load_session, _number_column, _time_seconds, _valid_co
 
 
 RECORDS_DIRECTORY = Path(__file__).resolve().parent
-DEFAULT_SESSION = RECORDS_DIRECTORY / "20260804" / "224852_完整实验流程第一次"
+DEFAULT_SESSION = RECORDS_DIRECTORY / "20260811" / "174633_测试"
 HANDLE_RADIUS_M = 3.0 * 0.001
 
 

@@ -50,7 +50,8 @@
 //       force_sample.ft_2_value = static_cast<short>(force_processor.output.ft_2);
 //   }
 //
-//   // 然后正常调用 process_force_feedback(...)，不需要改它的任何代码
+//   // 然后正常调用 process_force_feedback(...)；若使用当前接口，继续传入
+//   // clamp_hold_582_trigger、clamp_hold_587_trigger、now_ms 三个保持参数。
 
 // ============================================================
 // 注意事项

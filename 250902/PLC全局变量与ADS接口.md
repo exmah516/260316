@@ -57,11 +57,14 @@
 | `G.arm_cmd_dir[1..5]` | `ARRAY[1..5] OF SINT` | PLC 写，上位机读 | 当前命令方向：`-1` 反向、`0` 停止、`1` 正向 |
 | `G.arm_cmd_conflict[1..5]` | `ARRAY[1..5] OF BOOL` | PLC 写，上位机读 | 正反向同时请求时置 TRUE；若正在运动则先停止 |
 
-### 2.1.2 注射器轴预留引用
+### 2.1.2 注射器轴与 Axis15 同步引用
 
 | 变量 | 类型 | 方向 | 说明 |
 |---|---|---|---|
-| `G.inject_axis[1..2]` | `ARRAY[1..2] OF AXIS_REF` | PLC 内部 / TwinCAT 链接 | 分别链接 NC Axis 13/14（Drive 16/17）；MAIN 每周期只刷新引用。本轮没有 `MC_Power`、运动命令、ADS 运动符号或上位机 UI。 |
+| `G.inject_axis[1..2]` | `ARRAY[1..2] OF AXIS_REF` | PLC 内部 / TwinCAT 链接 | 分别链接 NC Axis 13/14（Drive 16/17），由 `InjectorManual` 自动上电和点动。 |
+| `G.inject_push_req[1..2]` | `ARRAY[1..2] OF BOOL` | 上位机写 | 注射器推请求，正方向；按下 TRUE、松开 FALSE。 |
+| `G.inject_pull_req[1..2]` | `ARRAY[1..2] OF BOOL` | 上位机写 | 注射器拉请求，负方向；按下 TRUE、松开 FALSE。 |
+| `G.axis2_sync_axis` | `AXIS_REF` | PLC 内部 / TwinCAT 链接 | 链接 NC Axis15（Drive18），与业务轴2（NC Axis7）建立 1:1 同向增量同步。 |
 
 ### 2.2 顶层控制变量
 
@@ -153,16 +156,16 @@ PID 参数（`G.Kp / G.Ki / G.Kd / G.pid_i / G.pid_e_prev / G.pid_i_limit`）：
 | `G.cylinder2_value` | `WORD AT %Q*` | **上位机写** | 轴1 机构 | 与电缸1 交替夹持导管 |
 | `G.cylinder3_value` | `WORD AT %Q*` | **上位机写** | 轴5 机构 | 夹/松导丝 |
 | `G.cylinder4_value` | `WORD AT %Q*` | **上位机写** | 轴6 机构 | 与电缸3 交替夹持导丝 |
-| `G.cylinder5_value` | `WORD AT %Q*` | **PLC 内部写**（handle 每周期映射） | 轴3 机构 | Y 阀控制（0=夹紧，2000=打开） |
+| `G.cylinder5_value` | `WORD AT %Q*` | **PLC 内部写**（handle 每周期映射） | 轴3 机构 | Y 阀控制（0=打开，2000=关闭） |
 | `G.cylinder5_cmd` | `WORD` | 历史遗留，未被 handle 主链路使用 | — | — |
-| `G.cylinder5_press_req` | `BOOL` | **上位机写** | — | TRUE=按下→ cylinder5=0；FALSE=松开→ cylinder5=2000 |
+| `G.cylinder5_press_req` | `BOOL` | **上位机写** | — | TRUE=Y阀打开→ cylinder5=0；FALSE=Y阀关闭→ cylinder5=2000 |
 
 电缸值含义（参考上位机 `ADS通讯说明.md §3.3`）：
 - `cylinder1`：`0` 开 / `400` 预夹 / `1000` 夹
 - `cylinder2`：`0` 开 / `150` 预开 / `400` 预夹 / `600` 夹
 - `cylinder3`：`50` 夹 / `200` 预夹 / `250` 开 / `400` 跟随释放 / `500` 启动准备开
 - `cylinder4`：`0` 开 / `100` 跟随释放 / `300` 预 / `500` 夹
-- `cylinder5`：`0` 夹 / `2000` 开
+- `cylinder5`：`0` 打开 / `2000` 关闭
 
 ### 2.10 力传感器 IO
 
@@ -228,6 +231,7 @@ END_STRUCT
 | `G.startup_smoothing_bypass` | `BOOL` | 同名 | 变化时写 |
 | `G.startup_loading_ready` | `BOOL` | 同名 | 启动准备或直接控制入口消费时写 FALSE |
 | `G.axis4_fwd_req` / `G.axis4_rev_req` | `BOOL` | 同名 | 变化时写，失败重试 |
+| `G.inject_push_req` / `G.inject_pull_req` | `BOOL[2]` | 同名 | 注射器按住点动请求，变化时并入统一 Sum Write |
 | `G.axisN_return_cmd.Req` + `TargetAbs/Vel/Acc/Dec/Jerk` | `BOOL` + `LREAL×5` | `G.return_cmd[N]` | 触发时写，完成后清 Req |
 | `G.handle_reinit_req` | `BOOL` | 同名 | 读后清零（写 FALSE） |
 | `G.arm_manual_enable` | `BOOL` | 同名 | 定位臂手动点动总使能，独立低频服务按需写 |
@@ -306,6 +310,11 @@ PLC 侧无 ADS 配置文件，由 TwinCAT XAR 路由表管理。上位机连接�
 6. 在本文档"§7 变更日志"追加条目，注明：日期 / 变更人 / 变量名 / 改动类型 / 是否需要上位机同步修改。
 
 ## 7. 变更日志
+
+### 2026-08-19 — Axis15 与注射器 ADS 接口
+- 新增 `G.axis2_sync_axis`，独立链接 NC Axis15；新增 `G.inject_push_req[1..2]` / `G.inject_pull_req[1..2]` 控制 NC Axis13/14 点动。
+- Y阀 `G.cylinder5_press_req` 语义明确为 TRUE=打开（输出0）、FALSE=关闭（输出2000）。
+- 不扩展 `G.axis/refer/Act_pos[1..7]`，不改变旧介入机器人 ADS 契约。
 
 ### 2026-08-03 — 100 Hz ADS 契约与主机看门狗
 - 作者：AI（Codex）。

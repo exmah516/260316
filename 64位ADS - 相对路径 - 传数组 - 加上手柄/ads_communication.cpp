@@ -55,6 +55,8 @@ namespace
 		kWriteCylinder5Press,
 		kWriteAxis4Forward,
 		kWriteAxis4Reverse,
+		kWriteInjectorPush,
+		kWriteInjectorPull,
 		kWriteSmoothingBypass,
 		kWriteHostRecover
 	};
@@ -130,6 +132,8 @@ namespace
 			lhs.cylinder5_press_req == rhs.cylinder5_press_req &&
 			lhs.axis4_forward_req == rhs.axis4_forward_req &&
 			lhs.axis4_reverse_req == rhs.axis4_reverse_req &&
+			std::equal(lhs.inject_push_req, lhs.inject_push_req + 2, rhs.inject_push_req) &&
+			std::equal(lhs.inject_pull_req, lhs.inject_pull_req + 2, rhs.inject_pull_req) &&
 			lhs.startup_smoothing_bypass == rhs.startup_smoothing_bypass;
 	}
 
@@ -1319,6 +1323,8 @@ bool AdsCommunicationService::resolve_fast_handles()
 		AdsSymbol::cylinder5_press_req,
 		AdsSymbol::axis4_fwd_req,
 		AdsSymbol::axis4_rev_req,
+		AdsSymbol::inject_push_req,
+		AdsSymbol::inject_pull_req,
 		AdsSymbol::startup_smoothing_bypass,
 		AdsSymbol::host_recover_req
 	};
@@ -1565,7 +1571,7 @@ bool AdsCommunicationService::write_output_cycle(bool& planned_return_processed)
 	}
 
 	++heartbeat_sequence_;
-	// 常规输出最多14项，双腿Prepare最多再增加12项。
+	// 常规输出最多16项，双腿Prepare最多再增加12项。
 	std::array<unsigned long, 32> handles{};
 	std::array<unsigned long, 32> lengths{};
 	std::array<const void*, 32> values{};
@@ -1608,6 +1614,8 @@ bool AdsCommunicationService::write_output_cycle(bool& planned_return_processed)
 		append(fast_write_handles_[kWriteCylinder5Press], sizeof(output.cylinder5_press_req), &output.cylinder5_press_req);
 		append(fast_write_handles_[kWriteAxis4Forward], sizeof(output.axis4_forward_req), &output.axis4_forward_req);
 		append(fast_write_handles_[kWriteAxis4Reverse], sizeof(output.axis4_reverse_req), &output.axis4_reverse_req);
+		append(fast_write_handles_[kWriteInjectorPush], sizeof(output.inject_push_req), output.inject_push_req);
+		append(fast_write_handles_[kWriteInjectorPull], sizeof(output.inject_pull_req), output.inject_pull_req);
 		append(fast_write_handles_[kWriteSmoothingBypass], sizeof(output.startup_smoothing_bypass), &output.startup_smoothing_bypass);
 	}
 

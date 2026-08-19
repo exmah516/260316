@@ -502,6 +502,9 @@ struct ForceFeedbackState
 {
 	// 力反馈开关：F=ON 时允许输出，F=OFF 时强制双手柄归零。
 	bool enabled = false;
+	// 力反馈-保持模式：自动换手夹爪恢复后，对对应手柄锁存当前力/力矩 200ms。
+	// 该开关独立于普通力反馈开关，安全清零时优先清除保持状态。
+	bool clamp_hold_enabled = false;
 	// 当前输出命令缓存（用于调试与冻结保持）。
 	double force_582_f = 0.0;
 	double force_582_n = 0.0;
@@ -517,6 +520,14 @@ struct ForceFeedbackState
 	bool freeze_587_active = false;
 	double freeze_587_f = 0.0;
 	double freeze_587_n = 0.0;
+	bool clamp_hold_582_active = false;
+	double clamp_hold_582_f = 0.0;
+	double clamp_hold_582_n = 0.0;
+	ULONGLONG clamp_hold_582_until_ms = 0;
+	bool clamp_hold_587_active = false;
+	double clamp_hold_587_f = 0.0;
+	double clamp_hold_587_n = 0.0;
+	ULONGLONG clamp_hold_587_until_ms = 0;
 	// 调试观测缓存。
 	short last_fn_1_raw = 0;
 	short last_ft_1_raw = 0;
@@ -524,6 +535,28 @@ struct ForceFeedbackState
 	short last_ft_2_raw = 0;
 	bool last_fast_move = false;
 	GuidewireMode last_mode = GuidewireMode::None;
+
+	void clear_clamp_holds()
+	{
+		clamp_hold_582_active = false;
+		clamp_hold_582_f = 0.0;
+		clamp_hold_582_n = 0.0;
+		clamp_hold_582_until_ms = 0;
+		clamp_hold_587_active = false;
+		clamp_hold_587_f = 0.0;
+		clamp_hold_587_n = 0.0;
+		clamp_hold_587_until_ms = 0;
+	}
+
+	int clamp_hold_owner() const
+	{
+		const bool catheter = clamp_hold_582_active;
+		const bool guidewire = clamp_hold_587_active;
+		if (catheter && guidewire) return 3;
+		if (catheter) return 1;
+		if (guidewire) return 2;
+		return 0;
+	}
 
 	void reset()
 	{
@@ -539,6 +572,7 @@ struct ForceFeedbackState
 		freeze_587_active = false;
 		freeze_587_f = 0.0;
 		freeze_587_n = 0.0;
+		clear_clamp_holds();
 		last_fast_move = false;
 		last_mode = GuidewireMode::None;
 	}
@@ -557,6 +591,7 @@ struct ForceFeedbackState
 		freeze_587_active = false;
 		freeze_587_f = 0.0;
 		freeze_587_n = 0.0;
+		clear_clamp_holds();
 	}
 };
 

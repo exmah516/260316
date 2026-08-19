@@ -91,10 +91,15 @@ VAR_GLOBAL
 	arm_cmd_dir		: ARRAY[1..5] OF SINT := [0,0,0,0,0];	// -1=反向，0=停止，1=正向
 	arm_cmd_conflict	: ARRAY[1..5] OF BOOL := [FALSE,FALSE,FALSE,FALSE,FALSE];	// 正反向同时请求
 
-	// ========== 注射器轴预留接口 ==========
+	// ========== Axis15 同步接口 ==========
+	// 独立链接到 NC Axis 15，与业务轴2（NC Axis 7）同步旋转。
+	axis2_sync_axis	: AXIS_REF;
+
+	// ========== 注射器轴控制接口 ==========
 	// inject_axis[1] -> NC Axis 13 / Drive 16，inject_axis[2] -> NC Axis 14 / Drive 17。
-	// 本轮仅建立 AXIS_REF 与 PLC-NC 链接，不调用 MC_Power 或任何运动功能块。
 	inject_axis		: ARRAY[1..2] OF AXIS_REF;
+	inject_push_req	: ARRAY[1..2] OF BOOL := [FALSE,FALSE];
+	inject_pull_req	: ARRAY[1..2] OF BOOL := [FALSE,FALSE];
 
 	// ========== 电缸控制变量 ==========
 	cylinder1_value		AT %Q* : WORD;		// 电缸1控制值 (安装在夹持机构上)
@@ -102,8 +107,8 @@ VAR_GLOBAL
 	cylinder3_value		AT %Q* : WORD;		// 电缸3控制值 (安装在轴5机构上)
 	cylinder4_value		AT %Q* : WORD;		// 电缸4控制值 (安装在轴6机构上)
 	cylinder5_value		AT %Q* : WORD;		// 电缸5控制值 (安装在轴3机构上控制y阀)
-	cylinder5_cmd		: WORD := 2000;		// 电缸5命令缓存（上位机写此变量，由 handle 周期下发到输出）
-	cylinder5_press_req	: BOOL := FALSE;	// 电缸5按键请求（TRUE=按下b6，输出0；FALSE=松开b6，输出2000）
+	cylinder5_cmd		: WORD := 2000;		// 历史兼容缓存，当前正式控制不写此变量
+	cylinder5_press_req	: BOOL := FALSE;	// Y阀请求（TRUE=打开，输出0；FALSE=关闭，输出2000）
 	
 	
 	ft_1_value			AT %I* : INT;

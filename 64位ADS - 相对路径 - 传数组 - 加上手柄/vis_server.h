@@ -136,9 +136,13 @@ struct VisState
 	bool axis4_manual_done;
 	bool axis4_manual_error;
 	std::uint32_t axis4_manual_error_id;
+	// 力反馈-保持模式状态：0=无保持，1=导管，2=导丝，3=双侧。
+	bool force_feedback_hold_enabled;
+	bool force_feedback_hold_active;
+	int force_feedback_hold_owner;
 };
 #pragma pack(pop)
-static_assert(sizeof(VisState) == 877, "VisState 管道布局发生变化，请同步更新 WPF 协议结构。");
+static_assert(sizeof(VisState) == 883, "VisState 管道布局发生变化，请同步更新 WPF 协议结构。");
 
 enum class VisCommandType : int
 {
@@ -178,6 +182,9 @@ enum class VisCommandType : int
 	SetArmAxisJog = 32, // param1: 轴号1..5，param2: -1/0/1
 	SetArmJogParameter = 33, // param1=(轴号-1)*4+参数号，param2=值×1000
 	SetAxis4ManualJog = 34, // param1: -1=后退，0=停止，1=前进（物理语义）
+	SetForceFeedbackHold = 35, // param1: 0=关闭，1=开启；自动换手闭爪后固定保持200ms
+	SetYValveOpen = 36, // param1: 0=关闭，1=打开
+	SetInjectorManualJog = 37, // param1: 注射器1..2，param2: -1=拉，0=停止，1=推
 };
 
 #pragma pack(push, 1)

@@ -546,6 +546,10 @@ int main(int argc, char* argv[])
 	bool axis4_ui_reverse_pressed = false;
 	ULONGLONG axis4_ui_jog_deadline_ms = 0;
 	constexpr ULONGLONG axis4_ui_jog_lease_ms = 300;
+	bool y_valve_open = false;
+	int injector_ui_direction[2] = {};
+	ULONGLONG injector_ui_jog_deadline_ms[2] = {};
+	constexpr ULONGLONG injector_ui_jog_lease_ms = 300;
 	GuidewireMode requested_guidewire_mode_prev = GuidewireMode::None;
 	bool axis1_fast_return = false; // 轴1快退旁路标志（写入 G.axis1_fast_return）
 	bool axis6_fast_retract = false; // 轴6快退旁路标志（写入 G.axis6_fast_retract）
@@ -1600,7 +1604,7 @@ int main(int argc, char* argv[])
 		{
 			(void)cancel_active_return_motion(true);
 		}
-		// 正式控制阶段：启动流程已完成，b6 从“暂停键”切换为“电缸5开关键”。
+		// 启动流程完成前，b6 仍沿用原暂停语义；正式控制后不再处理 b6。
 		const bool formal_control_stage = startup.completed && (startup.phase == StartupPhase::Done);
 		if ((axis4_ui_forward_pressed || axis4_ui_reverse_pressed) &&
 			axis4_ui_jog_deadline_ms != 0 &&
@@ -1610,6 +1614,16 @@ int main(int argc, char* argv[])
 			axis4_ui_reverse_pressed = false;
 			axis4_ui_jog_deadline_ms = 0;
 		}
+		for (int injector_index = 0; injector_index < 2; ++injector_index)
+		{
+			if (injector_ui_direction[injector_index] != 0 &&
+				injector_ui_jog_deadline_ms[injector_index] != 0 &&
+				GetTickCount64() >= injector_ui_jog_deadline_ms[injector_index])
+			{
+				injector_ui_direction[injector_index] = 0;
+				injector_ui_jog_deadline_ms[injector_index] = 0;
+			}
+		}
 		const bool axis4_jog_allowed = ads_cycle_valid && !freeze_active && !estop_hold_active && !startup_sequence_active &&
 			!spacing_recovery.active() && !spacing_recovery.requested;
 		const bool axis4_forward_semantic = axis4_forward_pressed || axis4_ui_forward_pressed;
@@ -1617,6 +1631,15 @@ int main(int argc, char* argv[])
 		const bool axis4_direction_conflict = axis4_forward_semantic && axis4_reverse_semantic;
 		const bool axis4_forward_request = axis4_jog_allowed && axis4_forward_semantic && !axis4_direction_conflict;
 		const bool axis4_reverse_request = axis4_jog_allowed && axis4_reverse_semantic && !axis4_direction_conflict;
+		bool injector_push_request[2] = {};
+		bool injector_pull_request[2] = {};
+		for (int injector_index = 0; injector_index < 2; ++injector_index)
+		{
+			injector_push_request[injector_index] =
+				axis4_jog_allowed && injector_ui_direction[injector_index] > 0;
+			injector_pull_request[injector_index] =
+				axis4_jog_allowed && injector_ui_direction[injector_index] < 0;
+		}
 
 		if (!formal_control_stage)
 		{
@@ -1669,13 +1692,6 @@ int main(int argc, char* argv[])
 					std::cout << "582 暂停已释放，等待重同步完成。" << std::endl;
 				}
 			}
-		}
-		else if (pause_pressed != pause_pressed_prev)
-		{
-			// 正式控制阶段下，b6 仅用于切换电缸5，不再触发 freeze/pause。
-			std::cout << "582 b6："
-				<< (pause_pressed ? "按下，电缸5 -> 0。" : "松开，电缸5 -> 2000。")
-				<< std::endl;
 		}
 		pause_pressed_prev = pause_pressed;
 
@@ -2226,12 +2242,6 @@ int main(int argc, char* argv[])
 		unsigned short cylinder2_cmd = cyl.cyl2_clamp;
 		unsigned short cylinder3_cmd = cyl.cyl3_follow_release;
 		unsigned short cylinder4_cmd = cyl.cyl4_follow_release;
-		// 电缸5默认维持初始化值；正式控制阶段由 582 b6 实时切换。
-		unsigned short cylinder5_cmd = 2000;
-		if (formal_control_stage)
-		{
-			cylinder5_cmd = pause_pressed ? static_cast<unsigned short>(0) : static_cast<unsigned short>(2000);
-		}
 		// 轴4 接线方向与按键语义相反，此处交换映射。
 		bool axis4_manual_forward_req = axis4_reverse_request;
 		bool axis4_manual_reverse_req = axis4_forward_request;
@@ -4394,7 +4404,7 @@ int main(int argc, char* argv[])
 		axis4_manual_error_id_prev = axis4_manual_error_id_now;
 
 		// 10) 构建本拍离散输出；与 refer 一起交给 100 Hz 通信线程。
-		bool cylinder5_req = formal_control_stage ? pause_pressed : false;
+		bool cylinder5_req = y_valve_open;
 		const bool cylinder_output_enabled = !ads_soft_hold_active && !freeze_active &&
 			!estop_hold_active && (control_active || motion_startup_active);
 		if (cylinder_output_enabled)
@@ -4713,6 +4723,11 @@ int main(int argc, char* argv[])
 		ads_output.cylinder5_press_req = cylinder_output_enabled && cylinder5_req;
 		ads_output.axis4_forward_req = ads_cycle_valid && axis4_manual_forward_req;
 		ads_output.axis4_reverse_req = ads_cycle_valid && axis4_manual_reverse_req;
+		for (int injector_index = 0; injector_index < 2; ++injector_index)
+		{
+			ads_output.inject_push_req[injector_index] = injector_push_request[injector_index];
+			ads_output.inject_pull_req[injector_index] = injector_pull_request[injector_index];
+		}
 		ads_output.startup_smoothing_bypass = ads_output.motion_enabled && startup_smoothing_bypass;
 		const std::uint64_t output_generation = ads_communication.publish_output(ads_output);
 		if (planned_return.phase == PlannedReturnPhase::SubmitRequest &&
@@ -4742,10 +4757,15 @@ int main(int argc, char* argv[])
 			// 50 ms 从夹爪命令实际经 Sum Write 应用后开始计算，而不是从任务创建时开始。
 			planned_return.clamp_output_generation = output_generation;
 		}
+		bool clamp_hold_582_trigger = false;
+		bool clamp_hold_587_trigger = false;
 		if (planned_return.phase == PlannedReturnPhase::PublishHandoff &&
 			ads_output.motion_enabled && !ads_output.axis1_fast_return &&
 			!ads_output.axis6_fast_retract)
 		{
+			// 本次 Sum Write 正在发布恢复夹爪组合；只在这一拍触发一次200ms保持。
+			clamp_hold_582_trigger = planned_return.contains_axis(0);
+			clamp_hold_587_trigger = planned_return.contains_axis(5);
 			planned_return.handoff_generation = output_generation;
 			planned_return.phase = PlannedReturnPhase::AwaitHandoffApplied;
 		}
@@ -4765,6 +4785,9 @@ int main(int argc, char* argv[])
 			estop_hold_active,
 			axis1_fast_return,
 			axis6_fast_retract,
+			clamp_hold_582_trigger,
+			clamp_hold_587_trigger,
+			GetTickCount64(),
 			loop_count,
 			cfg,
 			cal_cfg,
@@ -4985,6 +5008,9 @@ int main(int argc, char* argv[])
 			vs.axis4_manual_done = ads_events.axis4_manual_done;
 			vs.axis4_manual_error = ads_events.axis4_manual_error;
 			vs.axis4_manual_error_id = ads_events.axis4_manual_error_id;
+			vs.force_feedback_hold_enabled = ff.clamp_hold_enabled;
+			vs.force_feedback_hold_active = ff.clamp_hold_enabled && ff.clamp_hold_owner() != 0;
+			vs.force_feedback_hold_owner = ff.clamp_hold_owner();
 			vis_server.push_state(vs);
 		}
 
@@ -5032,6 +5058,13 @@ int main(int argc, char* argv[])
 					ff.reset();
 					std::cout << "UI：力反馈：" << (ff.enabled ? "开启" : "关闭") << std::endl;
 					if (!ff.enabled) clear_force_output();
+					break;
+				case VisCommandType::SetForceFeedbackHold:
+					ff.clamp_hold_enabled = vcmd.param1 != 0;
+					ff.clear_clamp_holds();
+					std::cout << "UI：力反馈-保持："
+						<< (ff.clamp_hold_enabled ? "开启（自动换手闭爪后保持200ms）" : "关闭")
+						<< std::endl;
 					break;
 				case VisCommandType::SetReverseMode:
 				{
@@ -5209,6 +5242,21 @@ int main(int argc, char* argv[])
 						axis4_ui_jog_deadline_ms = vcmd.param1 == 0
 							? 0
 							: GetTickCount64() + axis4_ui_jog_lease_ms;
+					}
+					break;
+				case VisCommandType::SetYValveOpen:
+					y_valve_open = vcmd.param1 != 0;
+					std::cout << "UI：Y阀：" << (y_valve_open ? "打开。" : "关闭。") << std::endl;
+					break;
+				case VisCommandType::SetInjectorManualJog:
+					if (vcmd.param1 >= 1 && vcmd.param1 <= 2 &&
+						vcmd.param2 >= -1 && vcmd.param2 <= 1)
+					{
+						const int injector_index = vcmd.param1 - 1;
+						injector_ui_direction[injector_index] = vcmd.param2;
+						injector_ui_jog_deadline_ms[injector_index] = vcmd.param2 == 0
+							? 0
+							: GetTickCount64() + injector_ui_jog_lease_ms;
 					}
 					break;
 				case VisCommandType::SetAxis1PostReturnLead:

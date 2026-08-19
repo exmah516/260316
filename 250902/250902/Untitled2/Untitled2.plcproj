@@ -37,7 +37,13 @@
     <Compile Include="POUs\ArmManual.TcPOU">
       <SubType>Code</SubType>
     </Compile>
+    <Compile Include="POUs\Axis2Sync.TcPOU">
+      <SubType>Code</SubType>
+    </Compile>
     <Compile Include="POUs\handle.TcPOU">
+      <SubType>Code</SubType>
+    </Compile>
+    <Compile Include="POUs\InjectorManual.TcPOU">
       <SubType>Code</SubType>
     </Compile>
     <Compile Include="POUs\clear_err.TcPOU">

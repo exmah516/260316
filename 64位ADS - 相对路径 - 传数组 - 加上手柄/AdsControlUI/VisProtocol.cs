@@ -132,6 +132,10 @@ namespace AdsControlUI
 		[MarshalAs(UnmanagedType.I1)] public bool axis4_manual_done;
 		[MarshalAs(UnmanagedType.I1)] public bool axis4_manual_error;
 		public uint axis4_manual_error_id;
+		// 力反馈-保持模式状态：0=无保持，1=导管，2=导丝，3=双侧。
+		[MarshalAs(UnmanagedType.I1)] public bool force_feedback_hold_enabled;
+		[MarshalAs(UnmanagedType.I1)] public bool force_feedback_hold_active;
+		public int force_feedback_hold_owner;
 	}
 
     public enum VisCommandType : int
@@ -172,5 +176,8 @@ namespace AdsControlUI
 		SetArmAxisJog = 32,
 		SetArmJogParameter = 33,
 		SetAxis4ManualJog = 34,
-    }
+		SetForceFeedbackHold = 35,
+		SetYValveOpen = 36,
+		SetInjectorManualJog = 37,
+	}
 }

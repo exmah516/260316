@@ -11,6 +11,9 @@ void process_force_feedback(
 	bool estop_hold_active,
 	bool axis1_fast_return,
 	bool axis6_fast_retract,
+	bool clamp_hold_582_trigger,
+	bool clamp_hold_587_trigger,
+	ULONGLONG now_ms,
 	int loop_count,
 	const ControlConfig& cfg,
 	const ForceCalibrationConfig& cal_cfg,
@@ -61,10 +64,30 @@ void process_force_feedback(
 				out_cmd.force_582_f = theory_582_f;
 				out_cmd.force_582_n = theory_582_n;
 			}
+			if (ff.clamp_hold_enabled && clamp_hold_582_trigger)
+			{
+				ff.clamp_hold_582_f = out_cmd.force_582_f;
+				ff.clamp_hold_582_n = out_cmd.force_582_n;
+				ff.clamp_hold_582_until_ms = now_ms + 200;
+				ff.clamp_hold_582_active = true;
+			}
+			if (ff.clamp_hold_enabled && ff.clamp_hold_582_active)
+			{
+				if (now_ms < ff.clamp_hold_582_until_ms)
+				{
+					out_cmd.force_582_f = ff.clamp_hold_582_f;
+					out_cmd.force_582_n = ff.clamp_hold_582_n;
+				}
+				else
+				{
+					ff.clamp_hold_582_active = false;
+				}
+			}
 		}
 		else
 		{
 			ff.freeze_582_active = false;
+			ff.clamp_hold_582_active = false;
 			out_cmd.force_582_f = 0.0;
 			out_cmd.force_582_n = 0.0;
 			ff.force_582_theory_f = 0.0;
@@ -95,16 +118,37 @@ void process_force_feedback(
 				out_cmd.force_587_f = cal.f_feedback_n;
 				out_cmd.force_587_n = cal.t_feedback_nm;
 			}
+			if (ff.clamp_hold_enabled && clamp_hold_587_trigger)
+			{
+				ff.clamp_hold_587_f = out_cmd.force_587_f;
+				ff.clamp_hold_587_n = out_cmd.force_587_n;
+				ff.clamp_hold_587_until_ms = now_ms + 200;
+				ff.clamp_hold_587_active = true;
+			}
+			if (ff.clamp_hold_enabled && ff.clamp_hold_587_active)
+			{
+				if (now_ms < ff.clamp_hold_587_until_ms)
+				{
+					out_cmd.force_587_f = ff.clamp_hold_587_f;
+					out_cmd.force_587_n = ff.clamp_hold_587_n;
+				}
+				else
+				{
+					ff.clamp_hold_587_active = false;
+				}
+			}
 		}
 		else
 		{
 			ff.freeze_587_active = false;
+			ff.clamp_hold_587_active = false;
 			out_cmd.force_587_f = 0.0;
 			out_cmd.force_587_n = 0.0;
 		}
 	}
 	else
 	{
+		ff.clear_clamp_holds();
 		ff.freeze_582_active = false;
 		out_cmd.force_582_f = 0.0;
 		out_cmd.force_582_n = 0.0;

@@ -4,9 +4,9 @@
 >
 > 修改任何 PLC POU、DUT、GVL、或改变与上位机的 ADS 契约，请同步更新本文档与相关子文档，并在最末"变更日志"追加条目。
 
-更新时间：2026-08-04
+更新时间：2026-08-19
 适用工程：`250902\250902.sln`（PLC 项目：`250902\Untitled2`）
-对应代码版本：2026-08-04 工作区（14 轴链接、定位臂手动点动与注射器轴预留）
+对应代码版本：2026-08-19 工作区（15 轴链接、定位臂/注射器点动与 Axis15 同步）
 
 ***
 
@@ -16,11 +16,12 @@
 
 - 原介入机器人 7 个 EtherCAT 伺服轴的**使能、寻参自检、错误处理、外部设定点输出**；
 - 新增定位臂 5 个 NC 轴的**独立上电、复位、点动和状态上报**；
+- 注射器 2 个 NC 轴的**自动上电与独立按住点动**，以及 Axis15 对业务轴2的 **1:1 同向增量同步**；
 - 5 个电缸（含 Y 阀电缸）与 2 组力传感器 IO 的**总线 I/O 映射**；
 - 与上位机（`64位ADS - 相对路径 - 传数组 - 加上手柄\ADS.exe`）之间通过 **ADS 通讯**交换 refer/actual 位置、电缸控制量、握手位、力采样电压；
 - 顶层运行状态由**主状态机** `G.gen_state`（`state.TcDUT`）调度：上电 → 自检 → 正常跟随 → 故障/复位。
 
-入口 POU：`Untitled2\POUs\MAIN.TcPOU`。任务周期由 `PlcTask.TcTTO` 决定（1 ms 循环）。定位臂独立点动由 `Untitled2\POUs\ArmManual.TcPOU` 执行，不进入原介入机器人 `_init/_self_check/_handle` 主状态机。
+入口 POU：`Untitled2\POUs\MAIN.TcPOU`。任务周期由 `PlcTask.TcTTO` 决定（1 ms 循环）。定位臂、注射器和 Axis15 同步分别由 `ArmManual.TcPOU`、`InjectorManual.TcPOU`、`Axis2Sync.TcPOU` 独立执行，均不进入原介入机器人 `_init/_self_check/_handle` 主状态机。
 
 PLC 侧**不直接决定运动模式**（导管/导丝/协同、启动准备阶段、爬行状态机等全部在上位机）；PLC 只负责：
 1. 拿到 `G.refer[]` 后按速度限幅 + 滑动平均 + 二阶滤波形成实际设定点；
@@ -74,15 +75,16 @@ PLC 侧**不直接决定运动模式**（导管/导丝/协同、启动准备阶�
 
 ## 3. 硬件对象与轴映射
 
-当前 TwinCAT 系统项目共有 14 个 NC Axis。原介入机器人业务轴仍只由 `G.axis[1..7]` 承载；新增定位臂由 `G.arm_axis[1..5]` 承载，独立于原主状态机；NC Axis 13/14 以 `G.inject_axis[1..2]` 预留给注射器，但尚未接入运动功能块或 ADS 运动接口。此外还有 1 个不属于 PLC 轴控的**物理夹持底座**，其上装有电缸1。
+当前 TwinCAT 系统项目共有 15 个 NC Axis。原介入机器人业务轴仍只由 `G.axis[1..7]` 承载；新增定位臂由 `G.arm_axis[1..5]` 承载；NC Axis 13/14 由 `G.inject_axis[1..2]` 独立点动；NC Axis15 由 `G.axis2_sync_axis` 跟随业务轴2旋转。后三条链路均独立于原主状态机。此外还有 1 个不属于 PLC 轴控的**物理夹持底座**，其上装有电缸1。
 
-### 3.0 TwinCAT 14 轴物理分组
+### 3.0 TwinCAT 15 轴物理分组
 
 | NC Axis | PLC 轴引用 | 物理分组 | 说明 |
 |---|---|---|---|
 | Axis 1..5 | `G.arm_axis[1..5]` | 新增定位臂 | 首版仅提供上电、复位、正/反向点动和状态上报；不做自动回零、自检、软限位和正运动学 |
 | Axis 6..12 | `G.axis[1..7]` | 原血管介入机器人 | 保持原业务轴 1..7 语义和 ADS 契约；`G.refer[1..7]`、`G.Act_pos[1..7]` 等不扩展到 12 轴 |
-| Axis 13..14 | `G.inject_axis[1..2]` | 注射器预留 | 仅建立 PLC↔NC `AXIS_REF` 链接并在 MAIN 刷新引用；没有 `MC_Power`、运动控制或上位机 UI |
+| Axis 13..14 | `G.inject_axis[1..2]` | 注射器1/2 | 自动保持上电；通过 `G.inject_push_req[]` / `G.inject_pull_req[]` 按住点动，推为正向、拉为负向 |
+| Axis 15 | `G.axis2_sync_axis` | 业务轴2同步从轴 | Axis15 上电跟随业务轴2；静止时建立 1:1 同向电子齿轮，保留建立耦合时的角度差 |
 
 `250902.tsproj` 中仅恢复 PLC `AXIS_REF` 与 NC Axis 的双向链接：`*.NcToPlc ↔ Axis*.ToPlc`、`*.PlcToNc ↔ Axis*.FromPlc`。EtherCAT Drive 到 NC Axis 的 I/O 映射不因本次改造而改变。
 
@@ -108,7 +110,7 @@ PLC 侧**不直接决定运动模式**（导管/导丝/协同、启动准备阶�
 | 电缸4 | `G.cylinder4_value` | 轴6 机构 | 与电缸3 交替夹持导丝，实现导丝蠕动 |
 | 电缸5 | `G.cylinder5_value` / `G.cylinder5_cmd` / `G.cylinder5_press_req` | 轴3 机构 | 控制 Y 阀开合 |
 
-**cylinder1..4** 由上位机直接写 WORD 目标值；**cylinder5** 采用双层：上位机写 `G.cylinder5_press_req`（BOOL），`handle` POU 每周期把该请求映射为 `G.cylinder5_value = 0`（按下 → 夹紧）或 `2000`（释放 → 打开）。这一层封装是为了把 Y 阀操作压缩为一个语义清晰的按键请求。
+**cylinder1..4** 由上位机直接写 WORD 目标值；**cylinder5** 采用双层：UI 写 `G.cylinder5_press_req`（BOOL），`handle` POU 每周期映射为 `G.cylinder5_value = 0`（Y阀打开）或 `2000`（Y阀关闭）。正式控制阶段不再响应手柄 b6。
 
 ### 3.3 力传感器 IO
 
@@ -140,6 +142,8 @@ PLC 侧**不直接决定运动模式**（导管/导丝/协同、启动准备阶�
 │   │   └── POUs/
 │   │       ├── MAIN.TcPOU             # 主程序（状态调度 + Actions）
 │   │       ├── ArmManual.TcPOU        # 定位臂 5 轴独立上电/复位/点动
+│   │       ├── InjectorManual.TcPOU    # 注射器 2 轴自动上电/按住点动
+│   │       ├── Axis2Sync.TcPOU         # Axis15 对业务轴2的 1:1 同向同步
 │   │       ├── init.TcPOU             # 上电初始化
 │   │       ├── SelfCheck.TcPOU        # 自检寻参
 │   │       ├── handle.TcPOU           # ★ 正常跟随控制
@@ -179,6 +183,8 @@ PLC 侧**不直接决定运动模式**（导管/导丝/协同、启动准备阶�
 | refer → 设定点的**滑动平均 + 速度限幅 + 二阶滤波** | PLC | `handle` POU 内部 |
 | 计划回退运动执行（MC_MoveAbsolute） | PLC | `handle` POU 内 `fb_return_move_abs` |
 | axis4 手动点动执行 | PLC | `handle` POU 内 `fb_axis4_move_velocity` |
+| 注射器1/2按住点动执行 | PLC | `InjectorManual.TcPOU` + `G.inject_push_req[]/inject_pull_req[]` |
+| Axis15 同步业务轴2 | PLC | `Axis2Sync.TcPOU` + `G.axis2_sync_axis` |
 | 软限位（右侧） | PLC | `slimit_enable` + `rslimit_distance` |
 | 错误保持 & 恢复策略 | PLC | `_err` / `_reset` / `_clear_err` |
 | 主机通信看门狗、超时冻结与受控停止 | PLC | `G.host_*` + `handle.TcPOU` |
@@ -295,6 +301,7 @@ G.arm_jog_pos_req[i] 按住              ├─ MC_Power / MC_Reset
 | 定位臂点动默认速度 | `5.0` | `G.arm_jog_velocity[1..5]` | 单位跟随各 NC Axis 配置，可由 ADS/UI 覆盖 |
 | 定位臂点动默认加/减速度 | `50.0 / 50.0` | `G.arm_jog_acc/dec[1..5]` | 单位跟随各 NC Axis 配置 |
 | 定位臂点动默认 jerk | `500.0` | `G.arm_jog_jerk[1..5]` | 单位跟随各 NC Axis 配置 |
+| 注射器点动速度/加减速度/jerk | `30 / 100 / 100 / 500` | `InjectorManual.TcPOU` | 单位跟随 NC Axis 13/14 配置 |
 
 ## 8. 文档索引
 
@@ -325,6 +332,12 @@ G.arm_jog_pos_req[i] 按住              ├─ MC_Power / MC_Reset
 5. **新增 POU 或改状态枚举**：`state.TcDUT` + `PLC状态机与流程说明.md §2` 状态跳转矩阵同步。
 
 ## 10. 变更日志
+
+### 2026-08-19 — Axis15 同步与辅助执行器控制
+- 作者：AI（Codex）。
+- 新增 `G.axis2_sync_axis` 并链接 NC Axis15；`Axis2Sync.TcPOU` 在业务轴2与从轴均上电、静止后建立 1:1 同向电子齿轮，保留初始角度差。
+- NC Axis13/14 由 `InjectorManual.TcPOU` 自动上电，通过 `G.inject_push_req[1..2]` / `G.inject_pull_req[1..2]` 执行固定参数点动；不进入原主状态机。
+- Y阀改为纯 UI 控制：打开输出 `0`、关闭输出 `2000`；原 `G.axis[1..7]`、`G.refer[1..7]` 和介入机器人状态机不变。
 
 ### 2026-08-03 — 100 Hz ADS 通信与最小主机看门狗
 - 作者：AI（Codex）。
