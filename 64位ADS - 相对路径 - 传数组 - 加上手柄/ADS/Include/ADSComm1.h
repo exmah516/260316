@@ -28,6 +28,7 @@ public:
 	bool CloseComm();
 	bool ADSWrite(const char * paraName, unsigned long length, void * data);
 	bool ADSRead(const char * paraName, unsigned long length, void * data);
+	bool ADSReadSymbolOffset(const char* paraName, unsigned long byteOffset, unsigned long length, void* data);
 	bool ADSReadSum(const char* const* symbols, const unsigned long* lengths, void* const* outputs, unsigned long count);
 	bool ADSReadSumByHandle(const unsigned long* handles, const unsigned long* lengths, void* const* outputs, unsigned long count);
 	bool ADSWriteSum(const char* const* symbols, const unsigned long* lengths, const void* const* inputs, unsigned long count);

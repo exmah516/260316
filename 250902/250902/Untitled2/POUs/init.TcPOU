@@ -31,7 +31,7 @@ CASE step OF
 		G.SetPointGenEnable[i].Execute := FALSE;
 		G.SetPointGenDisable[i].Execute := FALSE;
 		G.axis_Reset[i].Execute := FALSE;
-		G.power_[i].Enable := TRUE;
+		G.power_[i].Enable := (i = 1) OR (i = 2) OR (i = 3) OR (i = 5) OR (i = 6) OR (i = 7);
 	END_FOR
 	G.self_check_done := FALSE;
 	G.startup_loading_ready := FALSE;
@@ -43,7 +43,7 @@ CASE step OF
 1:
 	// 持续保持上电请求，并监控上电结果
 	FOR i:=1 TO 7 DO
-		G.power_[i].Enable := TRUE;
+		G.power_[i].Enable := (i = 1) OR (i = 2) OR (i = 3) OR (i = 5) OR (i = 6) OR (i = 7);
 
 		// 若任一轴出现错误：进入 _err(安全态)，避免 init/reset 来回震荡
 		IF G.axis[i].Status.Error OR G.power_output[i].Error THEN
@@ -57,7 +57,7 @@ CASE step OF
 	// 等待上电全部完成
 	all_powered := TRUE;
 	FOR i:=1 TO 7 DO
-		IF NOT G.power_output[i].Done THEN
+		IF ((i = 1) OR (i = 2) OR (i = 3) OR (i = 5) OR (i = 6) OR (i = 7)) AND NOT G.power_output[i].Done THEN
 			all_powered := FALSE;
 		END_IF
 	END_FOR
@@ -74,7 +74,9 @@ CASE step OF
 	// 上电全部完成：记录各轴当前绝对位置作为 init_pos(用于绝对->相对转换)，进入自检
 	IF all_powered THEN
 		FOR i:=1 TO 7 DO
-			G.init_pos[i] := G.axis[i].NcToPlc.ActPos;
+			IF (i = 1) OR (i = 2) OR (i = 3) OR (i = 5) OR (i = 6) OR (i = 7) THEN
+				G.init_pos[i] := G.axis[i].NcToPlc.ActPos;
+			END_IF
 		END_FOR
 		init_watchdog(IN:=FALSE);
 		step := 0;

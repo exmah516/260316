@@ -105,6 +105,68 @@ bool CADSComm::ADSRead(const char* paraName, unsigned long length, void* data)
 	return ADSRead(addr, length, data);
 }
 
+// 按符号的实际PLC地址加字节偏移读取，供大数组分块下载使用。
+bool CADSComm::ADSReadSymbolOffset(const char* paraName, unsigned long byteOffset, unsigned long length, void* data)
+{
+	std::lock_guard<std::recursive_mutex> lock(m_mutex);
+	if (!ValidateOpenLocked("ADSReadSymbolOffset"))
+	{
+		return false;
+	}
+	if (paraName == nullptr || paraName[0] == '\0' || length == 0 || data == nullptr)
+	{
+		sprintf_s(m_lastError, sizeof(m_lastError), "Error: ADSReadSymbolOffset invalid arguments\n");
+		return false;
+	}
+
+	unsigned char symbolBuffer[sizeof(AdsSymbolEntry) + 1024U]{};
+	unsigned long cbReturn = 0;
+	const unsigned long nameLength = static_cast<unsigned long>(strlen(paraName) + 1U);
+	long nErr = AdsSyncReadWriteReqEx2(
+		m_adsPort,
+		m_PAmsAddr,
+		ADSIGRP_SYM_INFOBYNAMEEX,
+		0,
+		static_cast<unsigned long>(sizeof(symbolBuffer)),
+		symbolBuffer,
+		nameLength,
+		const_cast<char*>(paraName),
+		&cbReturn);
+	if (nErr != 0 || cbReturn < sizeof(AdsSymbolEntry))
+	{
+		sprintf_s(m_lastError, sizeof(m_lastError), "Error: ADS symbol info failed for %s (code=%ld, bytes=%lu)\n", paraName, nErr, cbReturn);
+		return false;
+	}
+
+	const AdsSymbolEntry* symbol = reinterpret_cast<const AdsSymbolEntry*>(symbolBuffer);
+	if (byteOffset > symbol->size || length > symbol->size - byteOffset)
+	{
+		sprintf_s(m_lastError, sizeof(m_lastError), "Error: ADSReadSymbolOffset range exceeds %s (%lu+%lu>%lu)\n", paraName, byteOffset, length, symbol->size);
+		return false;
+	}
+	nErr = AdsSyncReadReqEx2(
+		m_adsPort,
+		m_PAmsAddr,
+		symbol->iGroup,
+		symbol->iOffs + byteOffset,
+		length,
+		data,
+		&cbReturn);
+	if (nErr != 0)
+	{
+		sprintf_s(m_lastError, sizeof(m_lastError), "Error: ADSReadSymbolOffset read failed for %s: %ld\n", paraName, nErr);
+		return false;
+	}
+	if (cbReturn != length)
+	{
+		sprintf_s(m_lastError, sizeof(m_lastError), "Error: ADSReadSymbolOffset short response for %s (%lu/%lu)\n", paraName, cbReturn, length);
+		return false;
+	}
+
+	ClearLastErrorLocked();
+	return true;
+}
+
 bool CADSComm::ADSWrite(unsigned long addr, unsigned long length, void* data)
 {
 	std::lock_guard<std::recursive_mutex> lock(m_mutex);

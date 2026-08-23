@@ -1,4 +1,4 @@
-﻿<?xml version="1.0" encoding="utf-8"?>
+<?xml version="1.0" encoding="utf-8"?>
 <TcPlcObject Version="1.1.0.1" ProductVersion="3.1.4024.15">
   <GVL Name="G" Id="{ccabbda2-7ae2-40eb-8293-a1b7a36c29fa}">
     <Declaration><![CDATA[{attribute 'qualified_only'}
@@ -115,6 +115,70 @@ VAR_GLOBAL
 	fn_1_value			AT %I* : INT;
 	fn_2_value			AT %I* : INT;
 	ft_2_value			AT %I* : INT;
+
+	// 双机构夹持扰动实验接口。位置参数统一采用“距左限位距离”，
+	// 绝对NC目标由PLC使用 G.leftlimit[] 计算。
+	dual_clamp_enable			: BOOL := FALSE;
+	dual_clamp_phase			: UINT := 0;
+	dual_clamp_event_sequence	: UDINT := 0;
+	dual_clamp_selfcheck_req		: BOOL := FALSE;
+	dual_clamp_selfcheck_busy	: BOOL := FALSE;
+	dual_clamp_selfcheck_done	: BOOL := FALSE;
+	dual_clamp_selfcheck_error	: BOOL := FALSE;
+	dual_clamp_selfcheck_error_id : UDINT := 0;
+	dual_clamp_leftlimit_valid	: BOOL := FALSE;
+	dual_clamp_leftlimit_axis1_abs : LREAL := 0.0;
+	dual_clamp_leftlimit_axis6_abs : LREAL := 0.0;
+	dual_clamp_setup_req			: BOOL := FALSE;
+	dual_clamp_setup_busy		: BOOL := FALSE;
+	dual_clamp_setup_done		: BOOL := FALSE;
+	dual_clamp_start_req			: BOOL := FALSE;
+	dual_clamp_abort_req			: BOOL := FALSE;
+	dual_clamp_status_error_id	: UDINT := 0;
+	dual_clamp_moving_axis		: INT := 1;
+	dual_clamp_axis1_distance_from_left : LREAL := 96.0;
+	dual_clamp_axis6_distance_from_left : LREAL := 580.0;
+	dual_clamp_axis2_angle_abs	: LREAL := 0.0;
+	dual_clamp_axis7_angle_abs	: LREAL := 0.0;
+	dual_clamp_return_retract_distance : LREAL := 10.0;
+	dual_clamp_return_velocity	: LREAL := 20.0;
+	dual_clamp_return_acceleration : LREAL := 100.0;
+	dual_clamp_return_deceleration : LREAL := 100.0;
+	dual_clamp_return_jerk		: LREAL := 1000.0;
+	dual_clamp_recovery_mode		: BOOL := TRUE;
+	dual_clamp_cylinder1_open_word : WORD := 1000;
+	dual_clamp_cylinder2_clamp_word : WORD := 600;
+	dual_clamp_cylinder2_release_word : WORD := 0;
+	dual_clamp_cylinder3_open_word : WORD := 1000;
+	dual_clamp_cylinder4_clamp_word : WORD := 500;
+	dual_clamp_cylinder4_release_word : WORD := 0;
+	dual_clamp_cylinder2_cmd		: WORD := 0;
+	dual_clamp_cylinder4_cmd		: WORD := 0;
+	dual_clamp_setup_target_axis1_abs : LREAL := 0.0;
+	dual_clamp_setup_target_axis6_abs : LREAL := 0.0;
+	dual_clamp_return_target_abs	: LREAL := 0.0;
+	dual_clamp_start_target_axis1_abs : LREAL := 0.0;
+	dual_clamp_start_target_axis6_abs : LREAL := 0.0;
+	dual_clamp_sample_arm		: BOOL := FALSE;
+	dual_clamp_sample_clear		: BOOL := FALSE;
+	dual_clamp_sample_count		: UDINT := 0;
+	dual_clamp_sample_overflow	: BOOL := FALSE;
+	dual_clamp_sample_index		: ARRAY[0..32767] OF UDINT;
+	dual_clamp_sample_time_us	: ARRAY[0..32767] OF ULINT;
+	dual_clamp_sample_phase		: ARRAY[0..32767] OF USINT;
+	dual_clamp_sample_event_sequence : ARRAY[0..32767] OF UDINT;
+	dual_clamp_sample_axis1_pos	: ARRAY[0..32767] OF LREAL;
+	dual_clamp_sample_axis1_vel	: ARRAY[0..32767] OF LREAL;
+	dual_clamp_sample_axis1_acc	: ARRAY[0..32767] OF LREAL;
+	dual_clamp_sample_axis6_pos	: ARRAY[0..32767] OF LREAL;
+	dual_clamp_sample_axis6_vel	: ARRAY[0..32767] OF LREAL;
+	dual_clamp_sample_axis6_acc	: ARRAY[0..32767] OF LREAL;
+	dual_clamp_sample_ft1		: ARRAY[0..32767] OF INT;
+	dual_clamp_sample_fn1		: ARRAY[0..32767] OF INT;
+	dual_clamp_sample_ft2		: ARRAY[0..32767] OF INT;
+	dual_clamp_sample_fn2		: ARRAY[0..32767] OF INT;
+	dual_clamp_sample_cylinder2	: ARRAY[0..32767] OF WORD;
+	dual_clamp_sample_cylinder4	: ARRAY[0..32767] OF WORD;
 
 
 END_VAR]]></Declaration>

@@ -1,0 +1,272 @@
+Title: Internet based remote control for a robotic catheter manipulating system
+
+URL Source: http://ieeexplore.ieee.org/document/6275614/
+
+Markdown Content:
+Opens in a new window Opens an external website Opens an external website in a new window
+
+This website utilizes technologies such as cookies to enable essential site functionality, as well as for analytics, personalization, and targeted advertising. [Privacy Policy](https://www.ieee.org/security-privacy.html)
+
+Accept Deny Non-Essential 
+
+Storage Preferences
+
+Loading [MathJax]/extensions/TeX/noUndefined.js
+
+Skip to main content
+
+Internet based remote control for a robotic catheter manipulating system | IEEE Conference Publication | IEEE Xplore
+
+[](https://ieeexplore.ieee.org/document/)
+
+[](https://ieeexplore.ieee.org/rest/api/hpdata)
+
+Skip to Main Content
+
+*   [IEEE.org](https://www.ieee.org/)
+*   [IEEE _Xplore_](https://ieeexplore.ieee.org/Xplore/home.jsp)
+*   [IEEE SA](https://standards.ieee.org/)
+*   [IEEE Spectrum](https://spectrum.ieee.org/)
+*   [More Sites](https://www.ieee.org/sitemap.html)
+
+[Subscribe](https://innovate.ieee.org/Xplore/Subscribebutton)
+
+*   [Donate](https://www.ieee.org/give)
+*   [Cart](https://www.ieee.org/cart/public/myCart/page.html?refSite=https://ieeexplore.ieee.org&refSiteName=IEEE%20Xplore "View Cart")[](https://ieeexplore.ieee.org/document/)  
+*   [](javascript:void() "Create Account")
+*   [](https://ieeexplore.ieee.org/document/ "Sign In")
+*   [Create Account](javascript:void() "Create Account")
+*   [Personal Sign In](javascript:void() "Sign In")
+
+[](https://ieeexplore.ieee.org/document/)
+
+[![Image 1: IEEE Xplore logo - Link to home](https://ieeexplore.ieee.org/assets/img/xplore_logo_white.svg)](https://ieeexplore.ieee.org/Xplore/home.jsp "Delivering full text access to the world's highest quality technical literature in engineering and technology")
+
+*    Browse  
+*    My Settings  
+*    Help  
+
+[Institutional Sign In](javascript:void())
+
+![Image 2: IEEE logo - Link to IEEE main site homepage](https://ieeexplore.ieee.org/assets/img/ieee_logo_white.svg)
+
+[Institutional Sign In](https://ieeexplore.ieee.org/document/)
+
+Search by Content Type 
+
+[ADVANCED SEARCH](https://ieeexplore.ieee.org/search/advanced)
+
+Search by Content Type 
+
+[ADVANCED SEARCH](https://ieeexplore.ieee.org/search/advanced)
+
+[Conferences](https://ieeexplore.ieee.org/browse/conferences/title/)>[2012 ICME International Confe...](https://ieeexplore.ieee.org/xpl/conhome/6247530/proceeding)[](https://ieeexplore.ieee.org/Xplorehelp/ieee-xplore-training/working-with-documents#interactive-html)
+
+# Internet based remote control for a robotic catheter manipulating system
+
+Publisher: IEEE
+
+Cite This
+
+[PDF](javascript:void() "You do not have access to this PDF")
+
+[Shuxiang Guo](https://ieeexplore.ieee.org/author/37274155200); [Nan Xiao](https://ieeexplore.ieee.org/author/37545298100); [Baofeng Gao](https://ieeexplore.ieee.org/author/37288482800); [Takashi Tamiya](https://ieeexplore.ieee.org/author/37542732900); [Masahiko Kawanishi](https://ieeexplore.ieee.org/author/37967197200)
+
+[All Authors](javascript:void())
+
+[](https://ieeexplore.ieee.org/document/)
+
+ Sign In or Purchase
+
+10
+
+Cites in
+
+Papers
+
+209
+
+Full
+
+Text Views
+
+*   [](javascript:void())
+*   [](javascript:void())
+*   [](javascript:void())
+*   [](javascript:void())
+*   [Alerts](javascript:void())# Alerts
+
+[Manage Content Alerts](https://ieeexplore.ieee.org/alerts/citation) [Add to Citation Alerts](javascript:void())  
+
+* * *
+
+[Abstract](https://ieeexplore.ieee.org/document/6275614)
+
+## Document Sections
+
+*   [I. Introduction](javascript:void())
+*   [II. System describtion](javascript:void())
+*   [III. Remote Control System](javascript:void())
+*   [IV. Experiments](javascript:void())
+*   [V. Conclusion](javascript:void())
+
+[Authors](https://ieeexplore.ieee.org/document/6275614/authors)
+
+[Figures](https://ieeexplore.ieee.org/document/6275614/figures)
+
+[References](https://ieeexplore.ieee.org/document/6275614/references)
+
+[Citations](https://ieeexplore.ieee.org/document/6275614/citations)
+
+[Keywords](https://ieeexplore.ieee.org/document/6275614/keywords)
+
+[Metrics](https://ieeexplore.ieee.org/document/6275614/metrics)
+
+[More Like This](https://ieeexplore.ieee.org/document/6275614/similar)
+
+*   [Download PDF](https://ieeexplore.ieee.org/document/ "You do not have access to this PDF")
+*   [Download References](javascript:void())
+*   [[](javascript:void())](https://ieeexplore.ieee.org/document/)
+*   [Request Permissions](https://ieeexplore.ieee.org/document/ "Request permission for reuse.")
+*   [Save to](https://ieeexplore.ieee.org/document/)
+*   [Alerts](https://ieeexplore.ieee.org/document/)
+
+## Abstract:
+
+Endovascular intervention is expected to become increasingly popular in medical practice, both for diagnosis and for surgery. Accordingly, researches of robotic systems f...[Show More](https://ieeexplore.ieee.org/document/)
+
+## Metadata
+
+## Abstract:
+
+Endovascular intervention is expected to become increasingly popular in medical practice, both for diagnosis and for surgery. Accordingly, researches of robotic systems for endovascular surgery assistant have been carried out widely. Robotic system takes advantages of higher precision, can be controlled remotely etc. In this paper a novel robotic catheter manipulation system is presented. The developed system consists of two parts, one is the controller and the other one is the catheter manipulator. The controller is designed to simulate the surgeon's operating procedure, and the catheter manipulator takes the same movement motion with the controller. A internet based communication between the controller and the catheter manipulator has been build. A server client structure is employed to realize the communication. Two-way remote control experiments are carried out between China and Japan.
+
+**Published in:**[2012 ICME International Conference on Complex Medical Engineering (CME)](https://ieeexplore.ieee.org/xpl/conhome/6247530/proceeding)
+
+**Date of Conference:** 01-04 July 2012 
+
+**Date Added to IEEE _Xplore_:** 23 August 2012 
+
+**ISBN Information:**
+
+**DOI:**[10.1109/ICCME.2012.6275614](https://doi.org/10.1109/ICCME.2012.6275614)
+
+Publisher: IEEE
+
+**Conference Location:** Kobe, Japan 
+
+[![Image 3](https://ieeexplore.ieee.org/assets/img/document/toc-icon.png) Contents](https://ieeexplore.ieee.org/document/)
+
+* * *
+
+### I. Introduction
+
+Endovascular intervention is expected to become increasingly popular in medical practice, both for diagnosis and for surgery. However, as a new technology, it requires a lot of skills in operation. In addition, the operation is carried out inside the body, it is impossible to monitor it directly. Much more skills and experience are required for doctors to insert the catheter. In the operation, for example the catheter is inserted through patients' blood vessel. Any mistakes would hurt patients and cause damages. An experienced neurosurgery doctor can achieve a precision about 2mm in the surgery. However, the contact force between the blood vessel and the catheter cannot be sensed. During the operation an X-ray camera is used, and long time operation will cause damage to the patient. Although doctors wear protecting suits, it is very difficult to protect doctors' hands and faces from the radiation of the X-ray. There are dangers of mingling or breaking the blood vessels. To overcome these challenges, we need better technique and mechanisms to help and train doctors. Robotic system takes many advantages of higher precision, can be controlled remotely etc. However, compared with hands of human being, none of a robotic system could satisfy all of the requirements of an endovascular intervention. Not only because the machine is not as flexible as hands of human being but also lacks of touch. In any case, robotic catheter manipulation system could provide assistant to surgeons in the operation, but it has a long way to go to replace human being.
+
+ Sign in to Continue Reading 
+
+## Authors
+
+## Figures
+
+## References
+
+## Citations
+
+## Keywords
+
+## Metrics
+
+[![Image 4: Contact IEEE to Subscribe](https://ieeexplore.ieee.org/assets/img/document/ads/ft-subscription.png)](https://innovate.ieee.org/interested-in-a-subscription-for-your-organization/?LT=XPLLG_XPL_2020_SUB_Conferences300x250_Sub-NFT)
+
+## More Like This
+
+[A novel catheter operating robot for vascular interventional surgery](https://ieeexplore.ieee.org/document/7736300/)
+
+2016 IEEE Workshop on Advanced Robotics and its Social Impacts (ARSO)
+
+Published: 2016
+
+[A Novel Catheter Rotation Structure for Aseptic Environment of Interventional Surgery Robot](https://ieeexplore.ieee.org/document/8816446/)
+
+2019 IEEE International Conference on Mechatronics and Automation (ICMA)
+
+Published: 2019
+
+[Show More](javascript:void())
+
+# References
+
+**References is not available for this document.**
+
+## IEEE Personal Account
+
+*   [Change username/password](https://www.ieee.org/profile/changeusrpwd/showChangeUsrPwdPage.html?refSite=https://ieeexplore.ieee.org&refSiteName=IEEE%20Xplore)
+
+## Purchase Details
+
+*   [Payment Options](https://www.ieee.org/profile/payment/showPaymentHome.html?refSite=https://ieeexplore.ieee.org&refSiteName=IEEE%20Xplore)
+*   [View Purchased Documents](https://ieeexplore.ieee.org/articleSale/purchaseHistory.jsp)
+
+## Profile Information
+
+*   [Communications Preferences](https://www.ieee.org/ieee-privacyportal/app/ibp?refSite=https://ieeexplore.ieee.org&refSiteName=IEEE%20Xplore)
+*   [Profession and Education](https://www.ieee.org/profile/profedu/getProfEduInformation.html?refSite=https://ieeexplore.ieee.org&refSiteName=IEEE%20Xplore)
+*   [Technical interests](https://www.ieee.org/profile/tips/getTipsInfo.html?refSite=https://ieeexplore.ieee.org&refSiteName=IEEE%20Xplore)
+
+## Need Help?
+
+*   [US & Canada: +1 800 678 4333](tel:+1-800-678-4333)
+*   [Worldwide: +1 732 981 0060](tel:+1-732-981-0060)
+*   [Contact & Support](https://ieeexplore.ieee.org/xpl/contact)
+
+## Follow
+
+*   [](https://www.facebook.com/IEEEXploreDigitalLibrary/ "Follow IEEE Xplore on Facebook, opens in a new tab")
+*   [](https://www.instagram.com/ieeexplore_org "Follow IEEE Xplore on Instagram, opens in a new tab")
+*   [](https://www.linkedin.com/showcase/ieee-xplore "Follow IEEE Xplore on LinkedIn, opens in a new tab")
+*   [](https://www.youtube.com/ieeexplore "Follow IEEE Xplore on Youtube , opens in a new tab")
+*   [](https://twitter.com/IEEEXplore?ref_src=twsrc%5Egoogle%7Ctwcamp%5Eserp%7Ctwgr%5Eauthor "Follow IEEE Xplore on Twitter, opens in a new tab")
+
+[About IEEE _Xplore_](https://ieeexplore.ieee.org/Xplorehelp/overview-of-ieee-xplore/about-ieee-xplore) | [Contact Us](https://ieeexplore.ieee.org/xpl/contact) | [Help](https://ieeexplore.ieee.org/Xplorehelp) | [Accessibility](https://ieeexplore.ieee.org/Xplorehelp/overview-of-ieee-xplore/accessibility-statement) | [Terms of Use](https://ieeexplore.ieee.org/Xplorehelp/overview-of-ieee-xplore/terms-of-use) | [Nondiscrimination Policy](http://www.ieee.org/web/aboutus/whatis/policies/p9-26.html) | [IEEE Ethics Reporting](http://www.ieee-ethics-reporting.org/) | [Sitemap](https://ieeexplore.ieee.org/Xplorehelp/overview-of-ieee-xplore/ieee-xplore-sitemap) | [IEEE Privacy Policy](http://www.ieee.org/about/help/security_privacy.html)
+
+A public charity, IEEE is the world's largest technical professional organization dedicated to advancing technology for the benefit of humanity.
+
+© Copyright 2026 IEEE - All rights reserved, including rights for text and data mining and training of artificial intelligence and similar technologies.
+
+### IEEE Account
+
+*   [Change Username/Password](https://www.ieee.org/profile/changeusrpwd/showChangeUsrPwdPage.html?refSite=https://ieeexplore.ieee.org&refSiteName=IEEE%20Xplore)
+*   [Update Address](https://www.ieee.org/profile/address/getAddrInfoPage.html?refSite=https://ieeexplore.ieee.org&refSiteName=IEEE%20Xplore)
+
+### Purchase Details
+
+*   [Payment Options](https://www.ieee.org/profile/payment/showPaymentHome.html?refSite=https://ieeexplore.ieee.org&refSiteName=IEEE%20Xplore)
+*   [Order History](https://www.ieee.org/profile/vieworder/showOrderHistory.html?refSite=https://ieeexplore.ieee.org&refSiteName=IEEE%20Xplore)
+*   [View Purchased Documents](https://ieeexplore.ieee.org/articleSale/purchaseHistory.jsp)
+
+### Profile Information
+
+*   [Communications Preferences](https://www.ieee.org/ieee-privacyportal/app/ibp?refSite=https://ieeexplore.ieee.org&refSiteName=IEEE%20Xplore)
+*   [Profession and Education](https://www.ieee.org/profile/profedu/getProfEduInformation.html?refSite=https://ieeexplore.ieee.org&refSiteName=IEEE%20Xplore)
+*   [Technical Interests](https://www.ieee.org/profile/tips/getTipsInfo.html?refSite=https://ieeexplore.ieee.org&refSiteName=IEEE%20Xplore)
+
+### Need Help?
+
+*   **US & Canada:** +1 800 678 4333
+*   **Worldwide:** +1 732 981 0060
+
+*   [Contact & Support](https://ieeexplore.ieee.org/xpl/contact)
+
+*   [About IEEE _Xplore_](https://ieeexplore.ieee.org/Xplorehelp/overview-of-ieee-xplore/about-ieee-xplore)
+*   [Contact Us](https://ieeexplore.ieee.org/xpl/contact)
+*   [Help](https://ieeexplore.ieee.org/Xplorehelp)
+*   [Accessibility](https://ieeexplore.ieee.org/Xplorehelp/overview-of-ieee-xplore/accessibility-statement)
+*   [Terms of Use](https://ieeexplore.ieee.org/Xplorehelp/overview-of-ieee-xplore/terms-of-use)
+*   [Nondiscrimination Policy](http://www.ieee.org/web/aboutus/whatis/policies/p9-26.html)
+*   [Sitemap](https://ieeexplore.ieee.org/xpl/sitemap.jsp)
+*   [Privacy & Opting Out of Cookies](http://www.ieee.org/about/help/security_privacy.html)
+
+A not-for-profit organization, IEEE is the world's largest technical professional organization dedicated to advancing technology for the benefit of humanity.
+
+© Copyright 2026 IEEE - All rights reserved. Use of this web site signifies your agreement to the terms and conditions.

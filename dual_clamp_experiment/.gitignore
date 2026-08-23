@@ -1,0 +1,8 @@
+# C++ / MSBuild 生成目录
+x64/
+DualClam.*/
+
+# WPF / NuGet 生成目录
+AdsControlUI/bin/
+AdsControlUI/obj/
+*.jpg

@@ -1,0 +1,445 @@
+Title: A novel endovascular robotic-assisted system for endovascular aortic repair: first-in-human evaluation of practicability and safety
+
+URL Source: https://link.springer.com/article/10.1007/s00330-023-09810-x
+
+Published Time: Tue, 23 Jun 2026 02:06:19 GMT
+
+Markdown Content:
+## Abstract
+
+### Objectives
+
+To assess the practicability and safety of a novel endovascular robotic system for performing endovascular aortic repair in human.
+
+### Methods
+
+A prospective observational study was conducted in 2021 with 6 months post-operative follow-up. Patients with aortic aneurysms and clinical indications for elective endovascular aortic repair were enrolled in the study. The novel developed robotic system is applicable for the majority of commercial devices and various types of endovascular surgeries. The primary endpoint was technical success without in-hospital major adverse events. Technical success was defined as the ability of the robotic system to complete all procedural steps based on procedural segments.
+
+### Results
+
+The first-in-human evaluation of robot-assisted endovascular aortic repair was performed in five patients. The primary endpoint was achieved in all patients (100%). There were no device- or procedure-related complications or no in-hospital major adverse events. The operation time and total blood loss in these cases were equal to those in the manual procedures. The radiation exposure of the surgeon was 96.5% lower than that in the traditional position while the radiation exposure of the patients was not significantly increased.
+
+### Conclusions
+
+Early clinical evaluation of the novel endovascular aortic repair in endovascular aortic repair demonstrated practicability, safety, and procedural effectiveness comparable to manual operation. In addition, the total radiation exposure of the operator was significantly lower than that of traditional procedures.
+
+### Clinical relevance statement
+
+This study applies a novel approach to perform the endovascular aortic repair in a more accurate and minimal-invasive way and lays the foundation for the perspective automation of the endovascular robotic system, which reflects a new paradigm for endovascular surgery.
+
+### Key Points
+
+_• This study is a first-in-human evaluation of a novel endovascular robotic system for endovascular aortic repair (EVAR)._
+
+_• Our system might reduce the occupational risks associated with manual EVAR and contribute to achieving a higher degree of precision and control._
+
+_• Early evaluation of the endovascular robotic system demonstrated practicability, safety, and procedural effectiveness comparable to that of manual operation._
+
+### Similar content being viewed by others
+
+![Image 1](https://media.springernature.com/w215h120/springer-static/image/art%3Aplaceholder%2Fimages/placeholder-figure-springernature.png)
+
+![Image 2](https://media.springernature.com/w215h120/springer-static/image/art%3A10.1007%2Fs00595-023-02663-3/MediaObjects/595_2023_2663_Fig1_HTML.png)
+
+![Image 3](https://media.springernature.com/w215h120/springer-static/image/art%3A10.1186%2Fs13643-025-03044-2/MediaObjects/13643_2025_3044_Fig1_HTML.png)
+
+## Introduction
+
+In the past decades, endovascular treatment has become one of the primary alternatives for aortic aneurysm repair [[1](https://link.springer.com/article/10.1007/s00330-023-09810-x#ref-CR1 "Avishay DM, Reimon JD (2023) Abdominal aortic repair. [Updated 2022 Jul 25]. In: StatPearls [Internet]. StatPearls Publishing, Treasure Island (FL). Available from: 
+                  https://www.ncbi.nlm.nih.gov/books/NBK554573/
+                  
+                . Accessed 11 Apr 2023"), [2](https://link.springer.com/article/10.1007/s00330-023-09810-x#ref-CR2 "Lederle FA, Kyriakides TC, Stroupe KT et al (2019) Open versus endovascular repair of abdominal aortic aneurysm. New Engl J Med 380:2126–2135")]; however, this treatment poses the risk of potential hazards to both patients and operators [[3](https://link.springer.com/article/10.1007/s00330-023-09810-x#ref-CR3 "Resch TA, Tornqvist P, Sonesson B, Dias NV (2016) Techniques to reduce radiation for patients and operators during aortic endografting. J Cardiovasc Surg 57:178–184")]. To improve its therapeutic effect, the procedures that are performed are more difficult [[4](https://link.springer.com/article/10.1007/s00330-023-09810-x#ref-CR4 "Swerdlow NJ, Wu WW, Schermerhorn ML (2019) Open and endovascular management of aortic aneurysms. Circ Res 124:647–661")], and procedural duration is extended, which results in increased radiation exposure for patients and surgeons [[5](https://link.springer.com/article/10.1007/s00330-023-09810-x#ref-CR5 "Monastiriotis S, Comito M, Labropoulos N (2015) Radiation exposure in endovascular repair of abdominal and thoracic aortic aneurysms. J Vasc Surg 62:753–761"), [6](https://link.springer.com/article/10.1007/s00330-023-09810-x#ref-CR6 "Stahl CM, Meisinger QC, Andre MP, Kinney TB, Newton IG (2016) Radiation risk to the fluoroscopy operator and staff. AJR Am J Roentgenol 207:737–744")]. In the case of surgeons, long durations of standing in a lead apron may lead to performance reduction, exhaustion, and even orthopedic injuries [[7](https://link.springer.com/article/10.1007/s00330-023-09810-x#ref-CR7 "Ragosta M, Singh KP (2018) Robotic-assisted percutaneous coronary intervention: rationale, implementation, case selection and limitations of current technology. J Clin Med 7:23"), [8](https://link.springer.com/article/10.1007/s00330-023-09810-x#ref-CR8 "Andreassi MG, Piccaluga E, Guagliumi G, Del Greco M, Gaita F, Picano E (2016) Occupational health risks in cardiac catheterization laboratory workers. Circ Cardiovasc Interv 9:e003273")]. Currently, various robotic-assisted systems are available for percutaneous coronary intervention and peripheral artery disease [[9](https://link.springer.com/article/10.1007/s00330-023-09810-x#ref-CR9 "Mendes Pereira V, Cancelliere NM, Nicholson P et al (2020) First-in-human, robotic-assisted neuroendovascular intervention. J Neurointerv Surg 12:338–340"), [10](https://link.springer.com/article/10.1007/s00330-023-09810-x#ref-CR10 "Mahmud E, Schmid F, Kalmar P et al (2016) Feasibility and safety of robotic peripheral vascular interventions: results of the RAPID trial. JACC Cardiovasc Interv 9:2058–2064")]. The Magellan robotic catheter system has been used to facilitate vessel cannulation during fenestrated endovascular aortic repair (EVAR) [[11](https://link.springer.com/article/10.1007/s00330-023-09810-x#ref-CR11 "Riga CV, Bicknell CD, Rolls A, Cheshire NJ, Hamady MS (2013) Robot-assisted fenestrated endovascular aneurysm repair (FEVAR) using the Magellan system. J Vasc Interv Radiol 24:191–196")]. But this robot is essentially a steerable catheter that can be remotely controlled to facilitate arterial navigation—it cannot successfully deploy the stent graft and cannulate the contralateral limb gate. Other endovascular robots, such as Corpath, are designed based on percutaneous coronary intervention technology, and cannot handle the over-the-wire (OTW) devices for endovascular aortic repair (EVAR). So there is no endovascular robot available of completing the entire EVAR procedure for clinical research. Additionally, the low accuracy and high device damage rate associated with rolling friction highlight the need for a more reliable design [[12](https://link.springer.com/article/10.1007/s00330-023-09810-x#ref-CR12 "Wang K, Chen B, Lu Q et al (2018) Design and performance evaluation of real-time endovascular interventional surgical robotic system with high accuracy. Int J Med Robot 14:e1915")].
+
+Recently, we developed a novel endovascular robotic system (ALLVAS, Aopeng Medical). This system can be controlled remotely, which aids in addressing procedural challenges, thus decreasing the risk of occupational hazards caused during EVAR [[13](https://link.springer.com/article/10.1007/s00330-023-09810-x#ref-CR13 "Lu Q, Shen Y, Xia S, Chen B, Wang K (2020) A novel universal endovascular robot for peripheral arterial stent-assisted angioplasty: initial experimental results. Vasc Endovascular Surg 54:598–604")]. The system can also enhance the accuracy and control of the interventional procedure [[12](https://link.springer.com/article/10.1007/s00330-023-09810-x#ref-CR12 "Wang K, Chen B, Lu Q et al (2018) Design and performance evaluation of real-time endovascular interventional surgical robotic system with high accuracy. Int J Med Robot 14:e1915")]. Based on these advantages, we used this new endovascular robotic system to perform EVAR in patients for the first time.
+
+This study aimed to estimate the safety and practicability of using this system in the delivery and manipulation of guidewires, catheters, balloons, and stent grafts in patients undergoing elective EVAR.
+
+## Method
+
+### Study design
+
+This prospective investigation of the first-in-human application of a novel endovascular robotic system in the endovascular repair of aortic aneurysms was conducted from August to September 2021. Patients undergoing EVAR were recruited. Our professional team performed all the operations at Changhai Hospital (Shanghai, China). The study protocol was approved by the Ethics Committee of Changhai Hospital (CHEC2021-097), and all participants provided written informed consent. All relevant data are presented within the paper.
+
+### Patient and public involvement
+
+The patients and public were not involved in the design, conduct, reporting, or dissemination plans of our research.
+
+### Study population
+
+Patients with aortic aneurysm confirmed by computed tomography angiography (CTA) were enrolled in this study. According to recommendations in relevant guidelines and literature, the inclusion criteria were (1) asymptomatic fusiform aortic aneurysm with a maximal aortic diameter of at least 55 mm (both thoracic and abdominal), (2) female patient with aortic aneurysm between 50 and 55 mm, (3) saccular aortic aneurysm, and (4) rapid expansion of aortic aneurysms (> 10 mm/year or > 5 mm/6 months) [[14](https://link.springer.com/article/10.1007/s00330-023-09810-x#ref-CR14 "Wanhainen A, Verzini F, Van Herzeele I et al (2019) Editor’s choice - European Society for Vascular Surgery (ESVS) 2019 clinical practice guidelines on the management of abdominal aorto-iliac artery aneurysms. Eur J Vasc Endovasc Surg 57:8–93")-[16](https://link.springer.com/article/10.1007/s00330-023-09810-x#ref-CR16 "Ouriel K (2009) The PIVOTAL study: a randomized comparison of endovascular repair versus surveillance in patients with smaller abdominal aortic aneurysms. J Vasc Surg 49:266–269")]. The major exclusion criteria included (1) aneurysm rupture or impending rupture (discontinuity in calcification or hyperattenuating crescent sign in CT images), (2) aortic dissection or non-atherosclerotic aneurysm, (3) previous aortic surgery, (4) active infection, (5) femoral artery diameter ≤ 7 mm, (6) severe tortuosity or calcification of the iliac artery, and (7) hostile neck anatomy.
+
+### Endovascular robotic system
+
+As a novel approach, the endovascular robotic system was developed for performing all endovascular procedures for aortic and peripheral artery diseases [[13](https://link.springer.com/article/10.1007/s00330-023-09810-x#ref-CR13 "Lu Q, Shen Y, Xia S, Chen B, Wang K (2020) A novel universal endovascular robot for peripheral arterial stent-assisted angioplasty: initial experimental results. Vasc Endovascular Surg 54:598–604")]. The system consists of two major parts: a functional unit and interventional console. The functional unit has universal architecture, making it compatible with market-leading devices, including both rapid-exchange and over-the-wire catheter systems. It can be adapted to any catheterization lab and does not require any specific equipment or technical changes prior to installation. The novel endovascular robotic system is designed with two groups of independent mechanical arms with three degrees of freedom so that the arms can independently perform a movement in three dimensions (Fig.[1](https://link.springer.com/article/10.1007/s00330-023-09810-x#Fig1)). Each arm has two manipulators, and each manipulator has one gripper. The surgeon can control the long axial movement of the manipulators by operating the joystick with four manipulators, thereby clamping the endovascular devices. The long axial movement of the manipulators can be transformed into the movement of the devices.
+
+**Fig. 1**
+
+Functional unit of the endovascular robotic system. **1** Schematics of the functional unit. **2** Photograph of the functional unit. (A) Mechanical arm. (B) Manipulator. (C) Rotatable gripper. (D) Relay gripper. (E) Stretchable _Z_-axis motor. (F) Stretchable _Y_-axis motor. (G) Movable base. **3** Illustration of the compatibility of the endovascular robotic system with the over-the-wire system. **4** Illustration of the compatibility of the endovascular robotic system with the rapid exchange system
+
+The interventional console is connected to the functional unit via a communication cable, which enables the operator to perform EVAR remotely from the console (Fig.[2](https://link.springer.com/article/10.1007/s00330-023-09810-x#Fig2)). The interventional console, which is a radiation-shielded mobile workstation, can be placed anywhere indoors or outdoors. The operator manipulates the robotic system using four joysticks in the control console. The controlled manipulator can be switched arbitrarily through selection buttons. The operator can control any manipulator without moving his/her seat. The speed of movement and rotation can be modified by the speed controller, which facilitates the cannulation of the contralateral limb gate during EVAR. The real-time motion state of the functional unit is displayed on the monitor both in the detailed and panoramic views. Additionally, fluoroscopic images, electrocardiograms, and hemodynamic information are also displayed on the monitor inside the console, which can be visualized at a closer distance.
+
+**Fig. 2**
+
+Interventional console of the endovascular robotic system. (**A**) Monitor of the functional unit (detailed view). (**B**) Real-time fluoroscopic image. (**C**) Monitor of functional unit (panoramic view). (**D**) ECG and hemodynamic monitor. (**E**) Monitor of the operator. (**F**) Motion state of the grippers. (**G**) Fluoroscopic image (Ref.). (**H**) Motion state of the functional unit. (**I**) Speed controller of manipulator movement and gripper rotation. (**J**) Joystick active button. (**K**) Joystick. (**L**) Manipulator selection button. (**M**) Controller of arm movements. Abbreviations: ECG, electrocardiogram
+
+### EVAR procedure performed by endovascular robotic system
+
+Before the intervention, two vascular surgeons independently analyzed the baseline CT images and suitability of the target lesion for EVAR. With this procedure, vascular access can be obtained using the Seldinger technique. Subsequently, the surgeon controlled the robotic system via the control console joysticks; the endovascular devices could then be advanced, retracted, and rotated.
+
+During EVAR of abdominal aortic aneurysm, the surgeon loaded a pigtail catheter into the robotic system and advanced the catheter along with the guidewire to the aorta above the target lesion to perform preoperative angiography. After angiography, a 0.035-inch extra-stiff guidewire (Lunderquist Extra Stiff Wire Guides, Cook Medical, Inc.) was automatically advanced into the thoracic aorta by the robot. The endovascular robotic system retracted the pigtail catheter and pushed the stent graft (Endurant, Medtronic Vascular, Inc.) into a predetermined position. The main body was deployed by the robot after repeated angiography to minimize the risk of renal artery occlusion. A multipurpose (MPA) catheter was used for the cannulation of the contralateral limb gate via a retrograde femoral artery approach, and the flexible design of the grippers guaranteed continuous rotation. The contralateral limb of the endograft was then introduced over another stiff guidewire using the robotic system. After the deployment of the contralateral iliac limb, the stent grafts were ballooned per the manufacturer’s instructions. Balloon insertion and retrieval were performed using the robotic system. A completion angiogram was obtained to verify the patency of the renal arteries and lack of gross endoleaks (Fig.[3](https://link.springer.com/article/10.1007/s00330-023-09810-x#Fig3)). The device exchanges were performed by an assistant who was positioned behind a mobile lead shield during surgery. A detailed operation video is presented (see Video [1](https://link.springer.com/article/10.1007/s00330-023-09810-x#MOESM1), which illustrates the key steps involved in robotic-assisted EVAR of abdominal aortic aneurysm).
+
+**Fig. 3**
+
+EVAR procedure performed by the endovascular robotic system. **1**Pigtail catheter advancement (red arrow: dosimeter location). **2** Stent graft release process (red arrow: dosimeter location). **3** Cannulation of the contralateral limb gate (red arrow: dosimeter location). **4** Stent graft release process (contralateral iliac limb). Abbreviations: EVAR, endovascular aortic repair
+
+The process for device insertion, deployment, and retrieval in EVAR of thoracic aortic aneurysm is analogous to that in EVAR of abdominal aortic aneurysm. Angiography was used to evaluate the efficacy of stent implantation and to rule out pertinent complications. A detailed operation video is presented (see Video [2](https://link.springer.com/article/10.1007/s00330-023-09810-x#MOESM2), which illustrates the key steps involved in robotic-assisted EVAR of thoracic aortic aneurysm).
+
+### Study endpoints
+
+All patients were followed-up for major adverse cardiac events (MACEs) including death, myocardial infarction, or aneurysm rupture throughout their hospital stay and 6 months after discharge. The primary endpoint was technical success defined as the capability of the system to execute the procedure precisely and effectively; this was evaluated based on the number of procedural segments for the introduction and retrieval of all devices. Another endpoint was clinical success, which was identified by (1) accurate placement of the device and total exclusion of the aneurysm as well as (2) manipulation of the endovascular robotic system, deployment of a stent to the target lesion, and successful retraction of the delivery system without in-hospital and follow-up MACEs.
+
+Radiation exposure to the operator at the console and procedure table was monitored using direct electronic dosimeters. The dosimeter on the procedure table was placed near the patient’s right leg and was shielded by a lead apron. The dosimeter was placed 30 cm away from the radiation source, which is the same as the distance between the operator and radiation source in manual EVAR.
+
+The operation time included the setup of the robotic system and loading of the endovascular devices. Procedural attributes of the robotic system were recorded over time.
+
+### Statistical analysis
+
+Descriptive statistics were used to describe the patients’ baseline characteristics and in-hospital outcomes. Continuous variables were presented as the median (Q1, Q3) due to small numbers and categorical variables were shown as frequencies and percentages. No inferential statistical analysis was used.
+
+This case series has been reported in line with the PROCESS Guideline [[17](https://link.springer.com/article/10.1007/s00330-023-09810-x#ref-CR17 "Agha RA, Sohrabi C, Mathew G et al (2020) The PROCESS 2020 guideline: updating consensus Preferred Reporting Of CasESeries in Surgery (PROCESS) guidelines. Int J Surg 84:231–235")].
+
+## Result
+
+Based on the inclusion and exclusion criteria, five patients underwent EVAR with the endovascular robotic system. Table [1](https://link.springer.com/article/10.1007/s00330-023-09810-x#Tab1) summarizes the patients’ demographic characteristics. There were four cases of abdominal aortic aneurysm and one case of thoracic aortic aneurysm. The average maximal diameter of the aortic aneurysm was 56.9 ± 2.16 mm. A hostile neck was defined as the presence of at least one of the following: neck length < 15 mm, neck diameter > 28 mm, angulation > 60°, mural thrombus/calcifications, and conical aortic neck [[18](https://link.springer.com/article/10.1007/s00330-023-09810-x#ref-CR18 "Stather PW, Wild JB, Sayers RD, Bown MJ, Choke E (2013) Endovascular aortic aneurysm repair in patients with hostile neck anatomy. J Endovasc Ther 20:623–637")]. There were no cases of hostile neck, which facilitated the EVAR procedure.
+
+**Table 1 Patient characteristics**
+
+[Full size table](https://link.springer.com/article/10.1007/s00330-023-09810-x/tables/1)
+
+For patient 1, the maximum diameter of the abdominal aortic aneurysm was 45.1 mm when measured 1 year ago, and the recent computed tomography (CT) scan confirmed that the maximum diameter of the aneurysm increased to 57.4 mm. The annual growth rate was > 10 mm/year, which was considered as rapid expansion.
+
+For patient 4, this female patient with abdominal aortic aneurysm underwent an annual CT scan 6 months ago, and the maximum diameter of the aneurysm was 52 mm. Another CT scan was performed 1 week ago because of urolithiasis, and the maximum diameter increased to 59.1 mm. The annual growth rate was > 5 mm/6 months, which was considered as rapid expansion.
+
+For patient 5, in this patient, the aneurysm morphology was saccular, and the maximum diameter of the aneurysm was 53.6 mm. Repair is generally recommended at a diameter of even < 55 mm.
+
+All the procedures were performed via surgical cut-down femoral artery access. All patients received general anesthesia. All endovascular devices used in the procedure were commercially approved, and the therapeutic options were selected at the operator’s discretion. The robotic-assisted procedure included successful navigation and stent graft deployment in the patients. The guidewire proceeded smoothly, without dissection or perforation. The stent was successfully delivered to the lesion by using the novel robotic system. After stent graft deployment in all procedures, the stent delivery system was successfully retrieved into the sheath in all patients. Table [2](https://link.springer.com/article/10.1007/s00330-023-09810-x#Tab2) provides detailed information regarding these procedures. A conservative algorithm was adopted when operating on patient 1 so the operative time in patient 1 was relatively longer than the others.
+
+**Table 2 Detailed information regarding the procedure and in-hospital outcomes**
+
+[Full size table](https://link.springer.com/article/10.1007/s00330-023-09810-x/tables/2)
+
+Three of the four patients with abdominal aortic aneurysm received an extended iliac limb stent, and right hypogastric artery coverage was performed in two patients (50%). The operation duration did not exceed 3 h, except in the first case. The blood loss, total contrast volume used, and fluoroscopy time were consistent with those in the published literature [[19](https://link.springer.com/article/10.1007/s00330-023-09810-x#ref-CR19 "Prinssen M, Verhoeven EL, Buth J et al (2004) A randomized trial comparing conventional and endovascular repair of abdominal aortic aneurysms. N Engl J Med 351:1607–1618"), [20](https://link.springer.com/article/10.1007/s00330-023-09810-x#ref-CR20 "Wang SW, Lin Y, Yao C, Lin PL, Wang SM (2012) Comparison of clinical curative effect between open surgery and endovascular repair of abdominal aortic aneurysm in China. Chin Med J (Engl) 125:1824–1831")]. All procedures were completed using the robotic system, without any periprocedural complications. The angiograph of the treated lesions is shown in Fig.[4](https://link.springer.com/article/10.1007/s00330-023-09810-x#Fig4).
+
+**Fig. 4**
+
+Endovascular repair of abdominal aortic aneurysm performed by the endovascular robotic system. (**A**) Preoperative angiography. (**B**) Postoperative angiography
+
+In summary, 100% of the interventional devices were successfully delivered and retrieved (overall technical success rate = 100%). No adverse clinical effects were associated with the endovascular robotic system. Thus, the primary endpoint, defined as technical success without in-hospital MACEs, was achieved in all five patients (100%). All patients were discharged within 72 h after surgery. The total radiation exposure of the operator at the console was 96.5% lower than that at the procedure table. The radiation exposure of the patients was not significantly increased when compared with traditional endovascular aortic repair [[5](https://link.springer.com/article/10.1007/s00330-023-09810-x#ref-CR5 "Monastiriotis S, Comito M, Labropoulos N (2015) Radiation exposure in endovascular repair of abdominal and thoracic aortic aneurysms. J Vasc Surg 62:753–761")]. At 6-month follow-up after the procedure, there was no incidence of MACEs.
+
+## Discussion
+
+This study involved a first-in-human experience with a novel endovascular robotic system and found that the system was safe and effective for the entire procedure of endovascular aortic repair. The endovascular robotic system was developed by our team and is now in the pre-commercial phase.
+
+The research and development process associated with the currently available robotic systems are based on percutaneous coronary intervention (PCI). Consequently, the existing robotic systems are compatible with a rapid-exchange system, which limits the applicable outer diameter of the endovascular devices. These systems are controlled by the rotation of the manipulator, and they push or retract the catheter with the help of rolling friction applied through the rollers [[21](https://link.springer.com/article/10.1007/s00330-023-09810-x#ref-CR21 "Legeza P, Britz GW, Loh T, Lumsden A (2020) Current utilization and future directions of robotic-assisted endovascular surgery. Expert Rev Med Devices 17:919–927")].
+
+Unlike the currently available robotic-assisted system, this novel endovascular robotic system is designed with double V-shaped grippers, which can be adjusted arbitrarily according to the diameter of the endovascular devices [[22](https://link.springer.com/article/10.1007/s00330-023-09810-x#ref-CR22 "Saliba W, Reddy VY, Wazni O et al (2008) Atrial fibrillation ablation using a robotic catheter remote control system: initial human experience and long-term follow-up results. J Am Coll Cardiol 51:2407–2411"), [23](https://link.springer.com/article/10.1007/s00330-023-09810-x#ref-CR23 "Wang K, Liu J, Yan W, Lu Q, Nie S (2021) Force feedback controls of multi-gripper robotic endovascular intervention: design, prototype, and experiments. Int J Comput Assist Radiol Surg 16:179–192")]. The double V-shaped grippers are adopted because roller design in other robotic systems inevitably leads to the relative sliding of the instrument and cannot execute self-expandable stent-graft deployment. Another reason for the double V-shaped grippers in the novel endovascular robotic system is to simulate manual gripping, which minimizes the additional risks associated with the modification of the current endovascular devices. The gripper used in the novel endovascular robotic system simulates manual operation to the greatest extent possible and increases stability during stent-graft deployment. As seen in the operation video, there was no stent migration during the procedure, which demonstrates the increased safety of the operation performed using the novel system. During this entire procedure, the demand for friction is not fixed in most cases; however, it is necessary to meet the requirement of minimum friction in order to reduce device damage. In contrast to rolling friction technology, the V-shaped gripper causes less damage to the hydrophilic coating of endovascular devices and is more beneficial in reducing the risk of vascular injury [[24](https://link.springer.com/article/10.1007/s00330-023-09810-x#ref-CR24 "Weisz G, Metzger DC, Caputo RP et al (2013) Safety and feasibility of robotic percutaneous coronary intervention: PRECISE (Percutaneous Robotically-Enhanced Coronary Intervention) Study. J Am Coll Cardiol 61:1596–1600")]. This design can also improve the efficiency of instrument replacement. Unlike in PCI treatment, different guidewires and catheters need to be replaced to accomplish angiography, arterial navigation, and other required actions in EVAR. The rapid opening and closing of the gripper can shorten the operation time of robotic-enhanced operations.
+
+Another drawback in the application of the current robotic-assisted systems is that a considerable proportion of endovascular procedures are performed by surgeons and assistants. Existing robotic-assisted systems have only one set of robotic arms; therefore, they cannot meet current demands. One advantage of the novel endovascular robotic system is that it has two mechanical arms, each with two manipulators, which can be used to perform complex motions through the coordinated movement of the manipulators, including forward and backward movements and rotation of the manipulators (see Video [3](https://link.springer.com/article/10.1007/s00330-023-09810-x#MOESM3), which demonstrates the entire process of wire advancement). With the help of these two mechanical arms, the catheter and stent can be moved forward and backward along the guidewire, the stent can be released, the system can be retracted freely, and finally, all the steps involved in EVAR can be completed. To prevent the superposition of torque in the direction of the axial deviation angle, which may damage the endovascular device and elevate the risk of iatrogenic injury, the axial state of the manipulators was controlled using software. The operating joystick controls the forward and backward movements and rotation of the manipulators. Furthermore, vascular access must be changed to implant the contralateral stent-graft limb during EVAR. With the novel endovascular robotic system, the position can be set freely via a stretchable _Z_-axis motor, whereas with other surgical robotic systems, the position can only be set after the alteration of the patient’s position, thereby increasing the surgical risk.
+
+For the cannulation of the contralateral limb gate using a retrograde femoral artery approach, the endovascular robotic system must rotate the guidewire and catheters continuously. On considering the potential risk of device entrapment during continuous rotation, we adopted the progressive rotation method using two groups of grippers. Briefly, the double V-shaped rotatable gripper rotates at an angle of 90° each time, and the third relay gripper relays to maintain the rotation angle until the rotatable gripper is reset and rotated again. Figure[5](https://link.springer.com/article/10.1007/s00330-023-09810-x#Fig5) demonstrates the progressive rotation (see Video [4](https://link.springer.com/article/10.1007/s00330-023-09810-x#MOESM4), which illustrates the demo of the progressive rotation). Table [3](https://link.springer.com/article/10.1007/s00330-023-09810-x#Tab3) summarizes the main differences between this novel endovascular system and others.
+
+**Fig. 5**
+
+Progressive rotation of the grippers. Dashed red line represents the space between the rotatable grippers in different motion states. **A**Rotatable grippers clamp the wire, while relay gripper (red arrow) remains open. **B**Rotatable grippers rotate the wire, while relay gripper remains open. **C**Rotatable grippers release the wire, while relay gripper clamps the wire. **D**Rotatable grippers rotate back to the initial state, whereas relay grippers clamp the wire
+
+**Table 3 The comparison of different endovascular robotic systems**
+
+[Full size table](https://link.springer.com/article/10.1007/s00330-023-09810-x/tables/3)
+
+This rotation process was automated using software. The surgeon rotated the joystick only to issue rotation instructions and released it after achieving the desired angle. Currently, other robotic systems (e.g., RobEnt) also use gears for continuous rotation [[25](https://link.springer.com/article/10.1007/s00330-023-09810-x#ref-CR25 "Bao X, Guo S, Xiao N et al (2018) Operation evaluation in-human of a novel remote-controlled vascular interventional robot. Biomed Microdevices 20:34")]. The advantage of our technique is that the rotation speed is faster than that of the other robotic systems, and the disassembly is less troublesome. In other robotic systems, the average loading time is 100 s, whereas the disassembling time is 30 s. By contrast, the replacement time of our endovascular robotic system and devices is within 10 s, which significantly shortens the operation time.
+
+Studies have demonstrated that guidewire- and catheter-related iatrogenic dissection occurs during endovascular treatment in approximately 3.6% of cases. The risk of bleeding complications has ranged from 0.7 to 1.0% [[26](https://link.springer.com/article/10.1007/s00330-023-09810-x#ref-CR26 "Algra AM, Lindgren A, Vergouwen MDI et al (2019) Procedural clinical complications, case-fatality risks, and risk factors in endovascular and neurosurgical treatment of unruptured intracranial aneurysms: a systematic review and meta-analysis. JAMA Neurol 76:282–293")]. Although fluoroscopic guidance is likely necessary to improve the precision of stent graft deployment, the robotic-assisted system facilitates the positioning of the delivery system with a high degree of accuracy [[27](https://link.springer.com/article/10.1007/s00330-023-09810-x#ref-CR27 "Granada JF, Delgado JA, Uribe MP et al (2011) First-in-human evaluation of a novel robotic-assisted coronary angioplasty system. JACC Cardiovasc Interv 4:460–465")]. This endovascular robotic system was designed to enhance the precision and accuracy of endovascular procedures.
+
+Proximal positioning is essential in EVAR, especially in patients with a short proximal landing zone. Through robotic technology, surgical efficiency can be increased or decreased such that the relatively larger movement generated by the surgeon through the handle can be transformed into subtle movements on the device. This function is performed through the regulation of the motor speed. Subsequently, the rotation speed was doubled, and the moving speed was decreased. This endovascular robotic system has the capability to precisely rotate (1° steps) the catheter and to accurately control (1-mm steps) the stent delivery system. The system effectively increased the directivity of the catheter tip, which facilitated the cannulation of the contralateral limb gate and reduced the risk of iatrogenic injury. Each surgeon can select the most comfortable operation mode to further reduce operative fatigue.
+
+Additionally, the endovascular robotic system can be used for catheter advancement and exchange through preset automatic operation steps, which is particularly useful in debulking operations (e.g., thrombolytic drug spraying and thrombectomy). Through the standard automatic operating steps of the robot, effects of surgical inexperience on therapeutic outcomes can be avoided. This is beneficial for promoting the use of new devices. Robotic systems have been shown to reduce radiation exposure. A recent study suggested that the incidence of cataract-type eye opacities is three times higher in interventional cardiologists than in control subjects [[28](https://link.springer.com/article/10.1007/s00330-023-09810-x#ref-CR28 "Ainsbury EA, Dalke C, Hamada N et al (2021) Radiation-induced lens opacities: epidemiological, clinical and experimental evidence, methodological issues, research gaps and strategy. Environ Int 146:106213")]. In our study, we confirmed a significant reduction (96.5%) in radiation exposure to the operator performing robotic EVAR.
+
+The major limitations of the present study are the small sample size and selective population. Therefore, the novel endovascular robotic system needs further evaluation with larger study population. And it is necessary to find new solutions for patients with complicated conditions such as hostile neck, short landing zone, or ruptured aortic aneurysm. The endovascular robotic system is theoretically suitable for these circumstances due to its unique design. But implementation of complex operations like the fenestrated technique that may be applied in the procedure still needs preclinical assessment. Furthermore, remote control via 5G technology will also be applied to the robotic system in the future, which may contribute to alleviate the problem of insufficient medical resources in an underdeveloped area.
+
+## Conclusions
+
+Despite significant advances in endovascular technologies, the actual procedural methodology for EVAR has remained unaltered since the past 20 years. This novel endovascular robotic system might reduce the occupational risks associated with manual EVAR, in addition to contributing to a higher degree of precision and control during EVAR [[29](https://link.springer.com/article/10.1007/s00330-023-09810-x#ref-CR29 "Song C, Xia S, Zhang H et al (2022) Novel endovascular interventional surgical robotic system based on biomimetic manipulation. Micromachines 13:1587")]. This study lays the foundation for the future development of efficient robotic platforms.
+
+## Abbreviations
+
+CTA:
+Computed tomography angiography
+
+EVAR:
+Endovascular aortic repair
+
+MACEs:
+Major adverse cardiac events
+
+OTW:
+Over-the-wire
+
+PCI:
+Percutaneous coronary intervention
+
+## References
+
+1.   Avishay DM, Reimon JD (2023) Abdominal aortic repair. [Updated 2022 Jul 25]. In: StatPearls [Internet]. StatPearls Publishing, Treasure Island (FL). Available from:[https://www.ncbi.nlm.nih.gov/books/NBK554573/](https://www.ncbi.nlm.nih.gov/books/NBK554573/). Accessed 11 Apr 2023
+
+2.   Lederle FA, Kyriakides TC, Stroupe KT et al (2019) Open versus endovascular repair of abdominal aortic aneurysm. New Engl J Med 380:2126–2135
+
+[Article](https://doi.org/10.1056%2FNEJMoa1715955)[PubMed](http://www.ncbi.nlm.nih.gov/entrez/query.fcgi?cmd=Retrieve&db=PubMed&dopt=Abstract&list_uids=31141634)[Google Scholar](http://scholar.google.com/scholar_lookup?&title=Open%20versus%20endovascular%20repair%20of%20abdominal%20aortic%20aneurysm&journal=New%20Engl%20J%20Med&doi=10.1056%2FNEJMoa1715955&volume=380&pages=2126-2135&publication_year=2019&author=Lederle%2CFA&author=Kyriakides%2CTC&author=Stroupe%2CKT)
+
+3.   Resch TA, Tornqvist P, Sonesson B, Dias NV (2016) Techniques to reduce radiation for patients and operators during aortic endografting. J Cardiovasc Surg 57:178–184
+
+[Google Scholar](http://scholar.google.com/scholar_lookup?&title=Techniques%20to%20reduce%20radiation%20for%20patients%20and%20operators%20during%20aortic%20endografting&journal=J%20Cardiovasc%20Surg&volume=57&pages=178-184&publication_year=2016&author=Resch%2CTA&author=Tornqvist%2CP&author=Sonesson%2CB&author=Dias%2CNV)
+
+4.   Swerdlow NJ, Wu WW, Schermerhorn ML (2019) Open and endovascular management of aortic aneurysms. Circ Res 124:647–661
+
+[Article](https://doi.org/10.1161%2FCIRCRESAHA.118.313186)[CAS](https://link.springer.com/articles/cas-redirect/1:CAS:528:DC%2BC1MXjtVWis7Y%3D)[PubMed](http://www.ncbi.nlm.nih.gov/entrez/query.fcgi?cmd=Retrieve&db=PubMed&dopt=Abstract&list_uids=30763206)[Google Scholar](http://scholar.google.com/scholar_lookup?&title=Open%20and%20endovascular%20management%20of%20aortic%20aneurysms&journal=Circ%20Res&doi=10.1161%2FCIRCRESAHA.118.313186&volume=124&pages=647-661&publication_year=2019&author=Swerdlow%2CNJ&author=Wu%2CWW&author=Schermerhorn%2CML)
+
+5.   Monastiriotis S, Comito M, Labropoulos N (2015) Radiation exposure in endovascular repair of abdominal and thoracic aortic aneurysms. J Vasc Surg 62:753–761
+
+[Article](https://doi.org/10.1016%2Fj.jvs.2015.05.033)[PubMed](http://www.ncbi.nlm.nih.gov/entrez/query.fcgi?cmd=Retrieve&db=PubMed&dopt=Abstract&list_uids=26169014)[Google Scholar](http://scholar.google.com/scholar_lookup?&title=Radiation%20exposure%20in%20endovascular%20repair%20of%20abdominal%20and%20thoracic%20aortic%20aneurysms&journal=J%20Vasc%20Surg&doi=10.1016%2Fj.jvs.2015.05.033&volume=62&pages=753-761&publication_year=2015&author=Monastiriotis%2CS&author=Comito%2CM&author=Labropoulos%2CN)
+
+6.   Stahl CM, Meisinger QC, Andre MP, Kinney TB, Newton IG (2016) Radiation risk to the fluoroscopy operator and staff. AJR Am J Roentgenol 207:737–744
+
+[Article](https://doi.org/10.2214%2FAJR.16.16555)[PubMed](http://www.ncbi.nlm.nih.gov/entrez/query.fcgi?cmd=Retrieve&db=PubMed&dopt=Abstract&list_uids=28829623)[Google Scholar](http://scholar.google.com/scholar_lookup?&title=Radiation%20risk%20to%20the%20fluoroscopy%20operator%20and%20staff&journal=AJR%20Am%20J%20Roentgenol&doi=10.2214%2FAJR.16.16555&volume=207&pages=737-744&publication_year=2016&author=Stahl%2CCM&author=Meisinger%2CQC&author=Andre%2CMP&author=Kinney%2CTB&author=Newton%2CIG)
+
+7.   Ragosta M, Singh KP (2018) Robotic-assisted percutaneous coronary intervention: rationale, implementation, case selection and limitations of current technology. J Clin Med 7:23
+
+[Article](https://doi.org/10.3390%2Fjcm7020023)[PubMed](http://www.ncbi.nlm.nih.gov/entrez/query.fcgi?cmd=Retrieve&db=PubMed&dopt=Abstract&list_uids=29385777)[PubMed Central](http://www.ncbi.nlm.nih.gov/pmc/articles/PMC5852439)[Google Scholar](http://scholar.google.com/scholar_lookup?&title=Robotic-assisted%20percutaneous%20coronary%20intervention%3A%20rationale%2C%20implementation%2C%20case%20selection%20and%20limitations%20of%20current%20technology&journal=J%20Clin%20Med&doi=10.3390%2Fjcm7020023&volume=7&publication_year=2018&author=Ragosta%2CM&author=Singh%2CKP)
+
+8.   Andreassi MG, Piccaluga E, Guagliumi G, Del Greco M, Gaita F, Picano E (2016) Occupational health risks in cardiac catheterization laboratory workers. Circ Cardiovasc Interv 9:e003273
+
+[Article](https://doi.org/10.1161%2FCIRCINTERVENTIONS.115.003273)[PubMed](http://www.ncbi.nlm.nih.gov/entrez/query.fcgi?cmd=Retrieve&db=PubMed&dopt=Abstract&list_uids=27072525)[Google Scholar](http://scholar.google.com/scholar_lookup?&title=Occupational%20health%20risks%20in%20cardiac%20catheterization%20laboratory%20workers&journal=Circ%20Cardiovasc%20Interv&doi=10.1161%2FCIRCINTERVENTIONS.115.003273&volume=9&publication_year=2016&author=Andreassi%2CMG&author=Piccaluga%2CE&author=Guagliumi%2CG&author=Greco%2CM&author=Gaita%2CF&author=Picano%2CE)
+
+9.   Mendes Pereira V, Cancelliere NM, Nicholson P et al (2020) First-in-human, robotic-assisted neuroendovascular intervention. J Neurointerv Surg 12:338–340
+
+[Article](https://doi.org/10.1136%2Fneurintsurg-2019-015671.rep)[PubMed](http://www.ncbi.nlm.nih.gov/entrez/query.fcgi?cmd=Retrieve&db=PubMed&dopt=Abstract&list_uids=32132138)[PubMed Central](http://www.ncbi.nlm.nih.gov/pmc/articles/PMC7146920)[Google Scholar](http://scholar.google.com/scholar_lookup?&title=First-in-human%2C%20robotic-assisted%20neuroendovascular%20intervention&journal=J%20Neurointerv%20Surg&doi=10.1136%2Fneurintsurg-2019-015671.rep&volume=12&pages=338-340&publication_year=2020&author=Mendes%20Pereira%2CV&author=Cancelliere%2CNM&author=Nicholson%2CP)
+
+10.   Mahmud E, Schmid F, Kalmar P et al (2016) Feasibility and safety of robotic peripheral vascular interventions: results of the RAPID trial. JACC Cardiovasc Interv 9:2058–2064
+
+[Article](https://doi.org/10.1016%2Fj.jcin.2016.07.002)[PubMed](http://www.ncbi.nlm.nih.gov/entrez/query.fcgi?cmd=Retrieve&db=PubMed&dopt=Abstract&list_uids=27639904)[Google Scholar](http://scholar.google.com/scholar_lookup?&title=Feasibility%20and%20safety%20of%20robotic%20peripheral%20vascular%20interventions%3A%20results%20of%20the%20RAPID%20trial&journal=JACC%20Cardiovasc%20Interv&doi=10.1016%2Fj.jcin.2016.07.002&volume=9&pages=2058-2064&publication_year=2016&author=Mahmud%2CE&author=Schmid%2CF&author=Kalmar%2CP)
+
+11.   Riga CV, Bicknell CD, Rolls A, Cheshire NJ, Hamady MS (2013) Robot-assisted fenestrated endovascular aneurysm repair (FEVAR) using the Magellan system. J Vasc Interv Radiol 24:191–196
+
+[Article](https://doi.org/10.1016%2Fj.jvir.2012.10.006)[PubMed](http://www.ncbi.nlm.nih.gov/entrez/query.fcgi?cmd=Retrieve&db=PubMed&dopt=Abstract&list_uids=23369555)[Google Scholar](http://scholar.google.com/scholar_lookup?&title=Robot-assisted%20fenestrated%20endovascular%20aneurysm%20repair%20%28FEVAR%29%20using%20the%20Magellan%20system&journal=J%20Vasc%20Interv%20Radiol&doi=10.1016%2Fj.jvir.2012.10.006&volume=24&pages=191-196&publication_year=2013&author=Riga%2CCV&author=Bicknell%2CCD&author=Rolls%2CA&author=Cheshire%2CNJ&author=Hamady%2CMS)
+
+12.   Wang K, Chen B, Lu Q et al (2018) Design and performance evaluation of real-time endovascular interventional surgical robotic system with high accuracy. Int J Med Robot 14:e1915
+
+[Article](https://doi.org/10.1002%2Frcs.1915)[PubMed](http://www.ncbi.nlm.nih.gov/entrez/query.fcgi?cmd=Retrieve&db=PubMed&dopt=Abstract&list_uids=29761842)[Google Scholar](http://scholar.google.com/scholar_lookup?&title=Design%20and%20performance%20evaluation%20of%20real-time%20endovascular%20interventional%20surgical%20robotic%20system%20with%20high%20accuracy&journal=Int%20J%20Med%20Robot&doi=10.1002%2Frcs.1915&volume=14&publication_year=2018&author=Wang%2CK&author=Chen%2CB&author=Lu%2CQ)
+
+13.   Lu Q, Shen Y, Xia S, Chen B, Wang K (2020) A novel universal endovascular robot for peripheral arterial stent-assisted angioplasty: initial experimental results. Vasc Endovascular Surg 54:598–604
+
+[Article](https://doi.org/10.1177%2F1538574420940832)[PubMed](http://www.ncbi.nlm.nih.gov/entrez/query.fcgi?cmd=Retrieve&db=PubMed&dopt=Abstract&list_uids=32662355)[Google Scholar](http://scholar.google.com/scholar_lookup?&title=A%20novel%20universal%20endovascular%20robot%20for%20peripheral%20arterial%20stent-assisted%20angioplasty%3A%20initial%20experimental%20results&journal=Vasc%20Endovascular%20Surg&doi=10.1177%2F1538574420940832&volume=54&pages=598-604&publication_year=2020&author=Lu%2CQ&author=Shen%2CY&author=Xia%2CS&author=Chen%2CB&author=Wang%2CK)
+
+14.   Wanhainen A, Verzini F, Van Herzeele I et al (2019) Editor’s choice - European Society for Vascular Surgery (ESVS) 2019 clinical practice guidelines on the management of abdominal aorto-iliac artery aneurysms. Eur J Vasc Endovasc Surg 57:8–93
+
+[Article](https://doi.org/10.1016%2Fj.ejvs.2018.09.020)[PubMed](http://www.ncbi.nlm.nih.gov/entrez/query.fcgi?cmd=Retrieve&db=PubMed&dopt=Abstract&list_uids=30528142)[Google Scholar](http://scholar.google.com/scholar_lookup?&title=Editor%E2%80%99s%20choice%20-%20European%20Society%20for%20Vascular%20Surgery%20%28ESVS%29%202019%20clinical%20practice%20guidelines%20on%20the%20management%20of%20abdominal%20aorto-iliac%20artery%20aneurysms&journal=Eur%20J%20Vasc%20Endovasc%20Surg&doi=10.1016%2Fj.ejvs.2018.09.020&volume=57&pages=8-93&publication_year=2019&author=Wanhainen%2CA&author=Verzini%2CF&author=Herzeele%2CI)
+
+15.   Chaikof EL, Dalman RL, Eskandari MK et al (2018) The Society for Vascular Surgery practice guidelines on the care of patients with an abdominal aortic aneurysm. J Vasc Surg 67:2-77.e72
+
+[Article](https://doi.org/10.1016%2Fj.jvs.2017.10.044)[PubMed](http://www.ncbi.nlm.nih.gov/entrez/query.fcgi?cmd=Retrieve&db=PubMed&dopt=Abstract&list_uids=29268916)[Google Scholar](http://scholar.google.com/scholar_lookup?&title=The%20Society%20for%20Vascular%20Surgery%20practice%20guidelines%20on%20the%20care%20of%20patients%20with%20an%20abdominal%20aortic%20aneurysm&journal=J%20Vasc%20Surg&doi=10.1016%2Fj.jvs.2017.10.044&volume=67&pages=2-77.e72&publication_year=2018&author=Chaikof%2CEL&author=Dalman%2CRL&author=Eskandari%2CMK)
+
+16.   Ouriel K (2009) The PIVOTAL study: a randomized comparison of endovascular repair versus surveillance in patients with smaller abdominal aortic aneurysms. J Vasc Surg 49:266–269
+
+[Article](https://doi.org/10.1016%2Fj.jvs.2008.11.048)[PubMed](http://www.ncbi.nlm.nih.gov/entrez/query.fcgi?cmd=Retrieve&db=PubMed&dopt=Abstract&list_uids=19174266)[Google Scholar](http://scholar.google.com/scholar_lookup?&title=The%20PIVOTAL%20study%3A%20a%20randomized%20comparison%20of%20endovascular%20repair%20versus%20surveillance%20in%20patients%20with%20smaller%20abdominal%20aortic%20aneurysms&journal=J%20Vasc%20Surg&doi=10.1016%2Fj.jvs.2008.11.048&volume=49&pages=266-269&publication_year=2009&author=Ouriel%2CK)
+
+17.   Agha RA, Sohrabi C, Mathew G et al (2020) The PROCESS 2020 guideline: updating consensus Preferred Reporting Of CasESeries in Surgery (PROCESS) guidelines. Int J Surg 84:231–235
+
+[Article](https://doi.org/10.1016%2Fj.ijsu.2020.11.005)[PubMed](http://www.ncbi.nlm.nih.gov/entrez/query.fcgi?cmd=Retrieve&db=PubMed&dopt=Abstract&list_uids=33189880)[Google Scholar](http://scholar.google.com/scholar_lookup?&title=The%20PROCESS%202020%20guideline%3A%20updating%20consensus%20Preferred%20Reporting%20Of%20CasESeries%20in%20Surgery%20%28PROCESS%29%20guidelines&journal=Int%20J%20Surg&doi=10.1016%2Fj.ijsu.2020.11.005&volume=84&pages=231-235&publication_year=2020&author=Agha%2CRA&author=Sohrabi%2CC&author=Mathew%2CG)
+
+18.   Stather PW, Wild JB, Sayers RD, Bown MJ, Choke E (2013) Endovascular aortic aneurysm repair in patients with hostile neck anatomy. J Endovasc Ther 20:623–637
+
+[Article](https://doi.org/10.1583%2F13-4320MR.1)[PubMed](http://www.ncbi.nlm.nih.gov/entrez/query.fcgi?cmd=Retrieve&db=PubMed&dopt=Abstract&list_uids=24093314)[Google Scholar](http://scholar.google.com/scholar_lookup?&title=Endovascular%20aortic%20aneurysm%20repair%20in%20patients%20with%20hostile%20neck%20anatomy&journal=J%20Endovasc%20Ther&doi=10.1583%2F13-4320MR.1&volume=20&pages=623-637&publication_year=2013&author=Stather%2CPW&author=Wild%2CJB&author=Sayers%2CRD&author=Bown%2CMJ&author=Choke%2CE)
+
+19.   Prinssen M, Verhoeven EL, Buth J et al (2004) A randomized trial comparing conventional and endovascular repair of abdominal aortic aneurysms. N Engl J Med 351:1607–1618
+
+[Article](https://doi.org/10.1056%2FNEJMoa042002)[CAS](https://link.springer.com/articles/cas-redirect/1:CAS:528:DC%2BD2cXos1Whsb0%3D)[PubMed](http://www.ncbi.nlm.nih.gov/entrez/query.fcgi?cmd=Retrieve&db=PubMed&dopt=Abstract&list_uids=15483279)[Google Scholar](http://scholar.google.com/scholar_lookup?&title=A%20randomized%20trial%20comparing%20conventional%20and%20endovascular%20repair%20of%20abdominal%20aortic%20aneurysms&journal=N%20Engl%20J%20Med&doi=10.1056%2FNEJMoa042002&volume=351&pages=1607-1618&publication_year=2004&author=Prinssen%2CM&author=Verhoeven%2CEL&author=Buth%2CJ)
+
+20.   Wang SW, Lin Y, Yao C, Lin PL, Wang SM (2012) Comparison of clinical curative effect between open surgery and endovascular repair of abdominal aortic aneurysm in China. Chin Med J (Engl) 125:1824–1831
+
+[PubMed](http://www.ncbi.nlm.nih.gov/entrez/query.fcgi?cmd=Retrieve&db=PubMed&dopt=Abstract&list_uids=22800907)[Google Scholar](http://scholar.google.com/scholar_lookup?&title=Comparison%20of%20clinical%20curative%20effect%20between%20open%20surgery%20and%20endovascular%20repair%20of%20abdominal%20aortic%20aneurysm%20in%20China&journal=Chin%20Med%20J%20%28Engl%29&volume=125&pages=1824-1831&publication_year=2012&author=Wang%2CSW&author=Lin%2CY&author=Yao%2CC&author=Lin%2CPL&author=Wang%2CSM)
+
+21.   Legeza P, Britz GW, Loh T, Lumsden A (2020) Current utilization and future directions of robotic-assisted endovascular surgery. Expert Rev Med Devices 17:919–927
+
+[Article](https://doi.org/10.1080%2F17434440.2020.1814742)[CAS](https://link.springer.com/articles/cas-redirect/1:CAS:528:DC%2BB3cXhslWgu77J)[PubMed](http://www.ncbi.nlm.nih.gov/entrez/query.fcgi?cmd=Retrieve&db=PubMed&dopt=Abstract&list_uids=32835546)[Google Scholar](http://scholar.google.com/scholar_lookup?&title=Current%20utilization%20and%20future%20directions%20of%20robotic-assisted%20endovascular%20surgery&journal=Expert%20Rev%20Med%20Devices&doi=10.1080%2F17434440.2020.1814742&volume=17&pages=919-927&publication_year=2020&author=Legeza%2CP&author=Britz%2CGW&author=Loh%2CT&author=Lumsden%2CA)
+
+22.   Saliba W, Reddy VY, Wazni O et al (2008) Atrial fibrillation ablation using a robotic catheter remote control system: initial human experience and long-term follow-up results. J Am Coll Cardiol 51:2407–2411
+
+[Article](https://doi.org/10.1016%2Fj.jacc.2008.03.027)[PubMed](http://www.ncbi.nlm.nih.gov/entrez/query.fcgi?cmd=Retrieve&db=PubMed&dopt=Abstract&list_uids=18565397)[Google Scholar](http://scholar.google.com/scholar_lookup?&title=Atrial%20fibrillation%20ablation%20using%20a%20robotic%20catheter%20remote%20control%20system%3A%20initial%20human%20experience%20and%20long-term%20follow-up%20results&journal=J%20Am%20Coll%20Cardiol&doi=10.1016%2Fj.jacc.2008.03.027&volume=51&pages=2407-2411&publication_year=2008&author=Saliba%2CW&author=Reddy%2CVY&author=Wazni%2CO)
+
+23.   Wang K, Liu J, Yan W, Lu Q, Nie S (2021) Force feedback controls of multi-gripper robotic endovascular intervention: design, prototype, and experiments. Int J Comput Assist Radiol Surg 16:179–192
+
+[Article](https://link.springer.com/doi/10.1007/s11548-020-02278-w)[CAS](https://link.springer.com/articles/cas-redirect/1:CAS:528:DC%2BB38Xitl2jt7vE)[PubMed](http://www.ncbi.nlm.nih.gov/entrez/query.fcgi?cmd=Retrieve&db=PubMed&dopt=Abstract&list_uids=33089435)[Google Scholar](http://scholar.google.com/scholar_lookup?&title=Force%20feedback%20controls%20of%20multi-gripper%20robotic%20endovascular%20intervention%3A%20design%2C%20prototype%2C%20and%20experiments&journal=Int%20J%20Comput%20Assist%20Radiol%20Surg&doi=10.1007%2Fs11548-020-02278-w&volume=16&pages=179-192&publication_year=2021&author=Wang%2CK&author=Liu%2CJ&author=Yan%2CW&author=Lu%2CQ&author=Nie%2CS)
+
+24.   Weisz G, Metzger DC, Caputo RP et al (2013) Safety and feasibility of robotic percutaneous coronary intervention: PRECISE (Percutaneous Robotically-Enhanced Coronary Intervention) Study. J Am Coll Cardiol 61:1596–1600
+
+[Article](https://doi.org/10.1016%2Fj.jacc.2012.12.045)[PubMed](http://www.ncbi.nlm.nih.gov/entrez/query.fcgi?cmd=Retrieve&db=PubMed&dopt=Abstract&list_uids=23500318)[Google Scholar](http://scholar.google.com/scholar_lookup?&title=Safety%20and%20feasibility%20of%20robotic%20percutaneous%20coronary%20intervention%3A%20PRECISE%20%28Percutaneous%20Robotically-Enhanced%20Coronary%20Intervention%29%20Study&journal=J%20Am%20Coll%20Cardiol&doi=10.1016%2Fj.jacc.2012.12.045&volume=61&pages=1596-1600&publication_year=2013&author=Weisz%2CG&author=Metzger%2CDC&author=Caputo%2CRP)
+
+25.   Bao X, Guo S, Xiao N et al (2018) Operation evaluation in-human of a novel remote-controlled vascular interventional robot. Biomed Microdevices 20:34
+
+[Article](https://link.springer.com/doi/10.1007/s10544-018-0277-5)[PubMed](http://www.ncbi.nlm.nih.gov/entrez/query.fcgi?cmd=Retrieve&db=PubMed&dopt=Abstract&list_uids=29627886)[Google Scholar](http://scholar.google.com/scholar_lookup?&title=Operation%20evaluation%20in-human%20of%20a%20novel%20remote-controlled%20vascular%20interventional%20robot&journal=Biomed%20Microdevices&doi=10.1007%2Fs10544-018-0277-5&volume=20&publication_year=2018&author=Bao%2CX&author=Guo%2CS&author=Xiao%2CN)
+
+26.   Algra AM, Lindgren A, Vergouwen MDI et al (2019) Procedural clinical complications, case-fatality risks, and risk factors in endovascular and neurosurgical treatment of unruptured intracranial aneurysms: a systematic review and meta-analysis. JAMA Neurol 76:282–293
+
+[Article](https://doi.org/10.1001%2Fjamaneurol.2018.4165)[PubMed](http://www.ncbi.nlm.nih.gov/entrez/query.fcgi?cmd=Retrieve&db=PubMed&dopt=Abstract&list_uids=30592482)[Google Scholar](http://scholar.google.com/scholar_lookup?&title=Procedural%20clinical%20complications%2C%20case-fatality%20risks%2C%20and%20risk%20factors%20in%20endovascular%20and%20neurosurgical%20treatment%20of%20unruptured%20intracranial%20aneurysms%3A%20a%20systematic%20review%20and%20meta-analysis&journal=JAMA%20Neurol&doi=10.1001%2Fjamaneurol.2018.4165&volume=76&pages=282-293&publication_year=2019&author=Algra%2CAM&author=Lindgren%2CA&author=Vergouwen%2CMDI)
+
+27.   Granada JF, Delgado JA, Uribe MP et al (2011) First-in-human evaluation of a novel robotic-assisted coronary angioplasty system. JACC Cardiovasc Interv 4:460–465
+
+[Article](https://doi.org/10.1016%2Fj.jcin.2010.12.007)[PubMed](http://www.ncbi.nlm.nih.gov/entrez/query.fcgi?cmd=Retrieve&db=PubMed&dopt=Abstract&list_uids=21511227)[Google Scholar](http://scholar.google.com/scholar_lookup?&title=First-in-human%20evaluation%20of%20a%20novel%20robotic-assisted%20coronary%20angioplasty%20system&journal=JACC%20Cardiovasc%20Interv&doi=10.1016%2Fj.jcin.2010.12.007&volume=4&pages=460-465&publication_year=2011&author=Granada%2CJF&author=Delgado%2CJA&author=Uribe%2CMP)
+
+28.   Ainsbury EA, Dalke C, Hamada N et al (2021) Radiation-induced lens opacities: epidemiological, clinical and experimental evidence, methodological issues, research gaps and strategy. Environ Int 146:106213
+
+[Article](https://doi.org/10.1016%2Fj.envint.2020.106213)[PubMed](http://www.ncbi.nlm.nih.gov/entrez/query.fcgi?cmd=Retrieve&db=PubMed&dopt=Abstract&list_uids=33276315)[Google Scholar](http://scholar.google.com/scholar_lookup?&title=Radiation-induced%20lens%20opacities%3A%20epidemiological%2C%20clinical%20and%20experimental%20evidence%2C%20methodological%20issues%2C%20research%20gaps%20and%20strategy&journal=Environ%20Int&doi=10.1016%2Fj.envint.2020.106213&volume=146&publication_year=2021&author=Ainsbury%2CEA&author=Dalke%2CC&author=Hamada%2CN)
+
+29.   Song C, Xia S, Zhang H et al (2022) Novel endovascular interventional surgical robotic system based on biomimetic manipulation. Micromachines 13:1587
+
+[Article](https://doi.org/10.3390%2Fmi13101587)[PubMed](http://www.ncbi.nlm.nih.gov/entrez/query.fcgi?cmd=Retrieve&db=PubMed&dopt=Abstract&list_uids=36295940)[PubMed Central](http://www.ncbi.nlm.nih.gov/pmc/articles/PMC9611341)[Google Scholar](http://scholar.google.com/scholar_lookup?&title=Novel%20endovascular%20interventional%20surgical%20robotic%20system%20based%20on%20biomimetic%20manipulation&journal=Micromachines&doi=10.3390%2Fmi13101587&volume=13&publication_year=2022&author=Song%2CC&author=Xia%2CS&author=Zhang%2CH)
+
+[Download references](https://citation-needed.springer.com/v2/references/10.1007/s00330-023-09810-x?format=refman&flavour=references)
+
+## Acknowledgements
+
+According to the medical device registration management of the National Medical Products Administration (NMPA), we have filed with the NMPA and obtained relevant approval documents. We also filed on the human genetic resources information backup platform of the Ministry of Science and Technology of the People’s Republic of China, with the filing number of 2021BAL0417.
+
+## Funding
+
+1. National Science and Technology Innovation 2030: “New Generation Artificial Intelligence” Major Project, Research on Key Technologies of Endovascular Interventional Surgery Robot, 2018AAA0102603.
+
+2. 2019 Medical Leading Talents Program of Shanghai Health Commission, Robot-based Precision Minimally Endovascular Treatment for Aortic Dilatation Disease, 2019LJ17.
+
+## Author information
+
+### Authors and Affiliations
+
+1.   Department of Vascular Surgery, Shanghai Changhai Hospital, Naval Medical University, Shanghai, 200433, People’s Republic of China
+
+Chao Song,Shibo Xia,Lei Zhang,Haiyan Li,Wenying Guo,Longtu Zhu&Qingsheng Lu
+
+2.   Department of Instrument Science and Engineering, Shanghai Jiao Tong University, Shanghai, 200240, People’s Republic of China
+
+Kundong Wang
+
+Authors
+
+1.   Chao Song
+2.   Shibo Xia
+3.   Lei Zhang
+4.   Kundong Wang
+5.   Haiyan Li
+6.   Wenying Guo
+7.   Longtu Zhu
+8.   Qingsheng Lu
+
+### Corresponding author
+
+Correspondence to [Qingsheng Lu](mailto:luqs@newvascular.cn).
+
+## Ethics declarations
+
+### Guarantor
+
+The scientific guarantor of this publication is Qingsheng Lu.
+
+### Conflict of interest
+
+The authors declare no competing interests.
+
+### Statistics and biometry
+
+No complex statistical methods were necessary for this paper.
+
+### Informed consent
+
+Written informed consent was obtained from all subjects (patients) in this study. There is no animal study.
+
+### Ethical approval
+
+Institutional Review Board approval was obtained. The study protocol was approved by the Ethics Committee of Changhai Hospital (CHEC2021-097).
+
+### Study subjects or cohorts overlap
+
+No study subjects or cohorts have been previously reported.
+
+### Methodology
+
+• prospective
+
+• experimental
+
+• performed at one institution
+
+## Additional information
+
+### Publisher's note
+
+Springer Nature remains neutral with regard to jurisdictional claims in published maps and institutional affiliations.
+
+Chao Song and Shibo Xia contributed equally to this work.
+
+## Supplementary information
+
+Below is the link to the electronic supplementary material.
+
+### Allow video content?
+
+To watch this video, you'll need to consent to video playback from providers like Moving Image and Vimeo. This allows us to share necessary viewing information with them and allows the use of cookies as part of playback functionality. These are not used for the purposes of analytics or advertising.
+
+Supplementary file1 (MP4 7169 KB)
+
+### Allow video content?
+
+To watch this video, you'll need to consent to video playback from providers like Moving Image and Vimeo. This allows us to share necessary viewing information with them and allows the use of cookies as part of playback functionality. These are not used for the purposes of analytics or advertising.
+
+Supplementary file2 (MP4 335 KB)
+
+### Allow video content?
+
+To watch this video, you'll need to consent to video playback from providers like Moving Image and Vimeo. This allows us to share necessary viewing information with them and allows the use of cookies as part of playback functionality. These are not used for the purposes of analytics or advertising.
+
+Supplementary file3 (MP4 7082 KB)
+
+### Allow video content?
+
+To watch this video, you'll need to consent to video playback from providers like Moving Image and Vimeo. This allows us to share necessary viewing information with them and allows the use of cookies as part of playback functionality. These are not used for the purposes of analytics or advertising.
+
+Supplementary file4 (MP4 5837 KB)
+
+## Rights and permissions
+
+**Open Access** This article is licensed under a Creative Commons Attribution 4.0 International License, which permits use, sharing, adaptation, distribution and reproduction in any medium or format, as long as you give appropriate credit to the original author(s) and the source, provide a link to the Creative Commons licence, and indicate if changes were made. The images or other third party material in this article are included in the article's Creative Commons licence, unless indicated otherwise in a credit line to the material. If material is not included in the article's Creative Commons licence and your intended use is not permitted by statutory regulation or exceeds the permitted use, you will need to obtain permission directly from the copyright holder. To view a copy of this licence, visit [http://creativecommons.org/licenses/by/4.0/](http://creativecommons.org/licenses/by/4.0/).
+
+[Reprints and permissions](https://s100.copyright.com/AppDispatchServlet?title=A%20novel%20endovascular%20robotic-assisted%20system%20for%20endovascular%20aortic%20repair%3A%20first-in-human%20evaluation%20of%20practicability%20and%20safety&author=Chao%20Song%20et%20al&contentID=10.1007%2Fs00330-023-09810-x&copyright=The%20Author%28s%29&publication=1432-1084&publicationDate=2023-06-20&publisherName=SpringerNature&orderBeanReset=true&oa=CC%20BY)
+
+## About this article
+
+[![Image 4: Check for updates. Verify currency and authenticity via CrossMark](blob:http://localhost/df43c82f6cb6dcd2a87db38f317bf9f2)](https://crossmark.crossref.org/dialog/?doi=10.1007/s00330-023-09810-x)
+
+### Cite this article
+
+Song, C., Xia, S., Zhang, L. _et al._ A novel endovascular robotic-assisted system for endovascular aortic repair: first-in-human evaluation of practicability and safety. _Eur Radiol_**33**, 7408–7418 (2023). https://doi.org/10.1007/s00330-023-09810-x
+
+[Download citation](https://citation-needed.springer.com/v2/references/10.1007/s00330-023-09810-x?format=refman&flavour=citation)
+
+*   Received: 24 November 2022
+
+*   Revised: 12 April 2023
+
+*   Accepted: 14 April 2023
+
+*   Published: 20 June 2023
+
+*   Version of record: 20 June 2023
+
+*   Issue date: November 2023
+
+*   DOI: https://doi.org/10.1007/s00330-023-09810-x
+
+### Keywords

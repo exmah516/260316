@@ -1,0 +1,36 @@
+# 双机构夹持扰动实验版
+
+本目录是独立的实验控制器，不会初始化原程序的手柄、定位臂、注射器或轴15控制。
+
+## 工程
+
+- `DualClampExperiment.sln`：C++ ADS后端。
+- `AdsControlUI/AdsControlUI.sln`：WPF可视化界面。
+- `DualClampExperiment.vcxproj`：x64 C++工程，依赖原工程中的 `ADS\x64\lib\TcAdsDll.lib` 和 `ADS\x64\TcAdsDll.dll`。
+
+## 轴和电缸
+
+- 轴1：平移，实验夹爪为电缸2。
+- 轴2：轴1侧周向角度。
+- 轴6：平移，实验夹爪为电缸4。
+- 轴7：轴6侧周向角度。
+- 电缸1、电缸3由PLC固定为最大开启值。
+
+## PLC接口
+
+`250902/250902/Untitled2` 中新增 `DualClampExperiment.TcPOU` 和 `G.dual_clamp_*` 变量。
+PLC任务周期为1 ms；实验采样数组容量为32768点，采样字段包含轴1/轴6位置、速度、加速度，四路力/扭矩原始值，电缸2/4命令和阶段事件。上位机下载时按512点分块读取，并额外生成`events.csv`。
+
+界面中的操作顺序为“执行自检”（可重复触发原程序自检）→“准备定位”→“开始实验”。自检完成后轴2、轴7已按原程序绝对定位到0度；界面不会自动准备定位或自动开始实验。准备定位参数中的轴1/轴6位置均为距左限位距离，PLC按 `左限位绝对位置 + 距左限位距离` 换算目标。夹紧/释放WORD固定沿用原程序，不在界面中重新判定。
+
+“器械”选择会写入`experiment.json`的`instrument`字段（`guidewire`或`catheter`），实时状态显示轴1/轴6的位置、速度、加速度以及轴2/轴7周向角度。
+
+## 编译
+
+```powershell
+$msbuild = 'D:\Work_software\VS2022\MSBuild\Current\Bin\MSBuild.exe'
+& $msbuild '.\dual_clamp_experiment\DualClampExperiment.vcxproj' /p:Configuration=Debug /p:Platform=x64 /m
+dotnet build '.\dual_clamp_experiment\AdsControlUI\AdsControlUI.csproj' -c Debug -p:Platform=x64
+```
+
+TwinCAT PLC工程需要在安装 TwinCAT XAE 的 Visual Studio 中打开 `250902.sln` 后执行 PLC Build；本机命令行未提供独立的 TwinCAT PLC编译器。

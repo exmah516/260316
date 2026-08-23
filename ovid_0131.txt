@@ -1,0 +1,124 @@
+Title: Long-distance Tele-robotic-assisted Percutaneous... : Cardiology Discovery
+
+URL Source: https://www.ovid.com/jnls/cd/fulltext/10.1097/cd9.0000000000000131~long-distance-tele-robotic-assisted-percutaneous-coronary
+
+Markdown Content:
+Robotic-assisted percutaneous coronary intervention (R-PCI) is an innovative way of performing percutaneous coronary intervention (PCI) whereby the operator can manipulate coronary intraluminal guidewires and catheter devices by using remotely controlled technology. Performing tele-R-PCI from a remote location via fifth generation network communication technology has never been reported in China; however, if this were possible, the technique could be used to treat many patients with coronary artery disease who would otherwise not have the opportunity of treatment. The case of a 73-year-old male patient with coronary artery disease who underwent successful tele-R-PCI at 800 km from the operators is presented. Performing long-distance tele-R-PCI in patients with coronary artery disease is feasible with predictably successful outcomes when reliable network connectivity and local cardiac catheterization facilities are present.
+
+## 1. Introduction
+
+Percutaneous coronary intervention (PCI) is one of the most effective methods to treat coronary artery disease. Traditional manual PCI (M-PCI) can markedly improve the clinical prognosis of patients with coronary artery disease. However, high radiation doses,[] skeletal muscular system injuries of interventionists because of sustained operation,[] and many other adverse issues cannot be disregarded. Simultaneously, challenges in accurately deploying devices in M-PCI frequently result in complications and adverse outcomes.[] Robotic-assisted PCI (R-PCI) is an innovative approach to PCI that allows operators to perform the procedure from a radiation-protected space. The latest trials assessing R-PCI have shown high technical achievement rates with low complication rates. Granada et al[] reported that the technical success of the robotic system was 97.9% in completing 47 of 48 planned steps. The operators rated the robotic system performances as equal to or better than manual procedures in 97.5% of the cases.[] Another clinical trial for R-PCI reported clinical procedural success in 160 of 164 (97.6%) patients.[] In addition, radiation exposure for the primary operator was 95.2% lower than the levels found at the traditional table position.[]
+
+Accessibility of hospitals with cardiac catheterization facilities and skilled interventionists is highly restricted in remote and underdeveloped areas. Consequently, only a few patients receive appropriate treatment in these locations. Therefore, there is a need to increase patient access to revascularization procedures such as PCI. With the combination of robotic and fifth generation (5G) network communication technology, tele-R-PCI has become a reality[] that can save and improve medical resources and offer high-quality medical services to underdeveloped or stricken areas, such as rural locations and battlefields. Furthermore, tele-R-PCI can decrease the patient waiting time for interventional therapy and thus prevent diseases from deteriorating.
+
+This study was approved by the institutional ethics committee board of Hospital of 82nd Group Army, People’s Liberation Army (2023005, March 23, 2023). Written informed consent was obtained from the patient for publication of this case report and any accompanying images.
+
+## 2. Case presentation
+
+A 73-year-old man with a 5-year history of unstable angina was admitted to the Department of Cardiology in the Hospital of 82nd Group Army, People’s Liberation Army, Baoding city, Hebei province on March 27, 2023 and his risk factors included hypertension and smoking. The patient’s vital signs on admission were blood pressure 144/77 mmHg, heart rate 77 beats/min, temperature 36.3°C, and respiratory rate 20 breaths/min. The physical examination was unremarkable; there were no heart murmurs for cardiac auscultation, heart rhythm was normal sinus, lung auscultation was normal, there was no lower limb edema, and peripheral pulses were palpable.
+
+An electrocardiogram showed T wave inversion at I, aVL, V 4, V 5, and V 6 leads. The only abnormal laboratory indicator with clinical significance at the time of presentation was C-reactive protein of 37.95 mg/L (normal range: 0–10 mg/L). Transthoracic ultrasound revealed enlargement of the left atrium (39 mm), thickening of interventricular septum basic (12 mm), and reduced left ventricular diastolic function. Aortic valve calcification with mild regurgitation and mild mitral regurgitation were also shown in transthoracic ultrasound. The patient was diagnosed as having unstable angina and stage 3 hypertension with an extremely high-risk group and received dual anti-platelet drug and statin therapy before accepting the tele-R-PCI.
+
+On April 2, 2023, the patient underwent the tele-R-PCI procedure, which was performed using a Robotic Control Workstation consisting of both local (Baoding) and remote (Shenyang) portions. The local workstation was developed by the ALLVAS™ vascular robotic system (Aopeng Medical Technology Co., Ltd, Shanghai, China); it consisted of a bedside unit and a lead-shielded Robotic Control Workstation prepared by the in-laboratory team at Baoding [[Figure 1](https://www.ovid.com/jnls/cd/fulltext/10.1097/cd9.0000000000000131~long-distance-tele-robotic-assisted-percutaneous-coronary#F1)]. A chewable dose of 300 mg of aspirin and 300 mg of clopidogrel was administered prior to PCI in this patient. Vascular access was obtained via the radial artery then a 6 French introducer sheath was introduced by the in-laboratory interventional cardiologist in Baoding city. All subsequent catheter manipulations were performed on the local workstation controlled by the remote workstation.
+
+The coronary angiography revealed that significant stenosis existed in the distal left main coronary artery (70% stenosis) and the ostial and middle of left anterior descending artery (80% stenosis), and moderate stenosis existed in the distal left circumflex coronary artery (60% stenosis) [[Figure 2A](https://www.ovid.com/jnls/cd/fulltext/10.1097/cd9.0000000000000131~long-distance-tele-robotic-assisted-percutaneous-coronary#F2) and [2B](https://www.ovid.com/jnls/cd/fulltext/10.1097/cd9.0000000000000131~long-distance-tele-robotic-assisted-percutaneous-coronary#F2)]. A sterile guide catheter, intravascular ultrasound, guidewire, and balloon catheter were loaded in the ALLVAS™ vascular robotic system. Upon the remote operator’s direction, the scrub interventionists positioned the imaging unit, injected contrast, and inflated or deflated the angioplasty balloon where necessary. The in-laboratory cardiologist advanced the guide catheter into the coronary ostium through the introducer sheath. Subsequently, from the Remote Robotic Workstation, the remote operator advanced the guidewire and the balloon catheter over it, and then deployed a stent after successful pre-dilation of the stenosis at this point. Pre-dilation was performed with a 2.5 mm × 12 mm balloon to the lesion at middle of left anterior descending artery, followed by placement of a 3.0 mm × 18 mm drug-eluting stent (MicroPort, Shanghai, China) expanded at 10 atm pressure. Subsequent 3.5 mm × 15 mm drug-eluting stent (SINOMED, Shanghai, China) in the distal left main coronary artery and ostial of left anterior descending artery was expanded at 10 and 16 atm pressure, respectively [[Figure 2C](https://www.ovid.com/jnls/cd/fulltext/10.1097/cd9.0000000000000131~long-distance-tele-robotic-assisted-percutaneous-coronary#F2) and [2D](https://www.ovid.com/jnls/cd/fulltext/10.1097/cd9.0000000000000131~long-distance-tele-robotic-assisted-percutaneous-coronary#F2)]. Post-dilation was performed with a 4.0 mm× 12 mm balloon to the lesion at distal left main coronary artery and ostial of left anterior descending artery, which was expanded at 16 to 18 atm pressure. Thrombolysis In Myocardial Infarction flow grades were achieved before and after the R-PCI procedure and there was no residual stenosis in the 2 stented segments [[Figure 2E](https://www.ovid.com/jnls/cd/fulltext/10.1097/cd9.0000000000000131~long-distance-tele-robotic-assisted-percutaneous-coronary#F2) and [2F](https://www.ovid.com/jnls/cd/fulltext/10.1097/cd9.0000000000000131~long-distance-tele-robotic-assisted-percutaneous-coronary#F2)]. The entire process of stent implantation was guided by intravascular ultrasound [[Figure 3](https://www.ovid.com/jnls/cd/fulltext/10.1097/cd9.0000000000000131~long-distance-tele-robotic-assisted-percutaneous-coronary#F3)]. The left circumflex coronary artery lesion was not treated in this operation. The post-procedure medication regimen comprised 100 mg of aspirin once a day, 75 mg of clopidogrel once a day, 12.5 mg of metoprolol tartrate twice a day, 10 mg of olmesartan axetil amlodipine tablets once a day, 20 mg of rosuvastatin once a day, and 5000 U of subcutaneous low-molecular-weight heparin calcium twice a day. The patient was discharged 5 d post-procedure. There were no adverse events during hospitalization. At the 1-month post-procedure follow-up, the patient was asymptomatic and was continued on the above treatments except heparin.
+
+[![Image 1](https://www.ovid.com/image-api/imgsrv/article/i/thumb/wkmrid/JOURNAL%252Fcardis%252F04.03%252F02211144-202409000-00008%252Ffigure2%252Fv%252F2025-08-17T162245Z%252Fr%252Fimage-jpeg/width/710.png) Open multimedia modal](https://www.ovid.com/image-api/imgsrv/article/i/thumb/wkmrid/JOURNAL%252Fcardis%252F04.03%252F02211144-202409000-00008%252Ffigure2%252Fv%252F2025-08-17T162245Z%252Fr%252Fimage-jpeg/width/1200.webp)
+
+## [Figure 2: Open multimedia modal](https://www.ovid.com/image-api/imgsrv/article/i/thumb/wkmrid/JOURNAL%252Fcardis%252F04.03%252F02211144-202409000-00008%252Ffigure2%252Fv%252F2025-08-17T162245Z%252Fr%252Fimage-jpeg/width/1200.webp)
+Coronary intervention treatment process. (A and B) Multi-position and multi-angle real-time imaging of the robot-assisted system performing pre-percutaneous coronary angiography. (C and D) Image of the robot-assisted system performing coronary stenting in the middle of the left anterior descending artery, and in the distal left main coronary artery and ostial of left anterior descending artery, respectively. (E and F) Image of the robot-assisted system completing the stent implantation and angiography.
+
+## 3. Discussion
+
+This successful case of long-distance tele-robotic intervention represents the first-in-patient experience in China of R-PCI, with balloon angioplasty and stent deployment interventions conducted from a remote location 800 km from the patient. This procedure was made possible by interfacing the advanced robotic vascular technology of the ALLVAS™ vascular robotic system with reliable 5G networking equipment (LAN/MAN/WAN connectivity) and an advanced audio-visual telecommunications system between the remote and local Robotic Control Workstations. R-PCI was recently shown to work in sedated pigs. The animal experiments were completed on remote PCI with the ALLVAS™ vascular robotic system spanning 2,000 km on February 12, 2023.
+
+The remote R-PCI procedure in this case was successful in all aspects, including advance of guidewire and balloon catheter, pre-dilation of the stenosis, deployment of the stents, and post-dilation of the stents. In this R-PCI procedure, a delay of 30 ms was recorded by the network, but this time lag is most likely imperceptible to the operator. The patient did not have any symptoms during the procedure. Tele-R-PCI was shown to be safe and effective for the treatment of complex coronary lesions in this case. However, the effectiveness of R-PCI in patients with complex and high-risk lesions still needs to be elucidated.[] Several reports have described robotic-assisted treatment of complex high-risk lesions, including the transradial approach to treat complex lesions in the left anterior descending coronary artery with bifurcation balloon angioplasty reconstruction, in the ostium of the first diagonal branch, and in the right coronary artery.[] Mahmud et al[] searched a registry database and identified 6 successful cases of R-PCI for unprotected left main coronary artery stenosis, with or without percutaneous hemodynamic support. Another group reported 4 successful cases of R-PCI for treating multi-lesion single coronary artery disease, multi-vessel cardiac allograft vasculopathy, saphenous vein graft disease, and ST-elevation myocardial infarction due to proximal right coronary artery occlusion.[]
+
+The results of this case represent a milestone in the development of remote R-PCI in that they open myriad possibilities for remote interventional treatment of coronary artery disease in any underdeveloped or rural area that does not have ready access to an experienced interventional cardiologist or a local hospital that specializes in cardiovascular intervention. Meanwhile, tele-R-PCI also could be an alternative treatment for primary PCI in acute coronary syndrome, where delay of treatment can critically impact patient outcomes. Many patients with acute coronary syndrome in underdeveloped or rural areas worldwide cannot undergo timely interventional treatment.[] Reports from such areas indicate wide gaps in the availability of acute interventional cardiovascular therapeutic facilities.[,] Current robotic technology combined with improvements in network connectivity and operator expertise in R-PCI procedures can be employed as a front-line service in regions where such expertise is not available. Effective utilization of remote tele-R-PCI could hypothetically provide a major part of the solution to these deficits after the feasibility and safety of the approach are established.
+
+R-PCI has some potential advantages over traditional M-PCI performed by surgeons. Robots can have increased precision and reduced tremor, allowing for more accurate stent and device placement. However, traditional manual techniques also have some advantages, including that manually manipulating wires and balloons gives direct haptic feedback to the surgeon’s hands. It is worth noting that the operating procedure is complicated and needs perfect coordination of the remote operator, the in-laboratory cardiologists, and other related persons who perform the remote R-PCI. There is also a learning curve with robotics, whereas experienced surgeons are very adept at manual techniques. Overall, both approaches—robotic and manual—for coronary intervention have pros and cons. Robotics offers potential improvements in precision, ergonomics, and minimally invasiveness, but traditional techniques leverage a surgeon’s tactile experience and remain effective. The ideal approach depends on the specific patient and the cardiologists and resources available. Both methods are likely to continue advancing and have roles in the future of interventional cardiology.
+
+In conclusion, performing long-distance tele-R-PCI in patients with coronary artery disease is feasible with predictably successful outcomes when reliable network connectivity and local cardiac catheterization facilities are present.
+
+## Funding
+
+This work was supported by the National Key Project of Research and Development Plan during the fourteenth Five-year Plan Period (2022YFC2503400).
+
+## Author contributions
+
+Xuebin Cao contributed substantially to data acquisition. Kai Xu and Yaling Han drafted and revised the manuscript. Haiwei Liu, Shenghua Zhou, Zhaochuan Liu, Xianghe Wang, and Quanmin Jing were responsible for intervention therapy. Yaling Han supervised the manuscript. All authors contributed to the article and approved the submitted version.
+
+## Conflicts of interest
+
+None.
+
+Editor note: Yaling Han is the Editor-in-chief of _Cardiology Discovery_. The article was subject to the journal’s standard procedures, with peer review handled independently of this editor and his research groups.
+
+## Data availability statement
+
+Data sharing not applicable to this article as no datasets were generated or analyzed during the current study.
+
+## References
+
+*   ## [1]
+
+Klein LW, Tra Y, Garratt KN, et al. Occupational health hazards of interventional cardiologists in the current decade: results of the 2014 SCAI membership survey. Catheter Cardiovasc Interv. 2015;86(5):913–924. doi:10.1002/ccd.25927.
+*   ## [2]
+
+Goldstein JA, Balter S, Cowley M, et al. Occupational hazards of interventional cardiologists: prevalence of orthopedic health problems in contemporary practice. Catheter Cardiovasc Interv. 2004;63(4):407–411. doi:10.1002/ccd.20201.
+*   ## [3]
+
+Roguin A. Brain tumours among interventional cardiologists: a call for alarm? Eur Heart J. 2012;33(15):1850–1851.
+*   ## [4]
+
+Granada JF, Delgado JA, Uribe MP, et al. First-in-human evaluation of a novel robotic-assisted coronary angioplasty system. JACC Cardiovasc Interv. 2011;4(4):460–465. doi:10.1016/j.jcin.2010.12.007.
+*   ## [5]
+
+Weisz G, Metzger DC, Caputo RP, et al. Safety and feasibility of robotic percutaneous coronary intervention: PRECISE (Percutaneous Robotically-Enhanced Coronary Intervention) Study. J Am Coll Cardiol. 2013;61(15):1596–1600. doi:10.1016/j.jacc.2012.12.045.
+*   ## [6]
+
+Patel TM, Shah SC, Pancholy SB. Long distance tele-robotic-assisted percutaneous coronary intervention: a report of first-in-human experience. EClinicalMedicine. 2019;14:53–58. doi:10.1016/j.eclinm.2019.07.017.
+*   ## [7]
+
+Hasan F, Bonatti J. Robotically assisted percutaneous coronary intervention: benefits to the patient and the cardiologist. Expert Rev Cardiovasc Ther. 2015;13(11):1165–1168. doi:10.1586/14779072.2015.1091725.
+*   ## [8]
+
+Anuwatworn A, Ali Kahn M, Stys T, et al. Robotic-assisted percutaneous coronary intervention through transradial approach: experience in 4 patients with complex lesions. Tex Heart Inst J. 2020;47(2):144–148. doi:10.14503/THIJ-17-6350.
+*   ## [9]
+
+Mahmud E, Dominguez A, Bahadorani J. First-in-human robotic percutaneous coronary intervention for unprotected left main stenosis. Catheter Cardiovasc Interv. 2016;88(4):565–570. doi:10.1002/ccd.26550.
+*   ## [10]
+
+Kapur V, Smilowitz NR, Weisz G. Complex robotic-enhanced percutaneous coronary intervention. Catheter Cardiovasc Interv. 2014;83(6):915–921. doi:10.1002/ccd.25271.
+*   ## [11]
+
+Mohanan PP, Mathew R, Harikrishnan S, et al. Presentation, management, and outcomes of 25 748 acute coronary syndrome admissions in Kerala, India: results from the Kerala ACS Registry. Eur Heart J. 2013;34(2):121–129. doi:10.1093/eurheartj/ehs219.
+*   ## [12]
+
+Negi PC, Merwaha R, Panday D, et al. Multicenter HP ACS registry. Indian Heart J. 2016;68(2):118–127. doi:10.1016/j.ihj.2015.07.027.
+*   ## [13]
+
+Fabreau GE, Leung AA, Southern DA, et al. Area median income and metropolitan versus nonmetropolitan location of care for acute coronary syndromes: a complex interaction of social determinants. J Am Heart Assoc. 2016;5(2):e002447. doi:10.1161/JAHA.115.002447.
+
+Keywords:
+
+Percutaneous coronary intervention; Robotic; Remote; Percutaneous coronary intervention; Fifth generation network communication
+
+## Image Gallery
+
+[![Image 2](https://www.ovid.com/image-api/imgsrv/article/i/thumb/wkmrid/JOURNAL%252Fcardis%252F04.03%252F02211144-202409000-00008%252Ffigure1%252Fv%252F2025-08-17T162245Z%252Fr%252Fimage-jpeg/width/710.png) Open multimedia modal](https://www.ovid.com/image-api/imgsrv/article/i/thumb/wkmrid/JOURNAL%252Fcardis%252F04.03%252F02211144-202409000-00008%252Ffigure1%252Fv%252F2025-08-17T162245Z%252Fr%252Fimage-jpeg/width/1200.webp)
+
+## [Figure 1: Open multimedia modal](https://www.ovid.com/image-api/imgsrv/article/i/thumb/wkmrid/JOURNAL%252Fcardis%252F04.03%252F02211144-202409000-00008%252Ffigure1%252Fv%252F2025-08-17T162245Z%252Fr%252Fimage-jpeg/width/1200.webp)
+Remote Robotic Control Workstation (A), bedside unit (B), and extended reach arm (C).
+
+[![Image 3](https://www.ovid.com/image-api/imgsrv/article/i/thumb/wkmrid/JOURNAL%252Fcardis%252F04.03%252F02211144-202409000-00008%252Ffigure2%252Fv%252F2025-08-17T162245Z%252Fr%252Fimage-jpeg/width/710.png) Open multimedia modal](https://www.ovid.com/image-api/imgsrv/article/i/thumb/wkmrid/JOURNAL%252Fcardis%252F04.03%252F02211144-202409000-00008%252Ffigure2%252Fv%252F2025-08-17T162245Z%252Fr%252Fimage-jpeg/width/1200.webp)
+
+## [Figure 2: Open multimedia modal](https://www.ovid.com/image-api/imgsrv/article/i/thumb/wkmrid/JOURNAL%252Fcardis%252F04.03%252F02211144-202409000-00008%252Ffigure2%252Fv%252F2025-08-17T162245Z%252Fr%252Fimage-jpeg/width/1200.webp)
+Coronary intervention treatment process. (A and B) Multi-position and multi-angle real-time imaging of the robot-assisted system performing pre-percutaneous coronary angiography. (C and D) Image of the robot-assisted system performing coronary stenting in the middle of the left anterior descending artery, and in the distal left main coronary artery and ostial of left anterior descending artery, respectively. (E and F) Image of the robot-assisted system completing the stent implantation and angiography.
+
+[![Image 4](https://www.ovid.com/image-api/imgsrv/article/i/thumb/wkmrid/JOURNAL%252Fcardis%252F04.03%252F02211144-202409000-00008%252Ffigure3%252Fv%252F2025-08-17T162245Z%252Fr%252Fimage-jpeg/width/710.png) Open multimedia modal](https://www.ovid.com/image-api/imgsrv/article/i/thumb/wkmrid/JOURNAL%252Fcardis%252F04.03%252F02211144-202409000-00008%252Ffigure3%252Fv%252F2025-08-17T162245Z%252Fr%252Fimage-jpeg/width/1200.webp)
+
+## [Figure 3: Open multimedia modal](https://www.ovid.com/image-api/imgsrv/article/i/thumb/wkmrid/JOURNAL%252Fcardis%252F04.03%252F02211144-202409000-00008%252Ffigure3%252Fv%252F2025-08-17T162245Z%252Fr%252Fimage-jpeg/width/1200.webp)
+Intravenous ultrasound test for coronary artery pullback screening. (A–D) Pre-stent. (E–H) Post-stent.
+
+Copyright © 2024 The Chinese Medical Association, published by Wolters Kluwer Health, Inc.

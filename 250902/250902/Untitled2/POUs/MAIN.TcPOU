@@ -12,17 +12,15 @@ VAR
 	arm_manual_ :       ArmManual;
 	axis2_sync_ :       Axis2Sync;
 	injector_manual_ :  InjectorManual;
+	dual_clamp_ :       DualClampExperiment;
 	axis6_enable_negative : BOOL := TRUE;
 	i:INT;
 END_VAR]]></Declaration>
     <Implementation>
-      <ST><![CDATA[FOR i:=1 TO 7 DO
-	G.axis[i]();	
-END_FOR
-
-// 注射器 NC 轴刷新 AXIS_REF，由独立点动 POU 控制，不进入业务状态机。
-FOR i:=1 TO 2 DO
-	G.inject_axis[i]();
+      <ST><![CDATA[// 轴1、3、5、6需要参与左限位自检，因此实验模式下刷新1..7轴对象。
+// 定位臂、注射器和轴15不在本程序控制链中。
+FOR i:=1 TO 7 DO
+	G.axis[i]();
 END_FOR
 
 IF TwinCAT_SystemInfoVarList._TaskInfo[1].FirstCycle THEN
@@ -32,6 +30,7 @@ IF TwinCAT_SystemInfoVarList._TaskInfo[1].FirstCycle THEN
 	G.handle_reinit_done := FALSE;
 	G.estop_hold_req := TRUE;
 	G.selfcheck_reset_req := TRUE;
+	G.dual_clamp_enable := FALSE;
 	FOR i:=1 TO 7 DO
 		G.SetPointGenEnable[i].Execute := FALSE;
 		G.SetPointGenDisable[i].Execute := FALSE;
@@ -46,25 +45,30 @@ IF TwinCAT_SystemInfoVarList._TaskInfo[1].FirstCycle THEN
 		G.arm_jog_neg_req[i] := FALSE;
 	END_FOR
 END_IF
-	
-arm_manual_();
-axis2_sync_();
-injector_manual_();
 
-// 轴6自检触发左限位后只关闭负向许可，保留正向脱离限位的能力。
-axis6_enable_negative := NOT ((G.gen_state = _self_check) AND G.axis[6].Status.DriveLimitActive);
-POWERED();
-SETPOSITIONGEN();
-RESETED();
+// 保留原工程的MC_Power、MC_ExtSetPointGen和MC_Reset实例调用，
+// 其输入由init/SelfCheck/DualClampExperiment按当前阶段赋值。
+IF G.gen_state <> _dual_clamp THEN
+	POWERED();
+	SETPOSITIONGEN();
+	RESETED();
+END_IF
 
-CASE G.gen_state OF
-	_init:			init_();
-	_self_check:    self_check_();
-	_handle:		handle1_();	
-	_clear_err:		clear_err_();	
-	_err:			err_();	
-	_reset:			reset_();
-END_CASE]]></ST>
+// 实验专用入口：上电后沿用原程序自动初始化和自检。
+// 自检完成后转入_dual_clamp，不再调用手柄、定位臂或注射器控制链。
+IF G.gen_state = _init THEN
+	init_();
+ELSIF G.gen_state = _self_check THEN
+	self_check_();
+ELSIF G.gen_state = _dual_clamp THEN
+	dual_clamp_();
+ELSIF G.gen_state = _err THEN
+	err_();
+ELSIF G.gen_state = _clear_err THEN
+	clear_err_();
+ELSIF G.gen_state = _reset THEN
+	reset_();
+END_IF]]></ST>
     </Implementation>
     <Folder Name="block" Id="{8d2a06f7-1a45-482f-85f8-8678060c15b3}" />
     <Action Name="POWERED" Id="{98a6d293-ca3a-4d71-85c7-080c2df57892}" FolderPath="block\">

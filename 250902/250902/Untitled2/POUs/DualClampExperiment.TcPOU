@@ -1,0 +1,389 @@
+<?xml version="1.0" encoding="utf-8"?>
+<TcPlcObject Version="1.1.0.1" ProductVersion="3.1.4024.15">
+  <POU Name="DualClampExperiment" Id="c4d63fc8-65f6-4ba1-8a1e-7b9a1f7b8e21" SpecialFunc="None">
+    <Declaration><![CDATA[FUNCTION_BLOCK DualClampExperiment
+VAR
+    i : INT;
+    state : USINT := 0; // 0等待准备，10准备定位，20等待开始，30基准，40释放，50回程，60重夹，70恢复，80完成，90中止
+    initialized : BOOL := FALSE;
+    active_axis : ARRAY[1..7] OF BOOL := [TRUE, TRUE, FALSE, FALSE, FALSE, TRUE, TRUE];
+    setup_exec : ARRAY[1..7] OF BOOL;
+    return_exec : ARRAY[1..7] OF BOOL;
+    setup_done : ARRAY[1..7] OF BOOL;
+    return_done : ARRAY[1..7] OF BOOL;
+    setup_target : ARRAY[1..7] OF LREAL;
+    return_target : ARRAY[1..7] OF LREAL;
+    fb_setup_move : ARRAY[1..7] OF MC_MoveAbsolute;
+    fb_return_move : ARRAY[1..7] OF MC_MoveAbsolute;
+    fb_stop : ARRAY[1..7] OF MC_Stop;
+    clamp_timer : TON;
+    baseline_timer : TON;
+    all_setup_done : BOOL;
+    all_return_done : BOOL;
+    moving_index : INT;
+    last_phase : UINT := 0;
+END_VAR]]></Declaration>
+    <Implementation>
+      <ST><![CDATA[
+// 位置始终由左限位绝对坐标加距左限位距离得到。
+// 原始SelfCheck负责建立G.leftlimit[1]、G.leftlimit[3]、G.leftlimit[5]、G.leftlimit[6]。
+
+IF NOT initialized THEN
+    state := 0;
+    G.dual_clamp_phase := 13; // 自检完成，等待准备定位
+    last_phase := 13;
+    G.dual_clamp_event_sequence := 0;
+    G.dual_clamp_setup_done := FALSE;
+    G.dual_clamp_setup_busy := FALSE;
+    G.dual_clamp_start_req := FALSE;
+    G.dual_clamp_sample_arm := FALSE;
+    G.dual_clamp_sample_clear := FALSE;
+    G.dual_clamp_cylinder2_cmd := G.dual_clamp_cylinder2_release_word;
+    G.dual_clamp_cylinder4_cmd := G.dual_clamp_cylinder4_release_word;
+    G.dual_clamp_leftlimit_axis1_abs := G.leftlimit[1];
+    G.dual_clamp_leftlimit_axis6_abs := G.leftlimit[6];
+    G.dual_clamp_leftlimit_valid := G.self_check_done;
+    FOR i := 1 TO 7 DO
+        setup_exec[i] := FALSE;
+        return_exec[i] := FALSE;
+        setup_done[i] := FALSE;
+        return_done[i] := FALSE;
+        setup_target[i] := G.axis[i].NcToPlc.ActPos;
+        return_target[i] := G.axis[i].NcToPlc.ActPos;
+    END_FOR
+    initialized := TRUE;
+END_IF
+
+// 界面可重复请求自检。上电首次扫描仍沿用原程序自动自检逻辑。
+IF G.dual_clamp_selfcheck_req THEN
+    G.dual_clamp_selfcheck_req := FALSE;
+    G.dual_clamp_setup_req := FALSE;
+    G.dual_clamp_setup_done := FALSE;
+    G.dual_clamp_setup_busy := FALSE;
+    G.dual_clamp_start_req := FALSE;
+    G.dual_clamp_sample_arm := FALSE;
+    G.self_check_done := FALSE;
+    G.selfcheck_reset_req := TRUE;
+    initialized := FALSE;
+    G.gen_state := _init;
+    RETURN;
+END_IF
+
+// 实验阶段只使能轴1、2、6、7；轴3、4、5保持断使能。
+FOR i := 1 TO 7 DO
+    IF active_axis[i] THEN
+        G.power_[i](Axis := G.axis[i], Enable := TRUE, Enable_Positive := TRUE, Enable_Negative := TRUE);
+        G.power_output[i].Done := G.power_[i].Status;
+        G.power_output[i].Busy := G.power_[i].Busy;
+        G.power_output[i].Active := G.power_[i].Active;
+        G.power_output[i].Error := G.power_[i].Error;
+        G.power_output[i].ErrorID := G.power_[i].ErrorID;
+        G.SetPointGenEnable[i](Axis := G.axis[i], Execute := FALSE);
+        G.SetPointGenDisable[i](Axis := G.axis[i], Execute := TRUE);
+        G.SetPointGenDisable_output[i].Done := G.SetPointGenDisable[i].Done;
+        G.SetPointGenDisable_output[i].Busy := G.SetPointGenDisable[i].Busy;
+        G.SetPointGenDisable_output[i].Error := G.SetPointGenDisable[i].Error;
+        G.SetPointGenDisable_output[i].ErrorID := G.SetPointGenDisable[i].ErrorID;
+        G.SetPointGenDisable_output[i].Enabled := G.SetPointGenDisable[i].Enabled;
+    ELSE
+        G.power_[i](Axis := G.axis[i], Enable := FALSE, Enable_Positive := TRUE, Enable_Negative := TRUE);
+        G.power_output[i].Done := G.power_[i].Status;
+        G.power_output[i].Busy := G.power_[i].Busy;
+        G.power_output[i].Active := G.power_[i].Active;
+        G.power_output[i].Error := G.power_[i].Error;
+        G.power_output[i].ErrorID := G.power_[i].ErrorID;
+        G.SetPointGenEnable[i](Axis := G.axis[i], Execute := FALSE);
+        G.SetPointGenDisable[i](Axis := G.axis[i], Execute := TRUE);
+        G.SetPointGenDisable_output[i].Done := G.SetPointGenDisable[i].Done;
+        G.SetPointGenDisable_output[i].Busy := G.SetPointGenDisable[i].Busy;
+        G.SetPointGenDisable_output[i].Error := G.SetPointGenDisable[i].Error;
+        G.SetPointGenDisable_output[i].ErrorID := G.SetPointGenDisable[i].ErrorID;
+        G.SetPointGenDisable_output[i].Enabled := G.SetPointGenDisable[i].Enabled;
+        setup_exec[i] := FALSE;
+        return_exec[i] := FALSE;
+    END_IF
+END_FOR
+
+G.estop_hold_req := FALSE;
+G.cylinder1_value := G.dual_clamp_cylinder1_open_word;
+G.cylinder3_value := G.dual_clamp_cylinder3_open_word;
+
+IF G.dual_clamp_abort_req THEN
+    G.dual_clamp_abort_req := FALSE;
+    state := 90;
+END_IF
+
+// 完成或中止后允许通过新的准备定位请求开始下一次实验。
+IF ((state = 80) OR (state = 90)) AND G.dual_clamp_setup_req THEN
+    state := 0;
+    G.dual_clamp_setup_done := FALSE;
+    G.dual_clamp_setup_busy := FALSE;
+    G.dual_clamp_start_req := FALSE;
+    G.dual_clamp_status_error_id := 0;
+    G.dual_clamp_sample_arm := FALSE;
+    clamp_timer(IN := FALSE);
+    baseline_timer(IN := FALSE);
+    FOR i := 1 TO 7 DO
+        setup_exec[i] := FALSE;
+        return_exec[i] := FALSE;
+        setup_done[i] := FALSE;
+        return_done[i] := FALSE;
+    END_FOR
+END_IF
+
+IF state = 0 THEN
+    G.dual_clamp_enable := FALSE;
+    G.dual_clamp_phase := 13;
+    IF G.dual_clamp_setup_req AND G.dual_clamp_leftlimit_valid THEN
+        G.dual_clamp_setup_req := FALSE;
+        G.dual_clamp_setup_busy := TRUE;
+        G.dual_clamp_setup_done := FALSE;
+        G.dual_clamp_setup_target_axis1_abs := G.leftlimit[1] + MAX(0.0, G.dual_clamp_axis1_distance_from_left);
+        G.dual_clamp_setup_target_axis6_abs := G.leftlimit[6] + MAX(0.0, G.dual_clamp_axis6_distance_from_left);
+        G.dual_clamp_start_target_axis1_abs := G.dual_clamp_setup_target_axis1_abs;
+        G.dual_clamp_start_target_axis6_abs := G.dual_clamp_setup_target_axis6_abs;
+        setup_target[1] := G.dual_clamp_setup_target_axis1_abs;
+        setup_target[2] := G.dual_clamp_axis2_angle_abs;
+        setup_target[6] := G.dual_clamp_setup_target_axis6_abs;
+        setup_target[7] := G.dual_clamp_axis7_angle_abs;
+        FOR i := 1 TO 7 DO
+            setup_done[i] := NOT active_axis[i];
+            setup_exec[i] := active_axis[i];
+        END_FOR
+        state := 10;
+    END_IF
+END_IF
+
+IF state = 10 THEN
+    G.dual_clamp_enable := TRUE;
+    G.dual_clamp_phase := 14; // 准备定位
+    all_setup_done := TRUE;
+    FOR i := 1 TO 7 DO
+        IF active_axis[i] THEN
+            IF fb_setup_move[i].Done THEN
+                setup_done[i] := TRUE;
+                setup_exec[i] := FALSE;
+            ELSIF fb_setup_move[i].Error OR fb_setup_move[i].CommandAborted THEN
+                G.dual_clamp_status_error_id := fb_setup_move[i].ErrorID;
+                setup_exec[i] := FALSE;
+                state := 90;
+            END_IF
+            IF NOT setup_done[i] THEN all_setup_done := FALSE; END_IF
+        END_IF
+    END_FOR
+    IF all_setup_done THEN
+        G.dual_clamp_setup_busy := FALSE;
+        G.dual_clamp_setup_done := TRUE;
+        G.dual_clamp_phase := 15; // 等待夹持和开始实验
+        state := 20;
+    END_IF
+END_IF
+
+IF state = 20 THEN
+    G.dual_clamp_enable := TRUE;
+    G.dual_clamp_phase := 15;
+    G.dual_clamp_cylinder2_cmd := G.dual_clamp_cylinder2_release_word;
+    G.dual_clamp_cylinder4_cmd := G.dual_clamp_cylinder4_release_word;
+    IF G.dual_clamp_start_req THEN
+        G.dual_clamp_start_req := FALSE;
+        G.dual_clamp_phase := 4; // 基准采样
+        G.dual_clamp_cylinder2_cmd := G.dual_clamp_cylinder2_clamp_word;
+        G.dual_clamp_cylinder4_cmd := G.dual_clamp_cylinder4_clamp_word;
+        G.dual_clamp_sample_arm := TRUE;
+        baseline_timer(IN := FALSE);
+        state := 30;
+    END_IF
+END_IF
+
+IF state = 30 THEN
+    G.dual_clamp_enable := TRUE;
+    G.dual_clamp_phase := 4;
+    G.dual_clamp_cylinder2_cmd := G.dual_clamp_cylinder2_clamp_word;
+    G.dual_clamp_cylinder4_cmd := G.dual_clamp_cylinder4_clamp_word;
+    G.dual_clamp_sample_arm := TRUE;
+    baseline_timer(IN := TRUE, PT := T#1S);
+    IF baseline_timer.Q THEN
+        baseline_timer(IN := FALSE);
+        G.dual_clamp_phase := 5; // 运动端释放
+        IF G.dual_clamp_moving_axis = 1 THEN
+            G.dual_clamp_cylinder2_cmd := G.dual_clamp_cylinder2_release_word;
+        ELSE
+            G.dual_clamp_cylinder4_cmd := G.dual_clamp_cylinder4_release_word;
+        END_IF
+        clamp_timer(IN := FALSE);
+        state := 40;
+    END_IF
+END_IF
+
+IF state = 40 THEN
+    G.dual_clamp_enable := TRUE;
+    G.dual_clamp_phase := 5;
+    G.dual_clamp_sample_arm := TRUE;
+    clamp_timer(IN := TRUE, PT := T#150MS);
+    IF clamp_timer.Q THEN
+        clamp_timer(IN := FALSE);
+        moving_index := G.dual_clamp_moving_axis;
+        IF moving_index = 1 THEN
+            G.dual_clamp_return_target_abs := G.dual_clamp_start_target_axis1_abs + G.dual_clamp_return_retract_distance;
+        ELSE
+            G.dual_clamp_return_target_abs := G.dual_clamp_start_target_axis6_abs + G.dual_clamp_return_retract_distance;
+        END_IF
+        return_target[moving_index] := G.dual_clamp_return_target_abs;
+        FOR i := 1 TO 7 DO
+            return_done[i] := NOT active_axis[i] OR (i <> moving_index);
+            return_exec[i] := (i = moving_index);
+        END_FOR
+        state := 50;
+    END_IF
+END_IF
+
+IF state = 50 THEN
+    G.dual_clamp_enable := TRUE;
+    G.dual_clamp_phase := 6; // 运动端回程
+    G.dual_clamp_sample_arm := TRUE;
+    all_return_done := TRUE;
+    FOR i := 1 TO 7 DO
+        IF i = moving_index THEN
+            IF fb_return_move[i].Done THEN
+                return_done[i] := TRUE;
+                return_exec[i] := FALSE;
+            ELSIF fb_return_move[i].Error OR fb_return_move[i].CommandAborted THEN
+                G.dual_clamp_status_error_id := fb_return_move[i].ErrorID;
+                return_exec[i] := FALSE;
+                state := 90;
+            END_IF
+        END_IF
+        IF NOT return_done[i] THEN all_return_done := FALSE; END_IF
+    END_FOR
+    IF all_return_done THEN
+        G.dual_clamp_phase := 7; // 重新夹紧
+        IF moving_index = 1 THEN
+            G.dual_clamp_cylinder2_cmd := G.dual_clamp_cylinder2_clamp_word;
+        ELSE
+            G.dual_clamp_cylinder4_cmd := G.dual_clamp_cylinder4_clamp_word;
+        END_IF
+        clamp_timer(IN := FALSE);
+        state := 60;
+    END_IF
+END_IF
+
+IF state = 60 THEN
+    G.dual_clamp_enable := TRUE;
+    G.dual_clamp_phase := 7;
+    G.dual_clamp_sample_arm := TRUE;
+    clamp_timer(IN := TRUE, PT := T#150MS);
+    IF clamp_timer.Q THEN
+        clamp_timer(IN := FALSE);
+        IF G.dual_clamp_recovery_mode THEN
+            IF moving_index = 1 THEN
+                return_target[moving_index] := G.dual_clamp_start_target_axis1_abs;
+            ELSE
+                return_target[moving_index] := G.dual_clamp_start_target_axis6_abs;
+            END_IF
+            return_exec[moving_index] := TRUE;
+            state := 70;
+        ELSE
+            G.dual_clamp_sample_arm := FALSE;
+            G.dual_clamp_phase := 10;
+            state := 80;
+        END_IF
+    END_IF
+END_IF
+
+IF state = 70 THEN
+    G.dual_clamp_enable := TRUE;
+    G.dual_clamp_phase := 9; // 恢复到实验开始位置
+    G.dual_clamp_sample_arm := TRUE;
+    IF fb_return_move[moving_index].Done THEN
+        return_exec[moving_index] := FALSE;
+        G.dual_clamp_sample_arm := FALSE;
+        G.dual_clamp_phase := 10;
+        state := 80;
+    ELSIF fb_return_move[moving_index].Error OR fb_return_move[moving_index].CommandAborted THEN
+        G.dual_clamp_status_error_id := fb_return_move[moving_index].ErrorID;
+        return_exec[moving_index] := FALSE;
+        state := 90;
+    END_IF
+END_IF
+
+IF state = 80 THEN
+    G.dual_clamp_enable := TRUE;
+    G.dual_clamp_phase := 10;
+    G.dual_clamp_cylinder2_cmd := G.dual_clamp_cylinder2_clamp_word;
+    G.dual_clamp_cylinder4_cmd := G.dual_clamp_cylinder4_clamp_word;
+    G.dual_clamp_sample_arm := FALSE;
+END_IF
+
+IF state = 90 THEN
+    G.dual_clamp_enable := FALSE;
+    G.dual_clamp_phase := 11;
+    G.dual_clamp_sample_arm := FALSE;
+    FOR i := 1 TO 7 DO
+        setup_exec[i] := FALSE;
+        return_exec[i] := FALSE;
+        fb_stop[i](Axis := G.axis[i], Deceleration := 100.0, Jerk := 1000.0, Execute := TRUE);
+    END_FOR
+END_IF
+
+// 将状态机保存的夹持命令写入实际电缸输出。夹紧/释放值沿用原程序固定值。
+G.cylinder2_value := G.dual_clamp_cylinder2_cmd;
+G.cylinder4_value := G.dual_clamp_cylinder4_cmd;
+
+// 每次实验阶段变化递增事件序号，供高频样本与动作时间对齐。
+IF G.dual_clamp_phase <> last_phase THEN
+    G.dual_clamp_event_sequence := G.dual_clamp_event_sequence + 1;
+    last_phase := G.dual_clamp_phase;
+END_IF
+
+// 运动功能块每个PLC周期统一调用，保证Busy/Done/Error在状态切换后仍持续更新。
+FOR i := 1 TO 7 DO
+    fb_setup_move[i](Axis := G.axis[i], Position := setup_target[i],
+        Velocity := G.dual_clamp_return_velocity,
+        Acceleration := G.dual_clamp_return_acceleration,
+        Deceleration := G.dual_clamp_return_deceleration,
+        Jerk := G.dual_clamp_return_jerk, Execute := setup_exec[i]);
+    fb_return_move[i](Axis := G.axis[i], Position := return_target[i],
+        Velocity := G.dual_clamp_return_velocity,
+        Acceleration := G.dual_clamp_return_acceleration,
+        Deceleration := G.dual_clamp_return_deceleration,
+        Jerk := G.dual_clamp_return_jerk, Execute := return_exec[i]);
+END_FOR
+
+IF G.dual_clamp_sample_clear THEN
+    G.dual_clamp_sample_count := 0;
+    G.dual_clamp_sample_overflow := FALSE;
+    G.dual_clamp_sample_clear := FALSE;
+END_IF
+
+IF G.dual_clamp_sample_arm AND NOT G.dual_clamp_sample_overflow THEN
+    IF G.dual_clamp_sample_count < 32768 THEN
+        i := UDINT_TO_INT(G.dual_clamp_sample_count);
+        G.dual_clamp_sample_index[i] := G.dual_clamp_sample_count;
+        // 基于PLC任务1ms周期生成单调时间戳（单位微秒）
+        G.dual_clamp_sample_time_us[i] := UDINT_TO_ULINT(G.dual_clamp_sample_count) * 1000;
+        G.dual_clamp_sample_phase[i] := UINT_TO_USINT(G.dual_clamp_phase);
+        G.dual_clamp_sample_event_sequence[i] := G.dual_clamp_event_sequence;
+        G.dual_clamp_sample_axis1_pos[i] := G.axis[1].NcToPlc.ActPos;
+        G.dual_clamp_sample_axis1_vel[i] := G.axis[1].NcToPlc.ActVelo;
+        G.dual_clamp_sample_axis1_acc[i] := G.axis[1].NcToPlc.ActAcc;
+        G.dual_clamp_sample_axis6_pos[i] := G.axis[6].NcToPlc.ActPos;
+        G.dual_clamp_sample_axis6_vel[i] := G.axis[6].NcToPlc.ActVelo;
+        G.dual_clamp_sample_axis6_acc[i] := G.axis[6].NcToPlc.ActAcc;
+        G.dual_clamp_sample_ft1[i] := G.ft_1_value;
+        G.dual_clamp_sample_fn1[i] := G.fn_1_value;
+        G.dual_clamp_sample_ft2[i] := G.ft_2_value;
+        G.dual_clamp_sample_fn2[i] := G.fn_2_value;
+        G.dual_clamp_sample_cylinder2[i] := G.cylinder2_value;
+        G.dual_clamp_sample_cylinder4[i] := G.cylinder4_value;
+        G.dual_clamp_sample_count := G.dual_clamp_sample_count + 1;
+    ELSE
+        G.dual_clamp_sample_overflow := TRUE;
+    END_IF
+END_IF
+]]></ST>
+    </Implementation>
+    <LineIds Name="DualClampExperiment">
+      <LineId Id="2" Count="0" />
+    </LineIds>
+  </POU>
+ </TcPlcObject>

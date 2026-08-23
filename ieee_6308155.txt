@@ -1,0 +1,38 @@
+Title: Internet-based robotic catheter surgery system—System design and performance evaluation
+
+URL Source: http://ieeexplore.ieee.org/document/6308155/
+
+Published Time: Tue, 18 Aug 2026 08:35:49 GMT
+
+Markdown Content:
+*   [Download PDF](https://ieeexplore.ieee.org/document/ "You do not have access to this PDF")
+*    Download References 
+*   [Request Permissions](https://ieeexplore.ieee.org/document/ "Request permission for reuse.")
+*   [Save to](https://ieeexplore.ieee.org/document/)
+*   [Alerts](https://ieeexplore.ieee.org/document/)
+
+## Abstract:
+
+Endovascular intervention is expected to become increasingly popular in medical practice, both for diagnosis and for surgery. Accordingly, researches of robotic systems f...[Show More](https://ieeexplore.ieee.org/document/)
+
+## Metadata
+
+## Abstract:
+
+Endovascular intervention is expected to become increasingly popular in medical practice, both for diagnosis and for surgery. Accordingly, researches of robotic systems for endovascular surgery assistant have been carried out widely. Robotic system takes advantages of higher precision, can be controlled remotely etc. In this paper a novel robotic catheter manipulation system is presented. The developed system consists of two parts, one is the surgeon console and the other one is the catheter manipulator. The surgeon's console is designed to simulate the surgeon's operating procedure, and the catheter manipulator takes the same movement motion with the controller. In the paper, the mechanism of the system is introduced in detail. Controllers are designed for both two parts. A internet based communication between the controller and the catheter manipulator has been build. A server client structure is employed to realize the communication. Two-way remote control experiments are carried out between China and Japan. The dynamic performance of the system is discussed in the paper.
+
+**Date of Conference:** 15-17 August 2012
+
+**Date Added to IEEE _Xplore_:** 20 September 2012
+
+**ISBN Information:**
+
+## ISSN Information:
+
+**Conference Location:** Zhengzhou, China
+
+* * *
+
+### I. INTRODUCTION
+
+Endovascular intervention is expected to become increasingly popular in medical practice, both for diagnosis and for surgery. However, as a new technology, it requires a lot of skills in operation. In addition, the operation is carried out inside the body, it is impossible to monitor it directly. Much more skills and experience are required for doctors to insert the catheter. In the operation, for example the catheter is inserted through patients' blood vessel. Any mistakes would hurt patients and cause damages. An experienced neurosurgery doctor can achieve a precision about 2mm in the surgery. However, the contact force between the blood vessel and the catheter cannot be sensed. During the operation an X-ray camera is used, and long time operation will cause damage to the patient. Although doctors wear protecting suits, it is very difficult to protect doctors' hands and faces from the radiation of the X-ray. There are dangers of mingling or breaking the blood vessels. To overcome these challenges, we need better technique and mechanisms to help and train doctors. Robotic system takes many advantages of higher precision, can be controlled remotely etc. However, compared with hands of human being, none of a robotic system could satisfy all of the requirements of an endovascular intervention. Not only because the machine is not as flexible as hands of human being but also lacks of touch. In any case, robotic catheter manipulation system could provide assistant to surgeons in the operation, but it has a long way to go to replace human being.

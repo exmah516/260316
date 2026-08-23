@@ -185,3 +185,12 @@ _recip_terms.txt
 _reciprocating_pdf_text_index_20260819.json
 generic_control_methods_pdf_report_20260819.md
 tmp/download_known_papers.ps1
+*.jpg
+*.html
+
+*.LRF
+*.MP4
+*.json
+tmp_allvas_figure1.webp
+
+下位机工程程序/

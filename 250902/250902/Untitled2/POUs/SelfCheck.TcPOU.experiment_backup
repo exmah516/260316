@@ -1,4 +1,4 @@
-<?xml version="1.0" encoding="utf-8"?>
+﻿<?xml version="1.0" encoding="utf-8"?>
 <TcPlcObject Version="1.1.0.1" ProductVersion="3.1.4024.15">
   <POU Name="SelfCheck" Id="{a1b2c3d4-e5f6-4789-8012-34567890abcd}" SpecialFunc="None">
     <Declaration><![CDATA[ FUNCTION_BLOCK SelfCheck
@@ -56,10 +56,10 @@ FUNCTION_BLOCK: SelfCheck
 
 自检流程:
   1) 对 target_axes[]包括的平移轴：禁用外部给定（SetPointGenDisable），反向低速逼近左限位并记录 G.leftlimit[]
-  2) 对旋转轴（轴2/4/7）：禁用外部给定后，直接 MC_MoveAbsolute 到绝对位置 0
+   2) 对实验需要的旋转轴（轴2/7）：禁用外部给定后，直接 MC_MoveAbsolute 到绝对位置 0
   3) 停止与清错：MC_Stop 平滑停止；若出现故障则 MC_Reset 清错
   4) 目标轴回退：按 seq_order[] 依次 MC_SetPosition(ActPos→SetPos) → MC_MoveAbsolute 回退 → 以回退终点刷新 init_pos[]
-  5) 全轴完成后：同步相对坐标变量并切换到 _handle
+   5) 全轴完成后：同步相对坐标变量并切换到双机构实验等待状态
 *)
 
 // 统计：目标轴是否全部进入同步等待阶段（stu>=6）
@@ -94,7 +94,7 @@ IF G.selfcheck_reset_req THEN
         fb_stop[i](Axis:=G.axis[i], Execute:=FALSE);
         fb_set_pos[i](Axis:=G.axis[i], Execute:=FALSE);
     END_FOR
-    // 轴4（Motion NC Axis 9）不参与任何运动，自检状态直接设为完成，保持功能块 Execute:=FALSE
+    // 轴4不属于本实验，也不执行原程序的角度归零流程。
     stu[4] := 10;
     stagger_started := FALSE;
     stagger_timer(IN:=FALSE);
@@ -453,13 +453,11 @@ FOR i:=1 TO 7 DO
         END_CASE
     ELSE
         IF i = 4 THEN
-            // 轴4（Motion NC Axis 9）不参与任何运动，保持功能块 Execute:=FALSE
+            // 轴4不参与本实验，自检状态直接完成并保持断使能。
             stu[i] := 10;
-            mv_abs_exec[i] := FALSE;
-            mv_vel_exec[i] := FALSE;
         ELSE
-            // 非目标轴（轴2/7）：绝对值编码器轴，直接运动到绝对位置 0
-            CASE stu[i] OF
+        // 非目标轴（轴2/7）：绝对值编码器轴，直接运动到绝对位置 0
+        CASE stu[i] OF
         0: // 禁用外部给定，避免与绝对定位冲突
             G.SetPointGenDisable[i](Axis:=G.axis[i], Execute:=TRUE);
             IF G.power_output[i].Done AND (G.SetPointGenDisable[i].Done OR NOT G.SetPointGenDisable[i].Enabled) THEN
@@ -502,7 +500,7 @@ FOR i:=1 TO 7 DO
                 G.axis_Reset[i](Axis:=G.axis[i], Execute:=FALSE);
                 stu[i] := 4;
             END_IF
-            END_CASE
+        END_CASE
         END_IF
     END_IF
     
@@ -528,31 +526,9 @@ FOR i:=1 TO 7 DO
 	G.selfcheck_stu[i] := stu[i];
 END_FOR
 
-// 检查各参与轴自检异常状态并实时上报
-FOR i := 1 TO 7 DO
-    IF (i <> 4) THEN
-        IF G.axis[i].Status.Error THEN
-            G.dual_clamp_selfcheck_error := TRUE;
-            G.dual_clamp_selfcheck_error_id := G.axis[i].Status.ErrorID;
-        ELSIF G.power_output[i].Error AND (G.power_output[i].ErrorID <> power_not_ready_errid) THEN
-            G.dual_clamp_selfcheck_error := TRUE;
-            G.dual_clamp_selfcheck_error_id := G.power_output[i].ErrorID;
-        ELSIF G.axis_Reset[i].Error THEN
-            G.dual_clamp_selfcheck_error := TRUE;
-            G.dual_clamp_selfcheck_error_id := G.axis_Reset[i].ErrorID;
-        ELSIF fb_move_abs[i].Error THEN
-            G.dual_clamp_selfcheck_error := TRUE;
-            G.dual_clamp_selfcheck_error_id := fb_move_abs[i].ErrorID;
-        ELSIF fb_move_vel[i].Error THEN
-            G.dual_clamp_selfcheck_error := TRUE;
-            G.dual_clamp_selfcheck_error_id := fb_move_vel[i].ErrorID;
-        END_IF
-    END_IF
-END_FOR
-
-// 全轴完成判定：轴1、2、3、5、6、7完成；轴4跳过
-all_done := TRUE;
-FOR i:=1 TO 7 DO
+ // 自检完成判定：轴1、2、3、5、6、7完成；轴4跳过。
+    all_done := TRUE;
+    FOR i:=1 TO 7 DO
     IF (i <> 4) AND (stu[i] <> 10) THEN
         all_done := FALSE;
         EXIT;
@@ -573,16 +549,15 @@ IF all_done THEN
 	G.dual_clamp_leftlimit_axis6_abs := G.leftlimit[6];
 	G.dual_clamp_leftlimit_valid := TRUE;
 	G.dual_clamp_phase := 13;
-	// 自检后的夹持器默认释放，轴3、4、5不再参与后续实验
+	// 自检后的夹持器默认释放，轴3、轴5不再参与后续实验。
 	G.dual_clamp_cylinder2_cmd := G.dual_clamp_cylinder2_release_word;
 	G.dual_clamp_cylinder4_cmd := G.dual_clamp_cylinder4_release_word;
 	G.power_[3].Enable := FALSE;
-	G.power_[4].Enable := FALSE;
 	G.power_[5].Enable := FALSE;
-	G.startup_loading_ready := FALSE;
-    G.handle_reinit_req := FALSE;
+	G.startup_loading_ready := TRUE;
+    G.handle_reinit_req := TRUE;
     FOR i:=1 TO 7 DO
-        // 统一刷新相对坐标/参考
+        // 统一刷新相对坐标/参考，避免切换到 handle 后出现参考突变
         G.Act_pos[i] := G.axis[i].NcToPlc.ActPos - G.init_pos[i];
         G.act_pos_from_left[i] := G.axis[i].NcToPlc.ActPos - G.leftlimit[i];
         G.refer[i] := G.Act_pos[i];
