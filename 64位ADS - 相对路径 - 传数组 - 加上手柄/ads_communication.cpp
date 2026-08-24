@@ -1062,7 +1062,7 @@ bool AdsCommunicationService::ensure_connection(bool reconnecting)
 {
 	// 服务只被动建立路由，禁止在后台把人工 STOP/故障 STOP 自动切回 RUN。
 	if (!ads_.IsCommOpen() && !ads_.OpenCommInsideReadOnly() && !ads_.OpenCommReadOnly()) return false;
-	if (!ads_.SetTimeout(20))
+	if (!ads_.SetTimeout(100))
 	{
 		clear_runtime_connection_state();
 		ads_.CloseComm();

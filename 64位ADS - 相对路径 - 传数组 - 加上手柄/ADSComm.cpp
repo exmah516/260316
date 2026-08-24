@@ -6,7 +6,8 @@
 
 namespace
 {
-	constexpr unsigned long kDefaultAdsTimeoutMs = 20UL;
+	constexpr unsigned long kDefaultAdsTimeoutMs = 100UL;
+	constexpr unsigned long kHandshakeTimeoutMs = 1000UL;
 	constexpr size_t kInitialSumItemCapacity = 32U;
 	constexpr size_t kInitialSumByteCapacity = 4096U;
 }
@@ -792,36 +793,48 @@ bool CADSComm::OpenCommRemoteMode()
 	m_PAmsAddr->netId = remoteId;
 	m_PAmsAddr->port = 851;
 
-	m_adsPort = AdsPortOpenEx();
-	if (m_adsPort <= 0)
+	// 首次建立 AMS 路由连接时给予 1000ms 充分握手时间，并重试最多 3 次，避免报 1861 超时
+	for (int attempt = 0; attempt < 3; ++attempt)
 	{
-		m_adsPort = 0;
-		sprintf_s(m_lastError, sizeof(m_lastError), "Error: AdsPortOpenEx failed\n");
-		return false;
-	}
+		m_adsPort = AdsPortOpenEx();
+		if (m_adsPort <= 0)
+		{
+			m_adsPort = 0;
+			sprintf_s(m_lastError, sizeof(m_lastError), "Error: AdsPortOpenEx failed\n");
+			return false;
+		}
 
-	long nErr = AdsSyncSetTimeoutEx(m_adsPort, static_cast<long>(m_timeoutMs));
-	if (nErr != 0)
-	{
-		sprintf_s(m_lastError, sizeof(m_lastError), "Error: AdsSyncSetTimeoutEx: %ld\n", nErr);
-		AdsPortCloseEx(m_adsPort);
-		m_adsPort = 0;
-		return false;
-	}
+		long nErr = AdsSyncSetTimeoutEx(m_adsPort, static_cast<long>(kHandshakeTimeoutMs));
+		if (nErr != 0)
+		{
+			sprintf_s(m_lastError, sizeof(m_lastError), "Error: AdsSyncSetTimeoutEx: %ld\n", nErr);
+			AdsPortCloseEx(m_adsPort);
+			m_adsPort = 0;
+			return false;
+		}
 
-	unsigned short adsState = 0;
-	unsigned short deviceState = 0;
-	nErr = AdsSyncReadStateReqEx(m_adsPort, m_PAmsAddr, &adsState, &deviceState);
-	if (nErr != 0)
-	{
+		unsigned short adsState = 0;
+		unsigned short deviceState = 0;
+		nErr = AdsSyncReadStateReqEx(m_adsPort, m_PAmsAddr, &adsState, &deviceState);
+		if (nErr == 0)
+		{
+			// 握手成功后切回运行期工作超时
+			AdsSyncSetTimeoutEx(m_adsPort, static_cast<long>(m_timeoutMs));
+			m_bOpen = true;
+			ClearLastErrorLocked();
+			return true;
+		}
+
 		sprintf_s(m_lastError, sizeof(m_lastError), "Error: AdsSyncReadStateReqEx: %ld\n", nErr);
 		AdsPortCloseEx(m_adsPort);
 		m_adsPort = 0;
-		return false;
+
+		if (attempt + 1 < 3)
+		{
+			Sleep(200);
+		}
 	}
-	m_bOpen = true;
-	ClearLastErrorLocked();
-	return true;
+	return false;
 }
 
 // 兼容旧调用名：仅建立本地连接，不替用户切换 PLC 状态。
@@ -845,46 +858,58 @@ bool CADSComm::OpenCommLocalMode()
 	}
 	ClearLastErrorLocked();
 
-	m_adsPort = AdsPortOpenEx();
-	if (m_adsPort <= 0)
+	// 首次建立 AMS 路由连接时给予 1000ms 充分握手时间，并重试最多 3 次，避免报 1861 超时
+	for (int attempt = 0; attempt < 3; ++attempt)
 	{
-		m_adsPort = 0;
-		sprintf_s(m_lastError, sizeof(m_lastError), "Error: AdsPortOpenEx failed\n");
-		return false;
-	}
+		m_adsPort = AdsPortOpenEx();
+		if (m_adsPort <= 0)
+		{
+			m_adsPort = 0;
+			sprintf_s(m_lastError, sizeof(m_lastError), "Error: AdsPortOpenEx failed\n");
+			return false;
+		}
 
-	long nErr = AdsSyncSetTimeoutEx(m_adsPort, static_cast<long>(m_timeoutMs));
-	if (nErr != 0)
-	{
-		sprintf_s(m_lastError, sizeof(m_lastError), "Error: AdsSyncSetTimeoutEx: %ld\n", nErr);
-		AdsPortCloseEx(m_adsPort);
-		m_adsPort = 0;
-		return false;
-	}
+		long nErr = AdsSyncSetTimeoutEx(m_adsPort, static_cast<long>(kHandshakeTimeoutMs));
+		if (nErr != 0)
+		{
+			sprintf_s(m_lastError, sizeof(m_lastError), "Error: AdsSyncSetTimeoutEx: %ld\n", nErr);
+			AdsPortCloseEx(m_adsPort);
+			m_adsPort = 0;
+			return false;
+		}
 
-	nErr = AdsGetLocalAddressEx(m_adsPort, m_PAmsAddr);
-	if (nErr != 0)
-	{
-		sprintf_s(m_lastError, sizeof(m_lastError), "Error: AdsGetLocalAddressEx: %ld\n", nErr);
-		AdsPortCloseEx(m_adsPort);
-		m_adsPort = 0;
-		return false;
-	}
-	m_PAmsAddr->port = 851;
+		nErr = AdsGetLocalAddressEx(m_adsPort, m_PAmsAddr);
+		if (nErr != 0)
+		{
+			sprintf_s(m_lastError, sizeof(m_lastError), "Error: AdsGetLocalAddressEx: %ld\n", nErr);
+			AdsPortCloseEx(m_adsPort);
+			m_adsPort = 0;
+			return false;
+		}
+		m_PAmsAddr->port = 851;
 
-	unsigned short adsState = 0;
-	unsigned short deviceState = 0;
-	nErr = AdsSyncReadStateReqEx(m_adsPort, m_PAmsAddr, &adsState, &deviceState);
-	if (nErr != 0)
-	{
+		unsigned short adsState = 0;
+		unsigned short deviceState = 0;
+		nErr = AdsSyncReadStateReqEx(m_adsPort, m_PAmsAddr, &adsState, &deviceState);
+		if (nErr == 0)
+		{
+			// 握手成功后切回运行期工作超时
+			AdsSyncSetTimeoutEx(m_adsPort, static_cast<long>(m_timeoutMs));
+			m_bOpen = true;
+			ClearLastErrorLocked();
+			return true;
+		}
+
 		sprintf_s(m_lastError, sizeof(m_lastError), "Error: AdsSyncReadStateReqEx: %ld\n", nErr);
 		AdsPortCloseEx(m_adsPort);
 		m_adsPort = 0;
-		return false;
+
+		if (attempt + 1 < 3)
+		{
+			Sleep(200);
+		}
 	}
-	m_bOpen = true;
-	ClearLastErrorLocked();
-	return true;
+	return false;
 }
 
 // 关闭顺序：先注销通知，再释放符号句柄，最后关闭 ADS 端口。

@@ -55,9 +55,14 @@ namespace
 		{
 			const std::size_t equal = field.find('=');
 			if (equal == std::string::npos || equal == 0) continue;
-			const std::string key = field.substr(0, equal);
-			const std::string text = field.substr(equal + 1);
-			double value = 0.0;
+		const std::string key = field.substr(0, equal);
+		const std::string text = field.substr(equal + 1);
+		if (key == "record_name")
+		{
+			config.record_suffix = text;
+			continue;
+		}
+		double value = 0.0;
 			try
 			{
 				value = std::stod(text);
@@ -95,14 +100,19 @@ namespace
 			if (equal == std::string::npos || equal == 0) continue;
 			const std::string key = field.substr(0, equal);
 			const std::string text = field.substr(equal + 1);
-			if (key == "mode")
+		if (key == "mode")
 			{
 				if (text == "legacy") config.mode = ProgrammedDeliveryMode::Legacy;
 				else if (text == "catheter") config.mode = ProgrammedDeliveryMode::Catheter;
 				else if (text == "guidewire") config.mode = ProgrammedDeliveryMode::Guidewire;
 				else { error = "mode必须是legacy、catheter或guidewire"; return false; }
 				continue;
-			}
+		}
+		if (key == "record_name")
+		{
+			config.record_suffix = text;
+			continue;
+		}
 			double value = 0.0;
 			try { value = std::stod(text); }
 			catch (const std::exception&) { error = "参数不是有效数字：" + key; return false; }
@@ -159,8 +169,24 @@ std::string DualClampPipeServer::handle_command(DualClampController& controller,
 			<< live.setup_target_axis6_abs_mm << '|'
 			<< live.return_target_abs_mm << '|'
 			<< live.status_error_id << '|'
-			<< sanitize_for_pipe(controller.last_error());
+			<< sanitize_for_pipe(controller.last_error()) << '|'
+			<< (controller.zero_state().busy ? 1 : 0) << '|'
+			<< (controller.zero_state().done ? 1 : 0) << '|'
+			<< controller.zero_state().value[0] << '|'
+			<< controller.zero_state().value[1] << '|'
+			<< controller.zero_state().value[2] << '|'
+			<< controller.zero_state().value[3] << '|'
+			<< (live.recording ? 1 : 0) << '|' << live.recording_sample_count << '|' << live.recording_error_id << '|'
+			<< sanitize_for_pipe(controller.recording_directory()) << '|'
+			<< (controller.recording_archived() ? 1 : 0);
 		return out.str();
+	}
+	if (command == "ZERO_STATUS") return handle_command(controller, "GET");
+	if (command.rfind("RECORD_NAME|", 0) == 0)
+	{
+		const std::string prefix = "RECORD_NAME|name=";
+		const std::string suffix = command.rfind(prefix, 0) == 0 ? command.substr(prefix.size()) : command.substr(std::string("RECORD_NAME|").size());
+		return controller.set_record_suffix(suffix) ? "OK|RECORD_NAME" : "ERROR|" + sanitize_for_pipe(controller.last_error());
 	}
 	if (command == "CONNECT_ADS" || command == "CONNECT")
 	{
@@ -200,6 +226,15 @@ std::string DualClampPipeServer::handle_command(DualClampController& controller,
 		std::string error;
 		return controller.save_samples(command.substr(5), error) ? "OK|SAVE" : "ERROR|" + sanitize_for_pipe(error);
 	}
+	if (command == "SAVE")
+	{
+		std::string error;
+		return controller.save_samples("", error) ? "OK|SAVE" : "ERROR|" + sanitize_for_pipe(error);
+	}
+	if (command == "ZERO_FORCE")
+	{
+		return controller.request_zero() ? "OK|ZERO_FORCE" : "ERROR|" + sanitize_for_pipe(controller.last_error());
+	}
 	return "ERROR|unknown command";
 }
 
@@ -224,8 +259,25 @@ std::string DualClampPipeServer::handle_program_command(ProgrammedDeliveryContro
 			<< live.target_axis1_abs_mm << '|' << live.target_axis5_abs_mm << '|' << live.target_axis6_abs_mm << '|'
 			<< live.target_axis2_deg << '|' << live.target_axis7_deg << '|'
 			<< live.trigger_target_abs_mm << '|' << live.return_target_abs_mm << '|' << live.final_target_abs_mm << '|'
-			<< live.status_error_id << '|' << (ads_open ? 1 : 0) << '|' << sanitize_for_pipe(controller.last_error());
+			<< live.status_error_id << '|' << (ads_open ? 1 : 0) << '|'
+			<< sanitize_for_pipe(controller.last_error()) << '|'
+			<< (controller.zero_state().busy ? 1 : 0) << '|'
+			<< (controller.zero_state().done ? 1 : 0) << '|'
+			<< controller.zero_state().value[0] << '|'
+			<< controller.zero_state().value[1] << '|'
+			<< controller.zero_state().value[2] << '|'
+			<< controller.zero_state().value[3] << '|'
+			<< (live.recording ? 1 : 0) << '|' << live.recording_sample_count << '|' << live.recording_error_id << '|'
+			<< sanitize_for_pipe(controller.recording_directory()) << '|'
+			<< (controller.recording_archived() ? 1 : 0);
 		return out.str();
+	}
+	if (command == "PROGRAM_ZERO_STATUS") return handle_program_command(controller, "GET_PROGRAM");
+	if (command.rfind("PROGRAM_RECORD_NAME|", 0) == 0)
+	{
+		const std::string prefix = "PROGRAM_RECORD_NAME|name=";
+		const std::string suffix = command.rfind(prefix, 0) == 0 ? command.substr(prefix.size()) : command.substr(std::string("PROGRAM_RECORD_NAME|").size());
+		return controller.set_record_suffix(suffix) ? "OK|PROGRAM_RECORD_NAME" : "ERROR|" + sanitize_for_pipe(controller.last_error());
 	}
 	if (command.rfind("PROGRAM_MODE", 0) == 0)
 	{
@@ -243,6 +295,8 @@ std::string DualClampPipeServer::handle_program_command(ProgrammedDeliveryContro
 	}
 	if (command == "PROGRAM_START")
 		return controller.start() ? "OK|PROGRAM_START" : "ERROR|" + sanitize_for_pipe(controller.last_error());
+	if (command == "PROGRAM_ZERO_FORCE")
+		return controller.request_zero() ? "OK|PROGRAM_ZERO_FORCE" : "ERROR|" + sanitize_for_pipe(controller.last_error());
 	if (command == "PROGRAM_ABORT")
 	{
 		controller.abort();
@@ -252,6 +306,11 @@ std::string DualClampPipeServer::handle_program_command(ProgrammedDeliveryContro
 	{
 		std::string error;
 		return controller.save_samples(command.substr(13), error) ? "OK|PROGRAM_SAVE" : "ERROR|" + sanitize_for_pipe(error);
+	}
+	if (command == "PROGRAM_SAVE")
+	{
+		std::string error;
+		return controller.save_samples("", error) ? "OK|PROGRAM_SAVE" : "ERROR|" + sanitize_for_pipe(error);
 	}
 	return "ERROR|unknown program command";
 }
@@ -356,6 +415,12 @@ int DualClampPipeServer::run(DualClampController& controller, ProgrammedDelivery
 					continue;
 				}
 				const bool is_program = command.rfind("PROGRAM_", 0) == 0 || command == "GET_PROGRAM";
+				if (command.rfind("PROGRAM_MODE", 0) == 0)
+				{
+					// 实验模式切换会使两个控制器各自保存的力感零点同时失效。
+					controller.invalidate_zero();
+					program_controller.invalidate_zero();
+				}
 				write_line(pipe, is_program ? handle_program_command(program_controller, command) : handle_command(controller, command));
 			}
 		}

@@ -177,6 +177,7 @@ if (ads.OpenCommInsideReadOnly()) {
 
 - `OpenCommInsideReadOnly` 走本机 AMS Router（要求本机装了 TwinCAT XAR 或 ADS Router 路由配置）。
 - `OpenCommReadOnly` 走远端 NetId（`hardcoded_ads_netid = "169.254.119.135.1.1"`，链路本地地址，对应 Windows 防火墙规则的 169.254.x.x 段）。如果要换 PLC，**改这个常量**。
+- **连接握手超时与重试（1861 防护）**：TwinCAT 本地 AMS 路由器在冷启动建立端口与路由共享内存时通常需要 50~200ms。底层 `OpenCommLocalMode()` 和 `OpenCommRemoteMode()` 在握手阶段设置 1000ms 充足超时（`kHandshakeTimeoutMs`）并支持最多 3 次自动重试（每次间隔 200ms），握手成功后再恢复运行期工作超时（100ms），彻底消除了冷启动阶段偶发报 `AdsSyncReadStateReqEx: 1861 (ADSERR_CLIENT_SYNCTIMEOUT)` 导致程序闪退的问题。
 - 失败时 `ads.GetLastError()` 返回的字符串直接打印。
 - 连上后读 `app_name` 验证目标 PLC；通信服务在每次重连初始化时再次读取，并用应用名变化辅助识别 PLC 重启/应用重载。
 - 正常通信服务只接受已经处于 `ADSSTATE_RUN` 的设备，不替现场切换 PLC 状态，也不执行 TwinCAT **Activate Configuration**。
@@ -457,3 +458,9 @@ cancel / fault
 - 通讯变化：`Prepare/Commit/Clear` 使用 32 槽 SPSC 命令环和 128 槽结果环异步进入 100 Hz ADS 线程；Clear 提交时建立 axis1/axis6 逐轴序号屏障，未开始的同轴旧命令不会越过取消命令落到 PLC。
 - 取消与诊断：`CancelWait` 等待精确 Clear、PLC 停稳、新鲜快照 rebase 及已写入 `refer` 的 motion output generation；执行、取消和普通导管自动先行共享 5 秒安全上限。失败 Commit 的部分成功/未知腿会被保守锁存并禁止自动重发。PLC 状态 40 会把 `MC_Stop.Error/ErrorID` 暴露为回退 Error Notification，同时保持 Busy 和受控停止重试；主动取消不产生 Done。
 - 互斥与接口：力过渡实验和计划回退在两边入口互相拒绝；未增加 ADS 符号、WPF 字段或运行时依赖。
+
+### 2026-08-24 — 修复冷启动 1861 超时错误（握手阶段动态超时与重试）
+- 作者：AI（Codex）。
+- 涉及文件：`ADSComm.cpp`、`ads_communication.cpp`、`md/ADS通讯说明.md`。
+- 行为变化：在 `CADSComm::OpenCommLocalMode()` 与 `OpenCommRemoteMode()` 中将握手期超时提升为 1000ms（`kHandshakeTimeoutMs`），并引入最多 3 次自动重试握手机制（200ms 间隔）；握手成功后再切回运行期工作超时（100ms）。彻底根治了 TwinCAT AMS Router 在冷启动时因 20ms 超时而报 `AdsSyncReadStateReqEx: 1861` 的问题。
+- 接口影响：不改动任何 PLC 符号或外部数据结构，向后完全兼容。

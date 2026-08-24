@@ -199,19 +199,19 @@ namespace DualClampExperimentUI
                 if (CurrentMode == "legacy")
                 {
                     string command = string.Format(CultureInfo.InvariantCulture,
-                        "PREPARE|moving_axis={0}|axis1_distance={1}|axis6_distance={2}|axis2_angle={3}|axis7_angle={4}|return_retract={5}|return_velocity={6}|return_acc={7}|return_dec={8}|return_jerk={9}|recovery_mode={10}",
+                        "PREPARE|moving_axis={0}|axis1_distance={1}|axis6_distance={2}|axis2_angle={3}|axis7_angle={4}|return_retract={5}|return_velocity={6}|return_acc={7}|return_dec={8}|return_jerk={9}|recovery_mode={10}|record_name={11}",
                         ((ComboBoxItem)MovingAxisBox.SelectedItem).Tag, Number(Axis1Pos), Number(Axis6Pos), Number(Axis2Angle), Number(Axis7Angle),
-                        Number(ReturnDistance), Number(ReturnVelocity), Number(ReturnAcceleration), Number(ReturnDeceleration), Number(ReturnJerk), RecoveryBox.SelectedIndex);
+                        Number(ReturnDistance), Number(ReturnVelocity), Number(ReturnAcceleration), Number(ReturnDeceleration), Number(ReturnJerk), RecoveryBox.SelectedIndex, RecordSuffix());
                     await SendAsync(command);
                     return;
                 }
                 string mode = CurrentMode;
                 string angleKey = mode == "guidewire" ? "axis7_angle" : "axis2_angle";
                 string commandText = string.Format(CultureInfo.InvariantCulture,
-                    "PROGRAM_PREPARE|mode={0}|axis5_from_left={1}|{2}={3}|cycle_count={4}|final_forward_distance={5}|forward_velocity={6}|forward_acceleration={7}|forward_deceleration={8}|forward_jerk={9}|return_velocity={10}|return_acceleration={11}|return_deceleration={12}|return_jerk={13}",
+                    "PROGRAM_PREPARE|mode={0}|axis5_from_left={1}|{2}={3}|cycle_count={4}|final_forward_distance={5}|forward_velocity={6}|forward_acceleration={7}|forward_deceleration={8}|forward_jerk={9}|return_velocity={10}|return_acceleration={11}|return_deceleration={12}|return_jerk={13}|record_name={14}",
                     mode, Number(ProgramAxis5Pos), angleKey, Number(ProgramAngle), Int(ProgramCycleCount), Number(ProgramFinalDistance), Number(ProgramForwardVelocity),
                     Number(ProgramForwardAcceleration), Number(ProgramForwardDeceleration), Number(ProgramForwardJerk), Number(ProgramReturnVelocity),
-                    Number(ProgramReturnAcceleration), Number(ProgramReturnDeceleration), Number(ProgramReturnJerk));
+                    Number(ProgramReturnAcceleration), Number(ProgramReturnDeceleration), Number(ProgramReturnJerk), RecordSuffix());
                 await SendAsync(commandText);
             }
             catch (Exception ex) { ErrorText.Text = "准备定位参数无效：" + ex.Message; }
@@ -231,12 +231,16 @@ namespace DualClampExperimentUI
             await SendAsync(CurrentMode == "legacy" ? "START" : "PROGRAM_START");
         }
 
+        private async void Zero_Click(object sender, RoutedEventArgs e)
+        {
+            await SendAsync(CurrentMode == "legacy" ? "ZERO_FORCE" : "PROGRAM_ZERO_FORCE");
+        }
+
         private async void Abort_Click(object sender, RoutedEventArgs e) => await SendAsync(CurrentMode == "legacy" ? "ABORT" : "PROGRAM_ABORT");
 
         private async void Save_Click(object sender, RoutedEventArgs e)
         {
-            string path = System.IO.Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "records", DateTime.Now.ToString("yyyyMMdd_HHmmss"));
-            await SendAsync((CurrentMode == "legacy" ? "SAVE|" : "PROGRAM_SAVE|") + path);
+            await SendAsync(CurrentMode == "legacy" ? "SAVE|" : "PROGRAM_SAVE|");
         }
 
         private async Task<string> SendAsync(string command)
@@ -278,8 +282,16 @@ namespace DualClampExperimentUI
             bool ads = p[14] == "1"; _selfcheckDone = p[15] == "1"; _selfcheckBusy = p[16] == "1"; _leftLimitValid = p[17] == "1"; _setupBusy = p[20] == "1"; _setupDone = p[21] == "1";
             PhaseText.Text = _selfcheckBusy ? "SelfCheck (正在执行自检)" : LegacyPhase(int.Parse(p[1], CultureInfo.InvariantCulture));
             SelfCheckText.Text = _selfcheckBusy ? "PLC自检: 执行中" : _selfcheckDone ? "PLC自检: 已完成" : "PLC自检: 未完成";
-            CycleText.Text = "旧模式"; SetAdsStatus(ads, ads ? "ADS: 正常 (Port 851)" : "ADS: 未连接"); ErrorText.Text = p[26];
-            PrepareButton.IsEnabled = ads && _selfcheckDone && _leftLimitValid && !_selfcheckBusy && !_setupBusy; StartButton.IsEnabled = ads && _setupDone && !_setupBusy;
+            CycleText.Text = "旧模式"; SetAdsStatus(ads, ads ? "ADS: 正常 (Port 851)" : "ADS: 未连接");
+            int legacyZeroBusy = 27, legacyZeroDone = 28, legacyError = 26;
+            ZeroStatusText.Text = p.Length > legacyZeroDone && p[legacyZeroBusy] == "1" ? "力感零点：采集中" : p.Length > legacyZeroDone && p[legacyZeroDone] == "1" ? "力感零点：已完成" : "力感零点：未完成";
+            string legacyDirectory = p.Length > 36 ? p[36] : string.Empty;
+            bool legacyArchived = p.Length > 37 && p[37] == "1";
+            RecordStatusText.Text = legacyArchived ? "实时记录：已归档（" + p[34] + "点）" : p.Length > 34 && p[33] == "1" ? "实时记录：进行中（" + p[34] + "点）" : p.Length > 34 && p[34] != "0" ? "实时记录：待归档（" + p[34] + "点）" : "实时记录：未开始";
+            if (!string.IsNullOrWhiteSpace(legacyDirectory)) RecordStatusText.Text += "\n目录：" + legacyDirectory;
+            ZeroValuesText.Text = p.Length > 32 ? string.Format(CultureInfo.InvariantCulture, "fn1零点：{0:F3}  ft1零点：{1:F3}\nfn2零点：{2:F3}  ft2零点：{3:F3}", D(p[29]), D(p[30]), D(p[31]), D(p[32])) : "";
+            ErrorText.Text = p[legacyError];
+            PrepareButton.IsEnabled = ads && _selfcheckDone && _leftLimitValid && !_selfcheckBusy && !_setupBusy; StartButton.IsEnabled = ads && _setupDone && p.Length > 28 && p[28] == "1" && !_setupBusy; ZeroButton.IsEnabled = ads && _selfcheckDone && _setupDone && !_setupBusy && !_selfcheckBusy;
             Draw(ForceCanvas, Force1Line, _force1, Force2Line, _force2); Draw(TorqueCanvas, Torque1Line, _torque1, Torque2Line, _torque2);
         }
 
@@ -302,15 +314,24 @@ namespace DualClampExperimentUI
             }
             CycleText.Text = string.Format(CultureInfo.InvariantCulture, "周期：{0} / {1}", p[3], p[4]);
             bool ads = p[40] == "1";
-            PhaseText.Text = ProgramPhase(phase); ErrorText.Text = p[41];
+            int programZeroBusy = 42, programZeroDone = 43, programError = 41;
+            ZeroStatusText.Text = p.Length > programZeroDone && p[programZeroBusy] == "1" ? "力感零点：采集中" : p.Length > programZeroDone && p[programZeroDone] == "1" ? "力感零点：已完成" : "力感零点：未完成";
+            string programDirectory = p.Length > 51 ? p[51] : string.Empty;
+            bool programArchived = p.Length > 52 && p[52] == "1";
+            RecordStatusText.Text = programArchived ? "实时记录：已归档（" + p[49] + "点）" : p.Length > 49 && p[48] == "1" ? "实时记录：进行中（" + p[49] + "点）" : p.Length > 49 && p[49] != "0" ? "实时记录：待归档（" + p[49] + "点）" : "实时记录：未开始";
+            if (!string.IsNullOrWhiteSpace(programDirectory)) RecordStatusText.Text += "\n目录：" + programDirectory;
+            ZeroValuesText.Text = p.Length > 47 ? string.Format(CultureInfo.InvariantCulture, "fn1零点：{0:F3}  ft1零点：{1:F3}\nfn2零点：{2:F3}  ft2零点：{3:F3}", D(p[44]), D(p[45]), D(p[46]), D(p[47])) : "";
+            PhaseText.Text = ProgramPhase(phase); ErrorText.Text = p[programError];
             SetAdsStatus(ads, ads ? "ADS: 正常 (Port 851)" : "ADS: 未连接");
-            PrepareButton.IsEnabled = ads && _selfcheckDone && !_setupBusy; StartButton.IsEnabled = ads && _setupDone && !_setupBusy;
+            PrepareButton.IsEnabled = ads && _selfcheckDone && !_setupBusy; StartButton.IsEnabled = ads && _setupDone && p.Length > programZeroDone && p[programZeroDone] == "1" && !_setupBusy; ZeroButton.IsEnabled = ads && _selfcheckDone && _setupDone && !_setupBusy && phase == 2;
             Draw(ForceCanvas, Force1Line, _force1, Force2Line, _force2); Draw(TorqueCanvas, Torque1Line, _torque1, Torque2Line, _torque2);
         }
 
         private static double D(string value) => double.Parse(value, CultureInfo.InvariantCulture);
         private static string Number(TextBox box) => double.Parse(box.Text, CultureInfo.InvariantCulture).ToString(CultureInfo.InvariantCulture);
         private static string Int(TextBox box) => uint.Parse(box.Text, CultureInfo.InvariantCulture).ToString(CultureInfo.InvariantCulture);
+        private string RecordSuffix() => (RecordSuffixText.Text ?? "experiment").Replace("|", " ").Replace("\r", " ").Replace("\n", " ").Trim();
+        private static bool phase_legacy_recording(string[] parts) => parts.Length > 1 && int.TryParse(parts[1], NumberStyles.Integer, CultureInfo.InvariantCulture, out int phase) && phase >= 3 && phase <= 9;
         private static double ParseOrDefault(TextBox box, double fallback) { double value; return double.TryParse(box.Text, NumberStyles.Float, CultureInfo.InvariantCulture, out value) ? value : fallback; }
         private static void Add(List<double> values, double value) { values.Add(value); if (values.Count > 240) values.RemoveAt(0); }
         private static string LegacyPhase(int phase) => phase == 13 ? "自检完成" : phase == 14 ? "准备定位" : phase == 15 ? "准备完成" : phase.ToString(CultureInfo.InvariantCulture);

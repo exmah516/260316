@@ -21,6 +21,7 @@ bool DualClampController::open_ads()
 		last_error_ = "ADS连接失败：" + ads_.last_error();
 		return false;
 	}
+	if (stream_ads_.is_open()) stream_ads_.invalidate_zero();
 	last_error_.clear();
 	return true;
 }
@@ -28,7 +29,18 @@ bool DualClampController::open_ads()
 void DualClampController::close_ads()
 {
 	std::lock_guard<std::mutex> lock(mutex_);
+	if (recorder_.active())
+	{
+		ads_.request_abort();
+		std::string finalize_error;
+		const char* status = phase_ == DualClampPhase::Completed ? "Completed" : "Error";
+		if (!recorder_.finalize(status, "ADS连接已断开", stream_status_.zero, finalize_error)) last_error_ = finalize_error;
+		started_ = false;
+	}
 	ads_.close();
+	if (stream_ads_.is_open()) stream_ads_.invalidate_zero();
+	stream_ads_.close();
+	stream_status_.zero = {};
 }
 
 bool DualClampController::is_ads_open() const
@@ -40,6 +52,15 @@ bool DualClampController::is_ads_open() const
 bool DualClampController::prepare(const DualClampConfig& config)
 {
 	std::lock_guard<std::mutex> lock(mutex_);
+	if (recorder_.active())
+	{
+		std::string close_error;
+		if (!recorder_.finalize("Aborted", "重新准备定位，结束上一条记录", stream_status_.zero, close_error))
+		{
+			last_error_ = close_error;
+			return false;
+		}
+	}
 	if (config.moving_axis != 1 && config.moving_axis != 6)
 	{
 		last_error_ = "运动端必须是轴1或轴6";
@@ -63,6 +84,21 @@ bool DualClampController::prepare(const DualClampConfig& config)
 		return false;
 	}
 	config_ = config;
+	if (!stream_ads_.is_open() && !stream_ads_.open())
+	{
+		last_error_ = "实时记录ADS连接失败：" + stream_ads_.last_error();
+		return false;
+	}
+	if (!stream_ads_.reset_recording())
+	{
+		last_error_ = "清空实时记录缓冲失败：" + stream_ads_.last_error();
+		return false;
+	}
+	stream_ads_.invalidate_zero();
+	stream_status_ = {};
+	expected_block_sequence_ = 0;
+	expected_sample_index_ = 0;
+	zero_file_written_ = false;
 	if (!ads_.clear_sample_buffer())
 	{
 		last_error_ = "清空PLC采样缓冲失败：" + ads_.last_error();
@@ -101,6 +137,20 @@ bool DualClampController::start(const DualClampConfig& config)
 		return false;
 	}
 	config_ = config;
+	if (!stream_status_.zero.valid)
+	{
+		last_error_ = "请先点击力感取零点";
+		return false;
+	}
+	if (!recorder_.active())
+	{
+		std::string record_error;
+		if (!recorder_.begin("legacy", config_.record_suffix, record_error))
+		{
+			last_error_ = "创建实时记录目录失败：" + record_error;
+			return false;
+		}
+	}
 	abort_reason_.clear();
 	last_error_.clear();
 	started_ = true;
@@ -136,9 +186,17 @@ void DualClampController::tick(double dt_s)
 		{
 			last_error_ = "ADS读取实时数据失败：" + ads_.last_error();
 			phase_ = DualClampPhase::Error;
+			ads_.request_abort();
+			if (recorder_.active())
+			{
+				std::string finalize_error;
+				recorder_.finalize("Error", last_error_, stream_status_.zero, finalize_error);
+			}
+			started_ = false;
 			return;
 		}
 	}
+	poll_stream_locked();
 	phase_ = static_cast<DualClampPhase>(live_.plc_phase);
 	if (live_.selfcheck_done) selfcheck_requested_ = false;
 	if (phase_ == DualClampPhase::Completed || phase_ == DualClampPhase::Aborted || phase_ == DualClampPhase::Error)
@@ -149,6 +207,212 @@ void DualClampController::tick(double dt_s)
 	{
 		last_error_ = "PLC错误ID：" + std::to_string(live_.status_error_id);
 	}
+	live_.recording = stream_status_.recording;
+	live_.recording_overflow = stream_status_.overflow;
+	live_.recording_sample_count = stream_status_.total_count;
+	live_.recording_error_id = stream_status_.error_id;
+	live_.zero_busy = stream_status_.zero.busy;
+	live_.zero_done = stream_status_.zero.done;
+	live_.zero_values = stream_status_.zero.value;
+	if (stream_status_.zero.error_id != 0) last_error_ = "力感取零失败，错误ID：" + std::to_string(stream_status_.zero.error_id);
+}
+
+void DualClampController::poll_stream_locked()
+{
+	if (!stream_ads_.is_open() && !stream_ads_.open()) return;
+	if (recorder_.failed())
+	{
+		last_error_ = recorder_.last_error().empty() ? "实时记录写盘失败" : recorder_.last_error();
+		ads_.request_abort();
+		started_ = false;
+		return;
+	}
+	if (!stream_ads_.read_status(stream_status_))
+	{
+		if (started_)
+		{
+			last_error_ = "实时记录状态读取失败：" + stream_ads_.last_error();
+			stream_status_.error_id = 0x7403;
+			ads_.request_abort();
+			started_ = false;
+		}
+		return;
+	}
+	if (stream_status_.zero.done && !zero_file_written_ && recorder_.active())
+	{
+		std::vector<std::array<double, 4>> zero_samples;
+		std::string error;
+		if (stream_ads_.read_zero_samples(zero_samples))
+		{
+			bool ok = true;
+			for (std::size_t i = 0; i < zero_samples.size(); ++i) ok = recorder_.append_zero(zero_samples[i], static_cast<std::uint64_t>(i) * 1000, error) && ok;
+			ok = recorder_.finish_zero(stream_status_.zero, error) && ok;
+			if (!ok)
+			{
+				last_error_ = error;
+				ads_.request_abort();
+				started_ = false;
+				return;
+			}
+			zero_file_written_ = true;
+		}
+		else
+		{
+			last_error_ = "读取取零样本失败：" + stream_ads_.last_error();
+		}
+	}
+	if (stream_status_.overflow)
+	{
+		last_error_ = "实时记录缓冲区溢出，实验已中止";
+		ads_.request_abort();
+		started_ = false;
+		return;
+	}
+	if (!recorder_.active() || stream_status_.source_mode != 0) return;
+	for (int pass = 0; pass < 2; ++pass)
+	{
+		int slot = -1;
+		for (int candidate = 0; candidate < 2; ++candidate)
+		{
+			if (stream_status_.block_ready[candidate] && stream_status_.block_sequence[candidate] == expected_block_sequence_)
+			{
+				slot = candidate;
+				break;
+			}
+		}
+		if (slot < 0)
+		{
+			bool any_ready = stream_status_.block_ready[0] || stream_status_.block_ready[1];
+			if (any_ready)
+			{
+				last_error_ = "实时记录分块序号不连续";
+				ads_.request_abort();
+				started_ = false;
+			}
+			break;
+		}
+		std::vector<ExperimentStreamSample> raw;
+		std::uint32_t sequence = 0;
+		if (!stream_ads_.read_block(slot, raw, sequence))
+		{
+			last_error_ = "实时记录分块读取失败：" + stream_ads_.last_error();
+			ads_.request_abort();
+			started_ = false;
+			return;
+		}
+		if (sequence != expected_block_sequence_)
+		{
+			last_error_ = "实时记录分块序号不连续";
+			ads_.request_abort();
+			started_ = false;
+			return;
+		}
+		std::vector<DualClampSample> converted;
+		converted.reserve(raw.size());
+		for (const auto& r : raw)
+		{
+			if (r.index != expected_sample_index_)
+			{
+				last_error_ = "实时记录样本序号不连续";
+				ads_.request_abort();
+				started_ = false;
+				return;
+			}
+			++expected_sample_index_;
+			DualClampSample s{};
+			s.sample_index = r.index; s.plc_time_us = r.time_us; s.phase = r.phase; s.event_sequence = r.event_sequence;
+			s.axis1_pos_abs_mm = r.axis1_pos; s.axis1_velocity_mm_s = r.axis1_vel; s.axis1_acceleration_mm_s2 = r.axis1_acc;
+			s.axis6_pos_abs_mm = r.axis6_pos; s.axis6_velocity_mm_s = r.axis6_vel; s.axis6_acceleration_mm_s2 = r.axis6_acc;
+			s.ft_1_raw = r.ft1; s.fn_1_raw = r.fn1; s.ft_2_raw = r.ft2; s.fn_2_raw = r.fn2;
+			s.cylinder2_cmd = r.cylinder2; s.cylinder4_cmd = r.cylinder4;
+			converted.push_back(s);
+		}
+		std::string error;
+		if (!recorder_.append_dual(converted, 0, stream_status_.zero, error))
+		{
+			last_error_ = error;
+			ads_.request_abort();
+			started_ = false;
+			return;
+		}
+		if (!stream_ads_.acknowledge_block(slot, sequence))
+		{
+			last_error_ = "实时记录分块确认失败：" + stream_ads_.last_error();
+			ads_.request_abort();
+			started_ = false;
+			return;
+		}
+		++expected_block_sequence_;
+		stream_status_.block_ready[slot] = false;
+	}
+}
+
+bool DualClampController::request_zero()
+{
+	std::lock_guard<std::mutex> lock(mutex_);
+	poll_stream_locked();
+	if (!live_.selfcheck_done || !live_.setup_done || started_)
+	{
+		last_error_ = "取零点要求自检和准备定位完成，且实验未开始";
+		return false;
+	}
+	if (!stream_ads_.is_open() && !stream_ads_.open())
+	{
+		last_error_ = "实时记录ADS连接失败：" + stream_ads_.last_error();
+		return false;
+	}
+	if (!recorder_.active())
+	{
+		std::string error;
+		if (!recorder_.begin("legacy", config_.record_suffix, error)) { last_error_ = error; return false; }
+	}
+	zero_file_written_ = false;
+	{
+		std::string reset_error;
+		if (!recorder_.reset_zero_file(reset_error)) { last_error_ = reset_error; return false; }
+	}
+	{
+		std::string event_error;
+		if (!recorder_.begin_zero(event_error)) { last_error_ = event_error; return false; }
+	}
+	return stream_ads_.request_zero();
+}
+
+bool DualClampController::set_record_suffix(const std::string& suffix)
+{
+	std::lock_guard<std::mutex> lock(mutex_);
+	if (started_ || (recorder_.active() && phase_ != DualClampPhase::Completed && phase_ != DualClampPhase::Aborted && phase_ != DualClampPhase::Error))
+	{
+		last_error_ = "实验进行中不能修改保存名称";
+		return false;
+	}
+	config_.record_suffix = suffix;
+	return true;
+}
+
+void DualClampController::invalidate_zero()
+{
+	std::lock_guard<std::mutex> lock(mutex_);
+	if (stream_ads_.is_open()) stream_ads_.invalidate_zero();
+	stream_status_.zero = {};
+}
+
+ForceZeroState DualClampController::zero_state() const
+{
+	std::lock_guard<std::mutex> lock(mutex_);
+	return stream_status_.zero;
+}
+
+std::string DualClampController::recording_directory() const
+{
+	std::lock_guard<std::mutex> lock(mutex_);
+	return recorder_.directory();
+}
+
+bool DualClampController::recording_archived() const
+{
+	std::lock_guard<std::mutex> lock(mutex_);
+	return recorder_.archived();
 }
 
 bool DualClampController::write_metadata(const std::string& directory, std::string& error) const
@@ -204,6 +468,23 @@ bool DualClampController::write_csv(const std::string& directory, const std::vec
 bool DualClampController::save_samples(const std::string& directory, std::string& error)
 {
 	std::lock_guard<std::mutex> lock(mutex_);
+	if (recorder_.active())
+	{
+		poll_stream_locked();
+		DualClampLiveFrame latest{};
+		if (ads_.is_open() && ads_.read_live(latest))
+		{
+			live_ = latest;
+			phase_ = static_cast<DualClampPhase>(live_.plc_phase);
+		}
+		if (phase_ != DualClampPhase::Completed && phase_ != DualClampPhase::Aborted && phase_ != DualClampPhase::Error)
+		{
+			error = "实验正在进行，数据已经实时保存";
+			return false;
+		}
+		return recorder_.finalize(phase_ == DualClampPhase::Completed ? "Completed" : phase_ == DualClampPhase::Aborted ? "Aborted" : "Error", last_error_, stream_status_.zero, error);
+	}
+	if (directory.empty() && !recorder_.directory().empty()) return true;
 	if (!started_ || phase_ != DualClampPhase::Completed)
 	{
 		error = "实验尚未完成";

@@ -1,6 +1,8 @@
 #pragma once
 
 #include "DualClampAds.h"
+#include "ExperimentStreamAds.h"
+#include "ExperimentStreamRecorder.h"
 
 #include <array>
 #include <cstdint>
@@ -18,8 +20,14 @@ public:
 	void abort(const std::string& reason);
 	void tick(double dt_s);
 	bool save_samples(const std::string& directory, std::string& error);
+	bool request_zero();
+	void invalidate_zero();
+	bool set_record_suffix(const std::string& suffix);
+	ForceZeroState zero_state() const;
 	DualClampPhase phase() const;
 	std::string last_error() const;
+	std::string recording_directory() const;
+	bool recording_archived() const;
 	DualClampConfig config() const;
 	DualClampLiveFrame live() const;
 	std::uint32_t event_sequence() const;
@@ -45,4 +53,11 @@ private:
 	std::uint32_t event_sequence_ = 0;
 	bool started_ = false;
 	bool selfcheck_requested_ = false;
+	ExperimentStreamAds stream_ads_;
+	ExperimentStreamRecorder recorder_;
+	ExperimentStreamStatus stream_status_{};
+	std::uint32_t expected_block_sequence_ = 0;
+	std::uint32_t expected_sample_index_ = 0;
+	bool zero_file_written_ = false;
+	void poll_stream_locked();
 };

@@ -37,6 +37,8 @@
     <ClCompile Include="ProgrammedDeliveryTypes.cpp" />
     <ClCompile Include="ProgrammedDeliveryAds.cpp" />
     <ClCompile Include="ProgrammedDeliveryController.cpp" />
+    <ClCompile Include="ExperimentStreamAds.cpp" />
+    <ClCompile Include="ExperimentStreamRecorder.cpp" />
     <ClCompile Include="DualClampPipe.cpp" />
     <ClCompile Include="main.cpp" />
   </ItemGroup>
@@ -50,6 +52,8 @@
     <ClInclude Include="ProgrammedDeliveryTypes.h" />
     <ClInclude Include="ProgrammedDeliveryAds.h" />
     <ClInclude Include="ProgrammedDeliveryController.h" />
+    <ClInclude Include="ExperimentStreamAds.h" />
+    <ClInclude Include="ExperimentStreamRecorder.h" />
     <ClInclude Include="DualClampPipe.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />

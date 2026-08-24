@@ -53,6 +53,7 @@ struct DualClampConfig
 	DualClampRecoveryMode recovery_mode = DualClampRecoveryMode::Move;
 	std::string experiment_name = "dual_clamp";
 	std::string note;
+	std::string record_suffix = "dual_clamp";
 };
 
 struct DualClampLiveFrame
@@ -87,6 +88,13 @@ struct DualClampLiveFrame
 	double setup_target_axis1_abs_mm = 0.0;
 	double setup_target_axis6_abs_mm = 0.0;
 	double return_target_abs_mm = 0.0;
+	bool recording = false;
+	bool recording_overflow = false;
+	std::uint32_t recording_sample_count = 0;
+	std::uint32_t recording_error_id = 0;
+	bool zero_busy = false;
+	bool zero_done = false;
+	std::array<double, 4> zero_values{};
 };
 
 struct DualClampSample

@@ -1,6 +1,8 @@
 #pragma once
 
 #include "ProgrammedDeliveryAds.h"
+#include "ExperimentStreamAds.h"
+#include "ExperimentStreamRecorder.h"
 
 #include <mutex>
 #include <string>
@@ -20,10 +22,16 @@ public:
 	void abort();
 	void tick();
 	bool save_samples(const std::string& directory, std::string& error);
+	bool request_zero();
+	void invalidate_zero();
+	bool set_record_suffix(const std::string& suffix);
+	ForceZeroState zero_state() const;
 
 	ProgrammedDeliveryConfig config() const;
 	ProgrammedDeliveryLiveFrame live() const;
 	std::string last_error() const;
+	std::string recording_directory() const;
+	bool recording_archived() const;
 
 private:
 	bool validate_config(const ProgrammedDeliveryConfig& config, std::string& error) const;
@@ -37,4 +45,11 @@ private:
 	ProgrammedDeliveryLiveFrame live_{};
 	std::string last_error_;
 	bool started_ = false;
+	ExperimentStreamAds stream_ads_;
+	ExperimentStreamRecorder recorder_;
+	ExperimentStreamStatus stream_status_{};
+	std::uint32_t expected_block_sequence_ = 0;
+	std::uint32_t expected_sample_index_ = 0;
+	bool zero_file_written_ = false;
+	void poll_stream_locked();
 };

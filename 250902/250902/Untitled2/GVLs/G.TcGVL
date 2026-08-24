@@ -250,6 +250,95 @@ VAR_GLOBAL
 	program_test_sample_fn2		: ARRAY[0..32767] OF INT;
 	program_test_sample_ft2		: ARRAY[0..32767] OF INT;
 
+	// 长时间实验实时分块记录接口。每个块512点，PLC在两个块之间交替写入。
+	experiment_record_clear		: BOOL := FALSE;
+	experiment_record_enable		: BOOL := FALSE;
+	experiment_record_block_ready	: ARRAY[1..2] OF BOOL := [FALSE,FALSE];
+	experiment_record_block_sequence : ARRAY[1..2] OF UDINT := [0,0];
+	experiment_record_block_count : ARRAY[1..2] OF UINT := [0,0];
+	experiment_record_block_ack_sequence : ARRAY[1..2] OF UDINT := [16#FFFFFFFF,16#FFFFFFFF];
+	experiment_record_overflow	: BOOL := FALSE;
+	experiment_record_total_count : UDINT := 0;
+	experiment_record_error_id	: UDINT := 0;
+	experiment_record_source_mode : USINT := 0; // 0=旧双机构，1=导管，2=导丝
+
+	experiment_record_block0_index : ARRAY[0..511] OF UDINT;
+	experiment_record_block0_time_us : ARRAY[0..511] OF ULINT;
+	experiment_record_block0_phase : ARRAY[0..511] OF USINT;
+	experiment_record_block0_event_sequence : ARRAY[0..511] OF UDINT;
+	experiment_record_block0_cycle_index : ARRAY[0..511] OF UINT;
+	experiment_record_block0_axis1_pos : ARRAY[0..511] OF LREAL;
+	experiment_record_block0_axis1_vel : ARRAY[0..511] OF LREAL;
+	experiment_record_block0_axis1_acc : ARRAY[0..511] OF LREAL;
+	experiment_record_block0_axis2_pos : ARRAY[0..511] OF LREAL;
+	experiment_record_block0_axis2_vel : ARRAY[0..511] OF LREAL;
+	experiment_record_block0_axis2_acc : ARRAY[0..511] OF LREAL;
+	experiment_record_block0_axis5_pos : ARRAY[0..511] OF LREAL;
+	experiment_record_block0_axis5_vel : ARRAY[0..511] OF LREAL;
+	experiment_record_block0_axis5_acc : ARRAY[0..511] OF LREAL;
+	experiment_record_block0_axis6_pos : ARRAY[0..511] OF LREAL;
+	experiment_record_block0_axis6_vel : ARRAY[0..511] OF LREAL;
+	experiment_record_block0_axis6_acc : ARRAY[0..511] OF LREAL;
+	experiment_record_block0_axis7_pos : ARRAY[0..511] OF LREAL;
+	experiment_record_block0_axis7_vel : ARRAY[0..511] OF LREAL;
+	experiment_record_block0_axis7_acc : ARRAY[0..511] OF LREAL;
+	experiment_record_block0_cylinder1 : ARRAY[0..511] OF WORD;
+	experiment_record_block0_cylinder2 : ARRAY[0..511] OF WORD;
+	experiment_record_block0_cylinder3 : ARRAY[0..511] OF WORD;
+	experiment_record_block0_cylinder4 : ARRAY[0..511] OF WORD;
+	experiment_record_block0_fn1 : ARRAY[0..511] OF INT;
+	experiment_record_block0_ft1 : ARRAY[0..511] OF INT;
+	experiment_record_block0_fn2 : ARRAY[0..511] OF INT;
+	experiment_record_block0_ft2 : ARRAY[0..511] OF INT;
+
+	experiment_record_block1_index : ARRAY[0..511] OF UDINT;
+	experiment_record_block1_time_us : ARRAY[0..511] OF ULINT;
+	experiment_record_block1_phase : ARRAY[0..511] OF USINT;
+	experiment_record_block1_event_sequence : ARRAY[0..511] OF UDINT;
+	experiment_record_block1_cycle_index : ARRAY[0..511] OF UINT;
+	experiment_record_block1_axis1_pos : ARRAY[0..511] OF LREAL;
+	experiment_record_block1_axis1_vel : ARRAY[0..511] OF LREAL;
+	experiment_record_block1_axis1_acc : ARRAY[0..511] OF LREAL;
+	experiment_record_block1_axis2_pos : ARRAY[0..511] OF LREAL;
+	experiment_record_block1_axis2_vel : ARRAY[0..511] OF LREAL;
+	experiment_record_block1_axis2_acc : ARRAY[0..511] OF LREAL;
+	experiment_record_block1_axis5_pos : ARRAY[0..511] OF LREAL;
+	experiment_record_block1_axis5_vel : ARRAY[0..511] OF LREAL;
+	experiment_record_block1_axis5_acc : ARRAY[0..511] OF LREAL;
+	experiment_record_block1_axis6_pos : ARRAY[0..511] OF LREAL;
+	experiment_record_block1_axis6_vel : ARRAY[0..511] OF LREAL;
+	experiment_record_block1_axis6_acc : ARRAY[0..511] OF LREAL;
+	experiment_record_block1_axis7_pos : ARRAY[0..511] OF LREAL;
+	experiment_record_block1_axis7_vel : ARRAY[0..511] OF LREAL;
+	experiment_record_block1_axis7_acc : ARRAY[0..511] OF LREAL;
+	experiment_record_block1_cylinder1 : ARRAY[0..511] OF WORD;
+	experiment_record_block1_cylinder2 : ARRAY[0..511] OF WORD;
+	experiment_record_block1_cylinder3 : ARRAY[0..511] OF WORD;
+	experiment_record_block1_cylinder4 : ARRAY[0..511] OF WORD;
+	experiment_record_block1_fn1 : ARRAY[0..511] OF INT;
+	experiment_record_block1_ft1 : ARRAY[0..511] OF INT;
+	experiment_record_block1_fn2 : ARRAY[0..511] OF INT;
+	experiment_record_block1_ft2 : ARRAY[0..511] OF INT;
+
+	// 四路力感手动取零。PLC以1 ms任务周期采集1000点并计算均值、标准差。
+	experiment_zero_req : BOOL := FALSE;
+	experiment_zero_busy : BOOL := FALSE;
+	experiment_zero_done : BOOL := FALSE;
+	experiment_zero_error_id : UDINT := 0;
+	experiment_zero_sample_count : UINT := 0;
+	experiment_zero_fn1 : LREAL := 0.0;
+	experiment_zero_ft1 : LREAL := 0.0;
+	experiment_zero_fn2 : LREAL := 0.0;
+	experiment_zero_ft2 : LREAL := 0.0;
+	experiment_zero_fn1_std : LREAL := 0.0;
+	experiment_zero_ft1_std : LREAL := 0.0;
+	experiment_zero_fn2_std : LREAL := 0.0;
+	experiment_zero_ft2_std : LREAL := 0.0;
+	experiment_zero_sample_fn1 : ARRAY[0..999] OF INT;
+	experiment_zero_sample_ft1 : ARRAY[0..999] OF INT;
+	experiment_zero_sample_fn2 : ARRAY[0..999] OF INT;
+	experiment_zero_sample_ft2 : ARRAY[0..999] OF INT;
+
 
 END_VAR]]></Declaration>
   </GVL>

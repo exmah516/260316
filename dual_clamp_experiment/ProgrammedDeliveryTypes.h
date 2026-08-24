@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <cstdint>
 #include <string>
 
@@ -43,6 +44,7 @@ struct ProgrammedDeliveryConfig
 	double return_acceleration_mm_s2 = 100.0;
 	double return_deceleration_mm_s2 = 100.0;
 	double return_jerk_mm_s3 = 1000.0;
+	std::string record_suffix = "program_test";
 };
 
 struct ProgrammedDeliveryLiveFrame
@@ -74,6 +76,13 @@ struct ProgrammedDeliveryLiveFrame
 	short fn1 = 0, ft1 = 0, fn2 = 0, ft2 = 0;
 	std::uint16_t cylinder1 = 0, cylinder2 = 0, cylinder3 = 0, cylinder4 = 0;
 	bool valid = false;
+	bool recording = false;
+	bool recording_overflow = false;
+	std::uint32_t recording_sample_count = 0;
+	std::uint32_t recording_error_id = 0;
+	bool zero_busy = false;
+	bool zero_done = false;
+	std::array<double, 4> zero_values{};
 };
 
 struct ProgrammedDeliverySample

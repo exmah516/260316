@@ -1,0 +1,232 @@
+<?xml version="1.0" encoding="utf-8"?>
+<TcPlcObject Version="1.1.0.1" ProductVersion="3.1.4024.15">
+  <POU Name="ExperimentRecorder" Id="{b8b24f24-2a90-4fa0-8d1a-7c7df02c22d5}" SpecialFunc="None">
+    <Declaration><![CDATA[FUNCTION_BLOCK ExperimentRecorder
+VAR
+    i : INT;
+    write_block : INT := 1;
+    write_index : INT := 0;
+    block_sequence : UDINT := 0;
+    record_active : BOOL := FALSE;
+    previous_record_active : BOOL := FALSE;
+    source_mode : USINT := 0;
+    phase_value : USINT := 0;
+    cycle_value : UINT := 0;
+    zero_index : UINT := 0;
+    zero_sum_fn1 : LREAL := 0.0;
+    zero_sum_ft1 : LREAL := 0.0;
+    zero_sum_fn2 : LREAL := 0.0;
+    zero_sum_ft2 : LREAL := 0.0;
+    zero_sum2_fn1 : LREAL := 0.0;
+    zero_sum2_ft1 : LREAL := 0.0;
+    zero_sum2_fn2 : LREAL := 0.0;
+    zero_sum2_ft2 : LREAL := 0.0;
+    mean_value : LREAL := 0.0;
+    variance_value : LREAL := 0.0;
+END_VAR]]></Declaration>
+    <Implementation>
+      <ST><![CDATA[
+// 先处理上位机对已满块的确认，确认序号必须与块序号一致。
+FOR i := 1 TO 2 DO
+    IF G.experiment_record_block_ready[i] AND
+       (G.experiment_record_block_ack_sequence[i] = G.experiment_record_block_sequence[i]) THEN
+        G.experiment_record_block_ready[i] := FALSE;
+        G.experiment_record_block_count[i] := 0;
+    END_IF
+END_FOR
+
+IF G.experiment_record_clear THEN
+    G.experiment_record_clear := FALSE;
+    G.experiment_record_enable := FALSE;
+    G.experiment_record_overflow := FALSE;
+    G.experiment_record_error_id := 0;
+    G.experiment_record_source_mode := 0;
+    G.experiment_record_total_count := 0;
+    write_block := 1;
+    write_index := 0;
+    block_sequence := 0;
+    FOR i := 1 TO 2 DO
+        G.experiment_record_block_ready[i] := FALSE;
+        G.experiment_record_block_sequence[i] := 0;
+        G.experiment_record_block_count[i] := 0;
+        G.experiment_record_block_ack_sequence[i] := 16#FFFFFFFF;
+    END_FOR
+END_IF
+
+// 四路力感取零：仅在没有运动采样时接受请求，采集1000个1 ms点。
+IF G.experiment_zero_req AND NOT G.experiment_zero_busy THEN
+    G.experiment_zero_req := FALSE;
+    G.experiment_zero_busy := TRUE;
+    G.experiment_zero_done := FALSE;
+    G.experiment_zero_error_id := 0;
+    G.experiment_zero_sample_count := 0;
+    zero_index := 0;
+    zero_sum_fn1 := 0.0;
+    zero_sum_ft1 := 0.0;
+    zero_sum_fn2 := 0.0;
+    zero_sum_ft2 := 0.0;
+    zero_sum2_fn1 := 0.0;
+    zero_sum2_ft1 := 0.0;
+    zero_sum2_fn2 := 0.0;
+    zero_sum2_ft2 := 0.0;
+END_IF
+
+IF G.experiment_zero_busy THEN
+    IF G.dual_clamp_sample_arm OR G.program_test_sample_arm THEN
+        G.experiment_zero_busy := FALSE;
+        G.experiment_zero_error_id := 16#7401;
+    ELSE
+        G.experiment_zero_sample_fn1[zero_index] := G.fn_1_value;
+        G.experiment_zero_sample_ft1[zero_index] := G.ft_1_value;
+        G.experiment_zero_sample_fn2[zero_index] := G.fn_2_value;
+        G.experiment_zero_sample_ft2[zero_index] := G.ft_2_value;
+        zero_sum_fn1 := zero_sum_fn1 + INT_TO_LREAL(G.fn_1_value);
+        zero_sum_ft1 := zero_sum_ft1 + INT_TO_LREAL(G.ft_1_value);
+        zero_sum_fn2 := zero_sum_fn2 + INT_TO_LREAL(G.fn_2_value);
+        zero_sum_ft2 := zero_sum_ft2 + INT_TO_LREAL(G.ft_2_value);
+        zero_sum2_fn1 := zero_sum2_fn1 + INT_TO_LREAL(G.fn_1_value) * INT_TO_LREAL(G.fn_1_value);
+        zero_sum2_ft1 := zero_sum2_ft1 + INT_TO_LREAL(G.ft_1_value) * INT_TO_LREAL(G.ft_1_value);
+        zero_sum2_fn2 := zero_sum2_fn2 + INT_TO_LREAL(G.fn_2_value) * INT_TO_LREAL(G.fn_2_value);
+        zero_sum2_ft2 := zero_sum2_ft2 + INT_TO_LREAL(G.ft_2_value) * INT_TO_LREAL(G.ft_2_value);
+        IF zero_index >= 999 THEN
+            G.experiment_zero_sample_count := 1000;
+            G.experiment_zero_fn1 := zero_sum_fn1 / 1000.0;
+            G.experiment_zero_ft1 := zero_sum_ft1 / 1000.0;
+            G.experiment_zero_fn2 := zero_sum_fn2 / 1000.0;
+            G.experiment_zero_ft2 := zero_sum_ft2 / 1000.0;
+            variance_value := zero_sum2_fn1 / 1000.0 - G.experiment_zero_fn1 * G.experiment_zero_fn1;
+            IF variance_value < 0.0 THEN variance_value := 0.0; END_IF
+            G.experiment_zero_fn1_std := SQRT(variance_value);
+            variance_value := zero_sum2_ft1 / 1000.0 - G.experiment_zero_ft1 * G.experiment_zero_ft1;
+            IF variance_value < 0.0 THEN variance_value := 0.0; END_IF
+            G.experiment_zero_ft1_std := SQRT(variance_value);
+            variance_value := zero_sum2_fn2 / 1000.0 - G.experiment_zero_fn2 * G.experiment_zero_fn2;
+            IF variance_value < 0.0 THEN variance_value := 0.0; END_IF
+            G.experiment_zero_fn2_std := SQRT(variance_value);
+            variance_value := zero_sum2_ft2 / 1000.0 - G.experiment_zero_ft2 * G.experiment_zero_ft2;
+            IF variance_value < 0.0 THEN variance_value := 0.0; END_IF
+            G.experiment_zero_ft2_std := SQRT(variance_value);
+            G.experiment_zero_busy := FALSE;
+            G.experiment_zero_done := TRUE;
+        ELSE
+            zero_index := zero_index + 1;
+        END_IF
+    END_IF
+END_IF
+
+record_active := G.dual_clamp_sample_arm OR G.program_test_sample_arm;
+IF G.program_test_sample_arm THEN
+    source_mode := G.program_test_mode;
+    phase_value := G.program_test_phase;
+    cycle_value := G.program_test_cycle_index;
+ELSIF G.dual_clamp_sample_arm THEN
+    source_mode := 0;
+    phase_value := UINT_TO_USINT(G.dual_clamp_phase);
+    cycle_value := 0;
+END_IF
+IF record_active THEN
+    G.experiment_record_source_mode := source_mode;
+END_IF
+
+// 采样从旧模式或程序模式的sample_arm直接驱动，两个块满时置溢出，不覆盖未读数据。
+IF record_active AND NOT G.experiment_record_overflow THEN
+    G.experiment_record_enable := TRUE;
+    IF G.experiment_record_block_ready[write_block] THEN
+        IF NOT G.experiment_record_block_ready[3 - write_block] THEN
+            write_block := 3 - write_block;
+            write_index := 0;
+        ELSE
+            G.experiment_record_overflow := TRUE;
+            G.experiment_record_error_id := 16#7402;
+        END_IF
+    END_IF
+    IF NOT G.experiment_record_overflow AND NOT G.experiment_record_block_ready[write_block] THEN
+        IF write_block = 1 THEN
+            G.experiment_record_block0_index[write_index] := G.experiment_record_total_count;
+            G.experiment_record_block0_time_us[write_index] := UDINT_TO_ULINT(G.experiment_record_total_count) * 1000;
+            G.experiment_record_block0_phase[write_index] := phase_value;
+            G.experiment_record_block0_event_sequence[write_index] := G.program_test_event_sequence + G.dual_clamp_event_sequence;
+            G.experiment_record_block0_cycle_index[write_index] := cycle_value;
+            G.experiment_record_block0_axis1_pos[write_index] := G.axis[1].NcToPlc.ActPos;
+            G.experiment_record_block0_axis1_vel[write_index] := G.axis[1].NcToPlc.ActVelo;
+            G.experiment_record_block0_axis1_acc[write_index] := G.axis[1].NcToPlc.ActAcc;
+            G.experiment_record_block0_axis2_pos[write_index] := G.axis[2].NcToPlc.ActPos;
+            G.experiment_record_block0_axis2_vel[write_index] := G.axis[2].NcToPlc.ActVelo;
+            G.experiment_record_block0_axis2_acc[write_index] := G.axis[2].NcToPlc.ActAcc;
+            G.experiment_record_block0_axis5_pos[write_index] := G.axis[5].NcToPlc.ActPos;
+            G.experiment_record_block0_axis5_vel[write_index] := G.axis[5].NcToPlc.ActVelo;
+            G.experiment_record_block0_axis5_acc[write_index] := G.axis[5].NcToPlc.ActAcc;
+            G.experiment_record_block0_axis6_pos[write_index] := G.axis[6].NcToPlc.ActPos;
+            G.experiment_record_block0_axis6_vel[write_index] := G.axis[6].NcToPlc.ActVelo;
+            G.experiment_record_block0_axis6_acc[write_index] := G.axis[6].NcToPlc.ActAcc;
+            G.experiment_record_block0_axis7_pos[write_index] := G.axis[7].NcToPlc.ActPos;
+            G.experiment_record_block0_axis7_vel[write_index] := G.axis[7].NcToPlc.ActVelo;
+            G.experiment_record_block0_axis7_acc[write_index] := G.axis[7].NcToPlc.ActAcc;
+            G.experiment_record_block0_cylinder1[write_index] := G.cylinder1_value;
+            G.experiment_record_block0_cylinder2[write_index] := G.cylinder2_value;
+            G.experiment_record_block0_cylinder3[write_index] := G.cylinder3_value;
+            G.experiment_record_block0_cylinder4[write_index] := G.cylinder4_value;
+            G.experiment_record_block0_fn1[write_index] := G.fn_1_value;
+            G.experiment_record_block0_ft1[write_index] := G.ft_1_value;
+            G.experiment_record_block0_fn2[write_index] := G.fn_2_value;
+            G.experiment_record_block0_ft2[write_index] := G.ft_2_value;
+        ELSE
+            G.experiment_record_block1_index[write_index] := G.experiment_record_total_count;
+            G.experiment_record_block1_time_us[write_index] := UDINT_TO_ULINT(G.experiment_record_total_count) * 1000;
+            G.experiment_record_block1_phase[write_index] := phase_value;
+            G.experiment_record_block1_event_sequence[write_index] := G.program_test_event_sequence + G.dual_clamp_event_sequence;
+            G.experiment_record_block1_cycle_index[write_index] := cycle_value;
+            G.experiment_record_block1_axis1_pos[write_index] := G.axis[1].NcToPlc.ActPos;
+            G.experiment_record_block1_axis1_vel[write_index] := G.axis[1].NcToPlc.ActVelo;
+            G.experiment_record_block1_axis1_acc[write_index] := G.axis[1].NcToPlc.ActAcc;
+            G.experiment_record_block1_axis2_pos[write_index] := G.axis[2].NcToPlc.ActPos;
+            G.experiment_record_block1_axis2_vel[write_index] := G.axis[2].NcToPlc.ActVelo;
+            G.experiment_record_block1_axis2_acc[write_index] := G.axis[2].NcToPlc.ActAcc;
+            G.experiment_record_block1_axis5_pos[write_index] := G.axis[5].NcToPlc.ActPos;
+            G.experiment_record_block1_axis5_vel[write_index] := G.axis[5].NcToPlc.ActVelo;
+            G.experiment_record_block1_axis5_acc[write_index] := G.axis[5].NcToPlc.ActAcc;
+            G.experiment_record_block1_axis6_pos[write_index] := G.axis[6].NcToPlc.ActPos;
+            G.experiment_record_block1_axis6_vel[write_index] := G.axis[6].NcToPlc.ActVelo;
+            G.experiment_record_block1_axis6_acc[write_index] := G.axis[6].NcToPlc.ActAcc;
+            G.experiment_record_block1_axis7_pos[write_index] := G.axis[7].NcToPlc.ActPos;
+            G.experiment_record_block1_axis7_vel[write_index] := G.axis[7].NcToPlc.ActVelo;
+            G.experiment_record_block1_axis7_acc[write_index] := G.axis[7].NcToPlc.ActAcc;
+            G.experiment_record_block1_cylinder1[write_index] := G.cylinder1_value;
+            G.experiment_record_block1_cylinder2[write_index] := G.cylinder2_value;
+            G.experiment_record_block1_cylinder3[write_index] := G.cylinder3_value;
+            G.experiment_record_block1_cylinder4[write_index] := G.cylinder4_value;
+            G.experiment_record_block1_fn1[write_index] := G.fn_1_value;
+            G.experiment_record_block1_ft1[write_index] := G.ft_1_value;
+            G.experiment_record_block1_fn2[write_index] := G.fn_2_value;
+            G.experiment_record_block1_ft2[write_index] := G.ft_2_value;
+        END_IF
+        write_index := write_index + 1;
+        G.experiment_record_total_count := G.experiment_record_total_count + 1;
+        IF write_index >= 512 THEN
+            G.experiment_record_block_sequence[write_block] := block_sequence;
+            block_sequence := block_sequence + 1;
+            G.experiment_record_block_count[write_block] := 512;
+            G.experiment_record_block_ready[write_block] := TRUE;
+            write_block := 3 - write_block;
+            write_index := 0;
+        END_IF
+    END_IF
+ELSIF previous_record_active AND NOT record_active AND write_index > 0 AND NOT G.experiment_record_overflow THEN
+    IF write_block = 1 THEN
+        G.experiment_record_block_sequence[write_block] := block_sequence;
+    ELSE
+        G.experiment_record_block_sequence[write_block] := block_sequence;
+    END_IF
+    block_sequence := block_sequence + 1;
+    G.experiment_record_block_count[write_block] := write_index;
+    G.experiment_record_block_ready[write_block] := TRUE;
+    write_index := 0;
+    G.experiment_record_enable := FALSE;
+ELSIF NOT record_active THEN
+    G.experiment_record_enable := FALSE;
+END_IF
+previous_record_active := record_active;
+]]></ST>
+    </Implementation>
+  </POU>
+</TcPlcObject>
