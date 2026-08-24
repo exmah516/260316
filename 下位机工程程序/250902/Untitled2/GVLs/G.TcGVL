@@ -1,0 +1,126 @@
+<?xml version="1.0" encoding="utf-8"?>
+<TcPlcObject Version="1.1.0.1" ProductVersion="3.1.4024.15">
+  <GVL Name="G" Id="{ccabbda2-7ae2-40eb-8293-a1b7a36c29fa}">
+    <Declaration><![CDATA[{attribute 'qualified_only'}
+VAR_GLOBAL
+	//专有变量
+	gen_state			:	state := _init;
+	axis				:	ARRAY[1..7] OF axis_REF;
+	power_				:	ARRAY[1..7] OF MC_Power;
+	power_output		:	ARRAY[1..7] OF ST_McOutputs;
+	axis_Reset			:	ARRAY[1..7] OF MC_Reset;
+	reset_output		:	ARRAY[1..7] OF ST_McOutputs;
+	SetPointGenEnable	:	ARRAY[1..7] OF MC_ExtSetPointGenEnable;
+	SetPointGenDisable	:	ARRAY[1..7] OF MC_ExtSetPointGenDisable;
+	SetPointGenEnable_output,	SetPointGenDisable_output	: ARRAY[1..7] OF ST_McOutputs;
+	move_jog			: 	ARRAY [1..7] OF MC_Jog;
+	enable,	disable		:	BOOL;	//跟随运动变量
+	flag:INT:=0;
+	flagpos:LREAL:=0; // 遗留调试量，当前无业务读取
+    //其他变量
+    init_pos			: ARRAY[1..7] OF LREAL := [30, 9, 0, 0, 0, 30, 13];
+    refer,Act_pos,act_h,act_hf	: ARRAY[1..7] OF LREAL;
+    
+	// 自检相关变量
+    leftlimit           : ARRAY[1..7] OF LREAL;
+	act_pos_from_left	: ARRAY[1..7] OF LREAL;
+	refer_from_left		: ARRAY[1..7] OF LREAL;
+    self_check_done     : BOOL := FALSE;
+	startup_loading_ready : BOOL := FALSE; // TRUE=自检刚完成且仍允许按标准器械装卸姿态启动；上位机开始控制前消费为 FALSE
+	handle_reinit_req	: BOOL := FALSE;
+	handle_reinit_done	: BOOL := FALSE;
+	selfcheck_reset_req : BOOL := FALSE;
+	selfcheck_stu		: ARRAY[1..7] OF INT;
+	selfcheck_all_reach_limit : BOOL := FALSE;
+
+	// 急停/掉使能冻结：用于通知上位机停止写 refer，并在恢复时触发重同步
+	estop_hold_req		: BOOL := FALSE;
+
+	// ADS 上位机心跳看门狗：上位机保持会话号不变并递增心跳序号。
+	// 超时后必须先恢复心跳，再置 host_recover_req；PLC 停稳后清除请求并启动重初始化。
+	// host_comm_timeout=FALSE 表示请求已受理，handle_reinit_done=TRUE 表示重初始化完成。
+	host_session_id			: UDINT := 0;
+	host_heartbeat_sequence	: UDINT := 0;
+	host_recover_req		: BOOL := FALSE;
+	host_comm_timeout		: BOOL := TRUE;
+
+	axis6_fast_retract	: BOOL := FALSE;
+	axis1_fast_return	: BOOL := FALSE;
+	startup_smoothing_bypass : BOOL := FALSE;
+	return_cmd			: ARRAY[1..7] OF ST_AxisPlannedReturnCmd;
+	axis4_fwd_req		: BOOL := FALSE;
+	axis4_rev_req		: BOOL := FALSE;
+	axis4_manual_busy	: BOOL := FALSE;
+	axis4_manual_done	: BOOL := FALSE;
+	axis4_manual_error	: BOOL := FALSE;
+	axis4_manual_error_id : UDINT := 0;
+
+
+	// 速度门限与参考缓动（参考“方式10-仿真”风格）
+	v_limit				: ARRAY[1..7] OF LREAL := [7.5,7.5,1.5,1.5,1.5,7.5,1.5];
+	ref_slow			: ARRAY[1..7] OF LREAL := [0,0,0,0,0,0,0];
+
+	// PID 参数（可按轴整定）及状态量
+	// 以下 PID 参数已废弃：控制路径已改为速率限制+滑动平均+轨迹滤波，上位机勿依赖。
+	Kp					: ARRAY[1..7] OF LREAL := [0.14,0.14,0.14,0.14,0.14,0.14,0.14];
+	Ki					: ARRAY[1..7] OF LREAL := [0.016,0.016,0.016,0.016,0.016,0.016,0.016];
+	Kd					: ARRAY[1..7] OF LREAL := [0.1,0.1,0.1,0.1,0.1,0.1,0.1];
+	pid_i				: ARRAY[1..7] OF LREAL := [0,0,0,0,0,0,0];
+	pid_e_prev			: ARRAY[1..7] OF LREAL := [0,0,0,0,0,0,0];
+	pid_i_limit			: ARRAY[1..7] OF LREAL := [100,100,100,100,100,100,100];
+
+	// ========== 定位臂 5 轴独立点动控制变量 ==========
+	arm_axis			: ARRAY[1..5] OF AXIS_REF;	// 定位臂轴对象，链接到 NC Axis 1..5
+	arm_manual_enable	: BOOL := FALSE;			// 定位臂手动控制总使能，FALSE 时所有点动请求无效
+	arm_enable_req		: ARRAY[1..5] OF BOOL := [FALSE,FALSE,FALSE,FALSE,FALSE];	// TRUE=对应轴保持上电
+	arm_reset_req		: ARRAY[1..5] OF BOOL := [FALSE,FALSE,FALSE,FALSE,FALSE];	// TRUE=请求清错，PLC 完成后自动清零
+	arm_jog_pos_req		: ARRAY[1..5] OF BOOL := [FALSE,FALSE,FALSE,FALSE,FALSE];	// UI 正向点动按钮，按下 TRUE、松开 FALSE
+	arm_jog_neg_req		: ARRAY[1..5] OF BOOL := [FALSE,FALSE,FALSE,FALSE,FALSE];	// UI 反向点动按钮，按下 TRUE、松开 FALSE
+	arm_jog_velocity	: ARRAY[1..5] OF LREAL := [5.0,5.0,5.0,5.0,5.0];
+	arm_jog_acc		: ARRAY[1..5] OF LREAL := [50.0,50.0,50.0,50.0,50.0];
+	arm_jog_dec		: ARRAY[1..5] OF LREAL := [50.0,50.0,50.0,50.0,50.0];
+	arm_jog_jerk		: ARRAY[1..5] OF LREAL := [500.0,500.0,500.0,500.0,500.0];
+	arm_power_output	: ARRAY[1..5] OF ST_McOutputs;
+	arm_reset_output	: ARRAY[1..5] OF ST_McOutputs;
+	arm_act_pos		: ARRAY[1..5] OF LREAL;
+	arm_act_vel		: ARRAY[1..5] OF LREAL;
+	arm_motion_busy		: ARRAY[1..5] OF BOOL := [FALSE,FALSE,FALSE,FALSE,FALSE];
+	arm_motion_done		: ARRAY[1..5] OF BOOL := [FALSE,FALSE,FALSE,FALSE,FALSE];
+	arm_motion_error	: ARRAY[1..5] OF BOOL := [FALSE,FALSE,FALSE,FALSE,FALSE];
+	arm_motion_error_id	: ARRAY[1..5] OF UDINT := [0,0,0,0,0];
+	arm_cmd_dir		: ARRAY[1..5] OF SINT := [0,0,0,0,0];	// -1=反向，0=停止，1=正向
+	arm_cmd_conflict	: ARRAY[1..5] OF BOOL := [FALSE,FALSE,FALSE,FALSE,FALSE];	// 正反向同时请求
+
+	// ========== Axis15 同步接口 ==========
+	// 独立链接到 NC Axis 15，与业务轴2（NC Axis 7）同步旋转。
+	axis2_sync_axis	: AXIS_REF;
+
+	// ========== 注射器轴控制接口 ==========
+	// inject_axis[1] -> NC Axis 13 / Drive 16，inject_axis[2] -> NC Axis 14 / Drive 17。
+	inject_axis		: ARRAY[1..2] OF AXIS_REF;
+	inject_push_req	: ARRAY[1..2] OF BOOL := [FALSE,FALSE];
+	inject_pull_req	: ARRAY[1..2] OF BOOL := [FALSE,FALSE];
+
+	// ========== 电缸控制变量 ==========
+	cylinder1_value		AT %Q* : WORD;		// 电缸1控制值 (安装在夹持机构上)
+	cylinder2_value		AT %Q* : WORD;		// 电缸2控制值 (安装在轴1机构上)
+	cylinder3_value		AT %Q* : WORD;		// 电缸3控制值 (安装在轴5机构上)
+	cylinder4_value		AT %Q* : WORD;		// 电缸4控制值 (安装在轴6机构上)
+	cylinder5_value		AT %Q* : WORD;		// 电缸5控制值 (安装在轴3机构上控制y阀)
+	cylinder5_cmd		: WORD := 2000;		// 历史兼容缓存，当前正式控制不写此变量
+	cylinder5_press_req	: BOOL := FALSE;	// Y阀请求（TRUE=打开，输出0；FALSE=关闭，输出2000）
+	
+	
+	ft_1_value			AT %I* : INT;
+	fn_1_value			AT %I* : INT;
+	fn_2_value			AT %I* : INT;
+	ft_2_value			AT %I* : INT;
+
+	// ========== 通信状态与诊断变量（通讯逻辑改造） ==========
+	host_comm_state		: USINT := 0;	// 0=WaitHost, 1=Online, 2=CommHold, 3=RecoveryWait (只读诊断镜像)
+	host_comm_reason	: UDINT := 1;	// 最近一次保持原因位图 (初值1=无有效会话)
+	host_stop_error_id	: UDINT := 0;	// 受控停止功能块错误码 (0=无错误)
+
+END_VAR]]></Declaration>
+  </GVL>
+</TcPlcObject>

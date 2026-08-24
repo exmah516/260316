@@ -1,0 +1,6 @@
+在倍福项目中，nDataIn2[0] . Data Inputs . Box 2 (EtherCat-control-node) . Device 5 (EtherCAT) . Devices代表了轴二电机带动旋转时，器械受到的扭矩大小，nDataIn2[1] . Data Inputs . Box 2 (EtherCat-control-node) . Device 5 (EtherCAT) . Devices代表了轴2电机带动器械进给时，器械所受轴向力的大小，我在倍福中的
+
+在机器人上，我们安装了两个电缸，其可以控制机器人夹紧or松开某些物体。请你在 `c:\Users\admin1\Desktop\251230_nopid\250902\Untitled2\POUs\SelfCheck.TcPOU` 中增加功能，在回退过程中，将nDataOut1[0] . nDataOut1 . Out . Outputs . Enc . Axis 5 . Axis 5 . Axes . NC-Task 1 SAF的值置为1500，使电缸1张开，nDataOut1[0] . nDataOut1 . Out . Outputs . Enc . Axis 7 . Axis 7 . Axes . NC-Task 1 SAF的值置为0，电缸2张开。之后，在 `c:\Users\admin1\Desktop\251230_nopid\64位ADS - 相对路径 - 传数组 - 加上手柄\main.cpp` 中，使我按下按钮1就可以使电缸1对应的值置为0，使之夹紧，按按钮2就可以使对应值置为1500，使之夹紧。
+
+
+将`c:\Users\admin1\Desktop\251230_nopid\250902\Untitled2\POUs\SelfCheck.TcPOU` 中增加功能，在回退过程中，将nDataOut1[0] . nDataOut1 . Out . Outputs . Enc . Axis 5 . Axis 5 . Axes . NC-Task 1 SAF的值置为1500，使电缸1张开，nDataOut1[0] . nDataOut1 . Out . Outputs . Enc . Axis 7 . Axis 7 . Axes . NC-Task 1 SAF的值置为0，电缸2张开。之后，在 `c:\Users\admin1\Desktop\251230_nopid\64位ADS - 相对路径 - 传数组 - 加上手柄\main.cpp` 中，使我按下按钮1就可以使电缸1对应的值置为0，使之夹紧，按按钮2就可以使对应值置为1500，使之夹紧。

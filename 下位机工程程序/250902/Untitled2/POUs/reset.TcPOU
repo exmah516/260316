@@ -1,0 +1,87 @@
+<?xml version="1.0" encoding="utf-8"?>
+<TcPlcObject Version="1.1.0.1" ProductVersion="3.1.4024.15">
+  <POU Name="reset" Id="{9732164b-2576-4e5e-9d46-55eddfb16aac}" SpecialFunc="None">
+    <Declaration><![CDATA[FUNCTION_BLOCK reset
+VAR_INPUT
+END_VAR
+VAR_OUTPUT
+END_VAR
+VAR
+	i:INT;
+	step:INT:=0;
+	reset_timer:TON;
+	all_done:BOOL;
+END_VAR
+]]></Declaration>
+    <Implementation>
+      <ST><![CDATA[(*
+FUNCTION_BLOCK: reset
+功能说明:
+  故障复位流程：对错误轴发出 MC_Reset 清错请求，清错后回到 _init；若错误仍在则转入 _err。
+
+状态机(step):
+  0) 预处理：拉低 Execute 形成上升沿；同时请求禁用外部给定模式(避免复位期间被 refer 干预)
+  1) 触发复位：对 7 轴发出 MC_Reset.Execute=TRUE，并启动超时计时器
+  2) 等待：Done/Error/错误已清除 或超时则收尾并决定跳转(_init/_err)
+*)
+
+CASE step OF
+0:
+	// 预处理：确保后续有上升沿，同时在复位阶段禁用外部给定
+	FOR i:=1 TO 7 DO 
+		G.axis_Reset[i].Execute := FALSE;
+		G.SetPointGenEnable[i].Execute := FALSE;
+		G.SetPointGenDisable[i].Execute := TRUE;
+	END_FOR
+	reset_timer(IN:=FALSE);
+	step := 1;
+
+1:
+	// 触发复位：Execute 保持 TRUE 直到下个阶段读取 Done/Error
+	FOR i:=1 TO 7 DO 
+		G.axis_Reset[i].Execute := TRUE;
+		// 禁用请求只需要上升沿，避免每周期重复触发
+		G.SetPointGenDisable[i].Execute := FALSE;
+	END_FOR
+	reset_timer(IN:=TRUE, PT:=T#3S);
+	step := 2;
+
+2:
+	// 等待复位完成（或超时保护）
+	reset_timer(IN:=TRUE);
+	all_done := TRUE;
+	FOR i:=1 TO 7 DO
+		IF NOT (G.reset_output[i].Done OR G.reset_output[i].Error OR NOT G.axis[i].Status.Error) THEN 
+			all_done := FALSE; 
+			EXIT;
+		END_IF
+	END_FOR
+   
+	IF all_done OR reset_timer.Q THEN
+		// 收尾：撤销 Execute，复位计时器复位，然后返回 init
+		FOR i:=1 TO 7 DO 
+			G.axis_Reset[i].Execute := FALSE;
+		END_FOR
+		reset_timer(IN:=FALSE);
+		step := 0;
+
+		// 复位结束后，错误已清除才允许回到 _init；否则进入 _err(避免 init/reset 无限循环)
+		FOR i:=1 TO 7 DO
+			IF G.axis[i].Status.Error OR G.power_output[i].Error OR G.reset_output[i].Error THEN
+				G.gen_state := _err;
+				RETURN;
+			END_IF
+		END_FOR
+		G.gen_state := _init;
+	END_IF
+END_CASE]]></ST>
+    </Implementation>
+    <LineIds Name="reset">
+      <LineId Id="92" Count="0" />
+      <LineId Id="119" Count="0" />
+      <LineId Id="94" Count="8" />
+      <LineId Id="106" Count="1" />
+      <LineId Id="20" Count="0" />
+    </LineIds>
+  </POU>
+</TcPlcObject>

@@ -1,0 +1,135 @@
+项目结构与技术实现分析报告
+
+一、 变量分析
+
+1. 全局变量 (Global Variables)
+文件位置: /GVLs/G.TcGVL
+这些变量定义在全局作用域，可被所有 POU (Program Organization Units) 访问，主要用于模块间数据共享、状态管理和与上位机 (ADS) 通信。
+
+| 变量名 | 数据类型 | 作用域 | 功能描述 | 生命周期 |
+| :--- | :--- | :--- | :--- | :--- |
+| axis | ARRAY[1..7] OF AXIS_REF | 全局 | 轴对象接口，映射到实际的 NC 轴，用于所有 Motion Control 功能块的调用 | 整个 PLC 运行期间 |
+| power_ | ARRAY[1..7] OF MC_Power | 全局 | 伺服使能功能块实例，控制轴的上电/下电 | 整个 PLC 运行期间 |
+| axis_Reset | ARRAY[1..7] OF MC_Reset | 全局 | 轴复位功能块实例，用于清除轴错误 | 整个 PLC 运行期间 |
+| SetPointGenEnable | ARRAY[1..7] OF MC_ExtSetPointGenEnable | 全局 | 激活外部设定值生成模式的功能块 | 整个 PLC 运行期间 |
+| SetPointGenDisable | ARRAY[1..7] OF MC_ExtSetPointGenDisable | 全局 | 关闭外部设定值生成模式的功能块 | 整个 PLC 运行期间 |
+| gen_state | state (ENUM) | 全局 | 主状态机状态变量，决定程序当前的执行模式 (_init, _handle, _err 等) | 整个 PLC 运行期间 |
+| refer | ARRAY[1..7] OF LREAL | 全局 (ADS Input) | 上位机下发的目标位置 (相对值)，用于位置控制的参考输入 | 整个 PLC 运行期间 |
+| Act_pos | ARRAY[1..7] OF LREAL | 全局 (ADS Output) | 反馈给上位机的实际位置 (相对值 = NC绝对位置 - 初始位置) | 整个 PLC 运行期间 |
+| init_pos | ARRAY[1..7] OF LREAL | 全局 | 初始位置偏移量，在 _init 状态记录，用于将绝对坐标转换为相对坐标 | 整个 PLC 运行期间 |
+| v_limit | ARRAY[1..7] OF LREAL | 全局 | 速度限制参数，限制 refer 的变化率，防止指令突变 | 整个 PLC 运行期间 |
+| Kp, Ki, Kd | ARRAY[1..7] OF LREAL | 全局 | PID 控制器参数 (比例、积分、微分增益) | 整个 PLC 运行期间 |
+| act_h | ARRAY[1..7] OF LREAL | 全局 | 经平滑处理后的目标位置参考值 | 整个 PLC 运行期间 |
+| act_hf | ARRAY[1..7] OF LREAL | 全局 | 上一周期的平滑参考值 (用于微分或历史记录) | 整个 PLC 运行期间 |
+| ref_slow | ARRAY[1..7] OF LREAL | 全局 | 经速度限幅处理后的中间参考值 | 整个 PLC 运行期间 |
+| pos_min_abs | ARRAY[1..7] OF LREAL | 全局 | 软限位下限 (绝对坐标)，保护机构不超出安全范围 | 整个 PLC 运行期间 |
+| pos_max_abs | ARRAY[1..7] OF LREAL | 全局 | 软限位上限 (绝对坐标)，保护机构不超出安全范围 | 整个 PLC 运行期间 |
+| power_output | ARRAY[1..7] OF ST_McOutputs | 全局 | 存储 MC_Power 功能块的输出状态 (Done, Busy, Error 等) | 整个 PLC 运行期间 |
+
+2. 局部变量 (Local Variables)
+定义在各 POU 的 VAR 块中，仅在各自的 POU 内部可见。
+
+2.1 MAIN (主程序)
+| 变量名 | 数据类型 | 功能描述 |
+| :--- | :--- | :--- |
+| init_ | init | 初始化功能块实例 |
+| handle1_ | handle | 核心控制逻辑功能块实例 |
+| clear_err_ | clear_err | 错误清除功能块实例 (目前逻辑被注释) |
+| err_ | err | 错误检测与处理功能块实例 |
+| reset_ | reset | 系统复位功能块实例 |
+
+2.2 handle (核心控制)
+| 变量名 | 数据类型 | 功能描述 |
+| :--- | :--- | :--- |
+| i, j, k | INT | 循环计数器，用于遍历轴 (1-7) 或滑动窗口 (1-20) |
+| err | ARRAY[1..7] OF LREAL | 当前位置误差 (平滑参考 - 实际反馈) |
+| err_f | ARRAY[1..7] OF LREAL | 上一周期误差，用于计算微分项 |
+| err_sum | ARRAY[1..7] OF LREAL | 误差积分累加值，带限幅 (+/- 100) |
+| value_f | ARRAY[1..7] OF LREAL | PID 控制器的计算输出量 |
+| act_hh | [1..7][1..30] OF LREAL | 滑动平均滤波器的历史数据缓冲区 (窗口大小 20) |
+| pos_abs | LREAL | 最终计算出的绝对目标位置 (送入 MC_ExtSetPointGenFeed) |
+
+2.3 init (初始化)
+| 变量名 | 数据类型 | 功能描述 |
+| :--- | :--- | :--- |
+| i | INT | 循环计数器 |
+
+二、 控制逻辑说明
+
+1. 程序执行流程 (MAIN.TcPOU)
+MAIN 程序是 PLC 的入口，周期性执行 (默认为 1ms 或配置的 Task 周期)。其主要逻辑基于状态机 (G.gen_state)。
+
+[流程图示意]
+Start -> 更新所有轴状态 (G.axis[]) -> 执行通用动作 (POWERED, SETPOSITIONGEN, RESETED)
+   |
+   +-> 判断 G.gen_state
+       |
+       +-- _init    -> 调用 init_()   -> 完成后转 _handle
+       |
+       +-- _handle  -> 调用 handle1_() -> 正常控制循环
+       |
+       +-- _err     -> 调用 err_()    -> 检测到 Error 转 _reset，否则转 _init
+       |
+       +-- _reset   -> 调用 reset_()  -> 完成复位转 _init
+       |
+       +-- _clear_err -> 调用 clear_err_() (暂未启用)
+
+2. 详细逻辑描述
+
+2.1 初始化阶段 (_init)
+- 动作：
+  1. 禁用所有轴的 Power, SetPointGen, Reset 功能块。
+  2. 重新使能所有轴 (MC_Power.Enable = TRUE)。
+  3. 等待所有轴 Power.Done 信号。
+  4. 记录当前绝对位置为初始零点：`G.init_pos[i] := ActPos`。
+  5. 激活外部设定值生成模式 (MC_ExtSetPointGenEnable)。
+  6. 状态跳转至 `_handle`。
+
+2.2 核心控制阶段 (_handle)
+这是系统最关键的实时控制循环，包含三个主要环节：
+
+- 环节A：信号预处理 (平滑与限幅)
+  1. 更新反馈：计算相对位置 `G.Act_pos = NcActPos - G.init_pos`。
+  2. 速度限幅：比较当前指令 `G.refer` 与上一周期平滑指令 `G.ref_slow`。
+     - 若变化量 > `v_limit`，则限制增量为 `v_limit`。
+  3. 滑动滤波：维护一个长度为 20 的队列 `act_hh`。
+     - 队首推入新的 `ref_slow`，队尾丢弃。
+     - 计算队列平均值赋给 `G.act_h` (作为 PID 的设定值)。
+
+- 环节B：PID 闭环控制
+  1. 计算误差：`err = G.act_h - G.Act_pos`。
+  2. 积分计算：`err_sum += err`，并限制在 [-100, 100] 范围内 (防止积分饱和)。
+  3. PID 输出：`value_f = Kp*err + Ki*err_sum + Kd*(err - err_f)`。
+
+- 环节C：指令生成与安全保护
+  1. 合成绝对位置指令：`pos_abs = G.act_h (平滑参考) + value_f (PID修正) + G.init_pos (零点偏移)`。
+  2. 软限位保护：若 `pos_abs` 超出 `[pos_min_abs, pos_max_abs]` 范围，强制钳位到边界值。
+  3. 下发指令：调用 `MC_ExtSetPointGenFeed` 将 `pos_abs` 发送给 NC 核心。
+
+2.3 异常处理 (_err & _reset)
+- 监控：在 `init` 和 `handle` 运行过程中，若检测到轴错误 (`G.axis[i].Status.Error`) 或 Power 模块错误，状态机跳转至 `_err` (逻辑分散在各模块)。
+- 复位流程：
+  1. `_err` 状态下确认错误存在，跳转 `_reset`。
+  2. `_reset` 触发 `MC_Reset` 对所有轴进行复位。
+  3. 复位完成 (Done) 或失败 (Error) 后，跳转回 `_init` 重新初始化系统。
+
+三、 补充说明
+
+1. 设计模式
+- 状态机模式 (State Machine)：使用 `CASE G.gen_state OF` 清晰管理系统生命周期 (初始化 -> 就绪/运行 -> 故障 -> 复位)。
+- 功能块封装 (FB Encapsulation)：将不同状态的逻辑封装在独立的 POU (init, handle, reset) 中，主程序仅负责调度，结构清晰。
+
+2. 关键算法实现
+- 混合控制策略：
+  - 前馈部分：基于滑动平均滤波 (Moving Average Filter) 的参考轨迹生成，平滑上位机的阶跃指令。
+  - 反馈部分：增量式 PID 算法，在 PLC 层实现位置闭环，修正机械误差或跟随滞后。
+  - 这种架构实际上是在 NC 的底层位置环之上，又在 PLC 层叠加了一个自定义的位置控制环。
+
+3. 数据流走向
+[上位机 PC] --(ADS协议)--> [G.refer] --(PLC处理: 限幅->滤波->PID)--> [MC_ExtSetPointGenFeed] --(内部总线)--> [NC Motion Core] --(EtherCAT)--> [伺服驱动器]
+                               ^                                                                                 |
+                               |--------------------------------(G.Act_pos)--------------------------------------|
+
+4. 输入输出处理
+- 输入：主要依赖 ADS 通信接收上位机指令 (`G.refer`)，以及读取 NC 轴状态 (`G.axis[].NcToPlc.ActPos`)。
+- 输出：通过 `MC_ExtSetPointGenFeed` 实时写入轴目标位置；通过 ADS 将 `G.Act_pos` 反馈给上位机。

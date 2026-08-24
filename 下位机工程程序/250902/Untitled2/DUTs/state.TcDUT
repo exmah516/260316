@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<TcPlcObject Version="1.1.0.1" ProductVersion="3.1.4024.15">
+  <DUT Name="state" Id="{9b461c89-5bae-47fc-958a-d61c6029d5cb}">
+    <Declaration><![CDATA[TYPE state :
+(
+	_init := 0,		//全下电
+	_jog1,			//一二轴回零位
+	_jog2,			//三轴回零
+	_jog3,			//其余轴回零
+	_trans,	//进入运输位
+	_trans_wait,	//进入运输位
+	_handle,		//跟随手柄运动
+	_self_check,    //上电自检
+	_clear_err,
+	_err,
+	_reset
+)INT;
+
+END_TYPE]]></Declaration>
+  </DUT>
+</TcPlcObject>
