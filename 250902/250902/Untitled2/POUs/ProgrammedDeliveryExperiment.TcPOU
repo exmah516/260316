@@ -1,0 +1,475 @@
+<?xml version="1.0" encoding="utf-8"?>
+<TcPlcObject Version="1.1.0.1" ProductVersion="3.1.4024.15">
+  <POU Name="ProgrammedDeliveryExperiment" Id="{6d3d667f-8bb1-4a31-9baa-9e2f84efdd82}" SpecialFunc="None">
+    <Declaration><![CDATA[FUNCTION_BLOCK ProgrammedDeliveryExperiment
+VAR
+    i : INT;
+    state : USINT := 0; // 0空闲，1准备，2就绪，3基准，4前向触发，5释放，6回退，7重夹，8周期判定，9最终前向，10完成，11中止，12错误
+    initialized : BOOL := FALSE;
+    active_mode : USINT := 0;
+    active_axis : ARRAY[1..7] OF BOOL;
+    setup_exec : ARRAY[1..7] OF BOOL;
+    setup_done : ARRAY[1..7] OF BOOL;
+    setup_target : ARRAY[1..7] OF LREAL;
+    stop_exec : ARRAY[1..7] OF BOOL;
+    fb_setup_move : ARRAY[1..7] OF MC_MoveAbsolute;
+    fb_forward_move : MC_MoveAbsolute;
+    fb_return_move : MC_MoveAbsolute;
+    fb_final_move : MC_MoveAbsolute;
+    fb_stop : ARRAY[1..7] OF MC_Stop;
+    baseline_timer : TON;
+    clamp_timer : TON;
+    forward_exec : BOOL := FALSE;
+    return_exec : BOOL := FALSE;
+    final_exec : BOOL := FALSE;
+    all_setup_done : BOOL;
+    moving_axis : INT := 1;
+    last_phase : USINT := 0;
+END_VAR]]></Declaration>
+    <Implementation>
+      <ST><![CDATA[// 新模式完全使用 MC_MoveAbsolute，不读取手柄参考值。
+// 所有直线轴目标均由左限位绝对值加“距左限位距离”得到。
+
+IF NOT initialized THEN
+    state := 0;
+    active_mode := G.program_test_mode;
+    G.program_test_phase := 0;
+    G.program_test_enable := FALSE;
+    G.program_test_setup_busy := FALSE;
+    G.program_test_setup_done := FALSE;
+    G.program_test_cycle_index := 0;
+    G.program_test_cycle_total := 0;
+    G.program_test_status_error_id := 0;
+    G.program_test_sample_arm := FALSE;
+    G.program_test_event_sequence := 0;
+    last_phase := 0;
+    forward_exec := FALSE;
+    return_exec := FALSE;
+    final_exec := FALSE;
+    FOR i := 1 TO 7 DO
+        setup_exec[i] := FALSE;
+        setup_done[i] := FALSE;
+        stop_exec[i] := FALSE;
+        setup_target[i] := G.axis[i].NcToPlc.ActPos;
+    END_FOR
+    initialized := TRUE;
+END_IF
+
+// 运行中的模式变更由 PLC 拒绝；空闲、完成和中止阶段可重新选择模式。
+IF G.program_test_mode <> active_mode THEN
+    IF (state = 0) OR (state = 10) OR (state = 11) OR (state = 12) THEN
+        active_mode := G.program_test_mode;
+        state := 0;
+        G.program_test_phase := 0;
+        G.program_test_setup_busy := FALSE;
+        G.program_test_setup_done := FALSE;
+        G.program_test_cycle_index := 0;
+        G.program_test_cycle_total := 0;
+        G.program_test_status_error_id := 0;
+        G.program_test_sample_arm := FALSE;
+        forward_exec := FALSE;
+        return_exec := FALSE;
+        final_exec := FALSE;
+        FOR i := 1 TO 7 DO
+            setup_exec[i] := FALSE;
+            setup_done[i] := FALSE;
+            stop_exec[i] := FALSE;
+        END_FOR
+    ELSE
+        G.program_test_mode := active_mode;
+        G.program_test_setup_req := FALSE;
+        G.program_test_start_req := FALSE;
+        G.program_test_status_error_id := 16#7102;
+    END_IF
+END_IF
+
+FOR i := 1 TO 7 DO
+    active_axis[i] := FALSE;
+END_FOR
+IF active_mode = 1 THEN
+    active_axis[1] := TRUE;
+    active_axis[2] := TRUE;
+    moving_axis := 1;
+ELSIF active_mode = 2 THEN
+    active_axis[5] := TRUE;
+    active_axis[6] := TRUE;
+    active_axis[7] := TRUE;
+    moving_axis := 6;
+END_IF
+
+// 新模式独占 1..7 轴的使能和外部给定状态；未参与轴始终断使能。
+FOR i := 1 TO 7 DO
+    G.power_[i](Axis := G.axis[i], Enable := active_axis[i], Enable_Positive := TRUE, Enable_Negative := TRUE);
+    G.power_output[i].Done := G.power_[i].Status;
+    G.power_output[i].Busy := G.power_[i].Busy;
+    G.power_output[i].Active := G.power_[i].Active;
+    G.power_output[i].Error := G.power_[i].Error;
+    G.power_output[i].ErrorID := G.power_[i].ErrorID;
+    G.SetPointGenEnable[i](Axis := G.axis[i], Execute := FALSE);
+    G.SetPointGenDisable[i](Axis := G.axis[i], Execute := TRUE);
+    G.SetPointGenDisable_output[i].Done := G.SetPointGenDisable[i].Done;
+    G.SetPointGenDisable_output[i].Busy := G.SetPointGenDisable[i].Busy;
+    G.SetPointGenDisable_output[i].Error := G.SetPointGenDisable[i].Error;
+    G.SetPointGenDisable_output[i].ErrorID := G.SetPointGenDisable[i].ErrorID;
+END_FOR
+
+G.estop_hold_req := FALSE;
+baseline_timer(IN := state = 3, PT := T#1S);
+clamp_timer(IN := (state = 5) OR (state = 7), PT := T#150MS);
+
+IF G.program_test_abort_req THEN
+    G.program_test_abort_req := FALSE;
+    state := 11;
+END_IF
+
+// 完成、中止或错误后，新的准备请求启动下一次独立实验。
+IF ((state = 10) OR (state = 11) OR (state = 12)) AND G.program_test_setup_req THEN
+    state := 0;
+    G.program_test_setup_done := FALSE;
+    G.program_test_setup_busy := FALSE;
+    G.program_test_start_req := FALSE;
+    G.program_test_status_error_id := 0;
+    G.program_test_sample_arm := FALSE;
+    forward_exec := FALSE;
+    return_exec := FALSE;
+    final_exec := FALSE;
+    FOR i := 1 TO 7 DO
+        setup_exec[i] := FALSE;
+        setup_done[i] := FALSE;
+        stop_exec[i] := FALSE;
+    END_FOR
+END_IF
+
+CASE state OF
+0: // Idle
+    G.program_test_enable := FALSE;
+    G.program_test_phase := 0;
+    G.program_test_sample_arm := FALSE;
+    IF G.program_test_setup_req THEN
+        G.program_test_setup_req := FALSE;
+        G.program_test_status_error_id := 0;
+        IF NOT G.self_check_done THEN
+            G.program_test_status_error_id := 16#7201;
+            state := 12;
+        ELSIF (active_mode <> 1) AND (active_mode <> 2) THEN
+            G.program_test_status_error_id := 16#7202;
+            state := 12;
+        ELSIF G.program_test_cycle_count < 1 THEN
+            G.program_test_status_error_id := 16#7203;
+            state := 12;
+        ELSIF (G.program_test_final_forward_distance_mm < 0.0) OR (G.program_test_final_forward_distance_mm > 20.0) THEN
+            G.program_test_status_error_id := 16#7204;
+            state := 12;
+        ELSIF (G.program_test_forward_velocity <= 0.0) OR (G.program_test_forward_acceleration <= 0.0) OR
+              (G.program_test_forward_deceleration <= 0.0) OR (G.program_test_forward_jerk <= 0.0) OR
+              (G.program_test_return_velocity <= 0.0) OR (G.program_test_return_acceleration <= 0.0) OR
+              (G.program_test_return_deceleration <= 0.0) OR (G.program_test_return_jerk <= 0.0) THEN
+            G.program_test_status_error_id := 16#7205;
+            state := 12;
+        ELSIF (active_mode = 2) AND ((G.program_test_axis5_from_left_mm < 0.0) OR (G.program_test_axis5_from_left_mm > 649.0)) THEN
+            G.program_test_status_error_id := 16#7206;
+            state := 12;
+        ELSE
+            G.program_test_setup_busy := TRUE;
+            G.program_test_setup_done := FALSE;
+            G.program_test_cycle_index := 0;
+            G.program_test_cycle_total := G.program_test_cycle_count;
+            G.program_test_target_axis2_deg := G.program_test_axis2_angle_deg;
+            G.program_test_target_axis7_deg := G.program_test_axis7_angle_deg;
+            G.program_test_target_axis1_abs := G.leftlimit[1] + 23.0;
+            G.program_test_target_axis5_abs := G.leftlimit[5] + G.program_test_axis5_from_left_mm;
+            G.program_test_target_axis6_abs := G.leftlimit[6] + G.program_test_axis5_from_left_mm + 21.0;
+            IF active_mode = 1 THEN
+                setup_target[1] := G.program_test_target_axis1_abs;
+                setup_target[2] := G.program_test_target_axis2_deg;
+                G.program_test_trigger_target_abs := G.leftlimit[1] + 3.0;
+                G.program_test_return_target_abs := G.program_test_target_axis1_abs;
+                G.program_test_final_target_abs := G.program_test_target_axis1_abs - G.program_test_final_forward_distance_mm;
+                // 准备移动时运动端释放，定位完成后再切入正常夹持组合。
+                G.cylinder1_value := 0;
+                G.cylinder2_value := 0;
+            ELSE
+                setup_target[5] := G.program_test_target_axis5_abs;
+                setup_target[6] := G.program_test_target_axis6_abs;
+                setup_target[7] := G.program_test_target_axis7_deg;
+                G.program_test_trigger_target_abs := G.leftlimit[6] + G.program_test_axis5_from_left_mm + 1.0;
+                G.program_test_return_target_abs := G.program_test_target_axis6_abs;
+                G.program_test_final_target_abs := G.program_test_target_axis6_abs - G.program_test_final_forward_distance_mm;
+                G.cylinder3_value := 50;
+                G.cylinder4_value := 0;
+            END_IF
+            FOR i := 1 TO 7 DO
+                setup_done[i] := NOT active_axis[i];
+                setup_exec[i] := active_axis[i];
+                stop_exec[i] := FALSE;
+            END_FOR
+            state := 1;
+        END_IF
+    END_IF
+
+1: // SetupMove
+    G.program_test_enable := TRUE;
+    G.program_test_phase := 1;
+    all_setup_done := TRUE;
+    FOR i := 1 TO 7 DO
+        IF active_axis[i] THEN
+            IF fb_setup_move[i].Done THEN
+                setup_done[i] := TRUE;
+                setup_exec[i] := FALSE;
+            ELSIF fb_setup_move[i].Error OR fb_setup_move[i].CommandAborted THEN
+                G.program_test_status_error_id := fb_setup_move[i].ErrorID;
+                IF G.program_test_status_error_id = 0 THEN G.program_test_status_error_id := 16#7301; END_IF
+                setup_exec[i] := FALSE;
+                state := 12;
+            END_IF
+            IF NOT setup_done[i] THEN all_setup_done := FALSE; END_IF
+        END_IF
+    END_FOR
+    IF all_setup_done THEN
+        G.program_test_setup_busy := FALSE;
+        G.program_test_setup_done := TRUE;
+        state := 2;
+    END_IF
+
+2: // Ready
+    G.program_test_enable := TRUE;
+    G.program_test_phase := 2;
+    IF active_mode = 1 THEN
+        G.cylinder1_value := 400;
+        G.cylinder2_value := 600;
+    ELSE
+        G.cylinder3_value := 400;
+        G.cylinder4_value := 500;
+    END_IF
+    IF G.program_test_start_req THEN
+        G.program_test_start_req := FALSE;
+        G.program_test_cycle_index := 1;
+        G.program_test_sample_arm := TRUE;
+        state := 3;
+    END_IF
+
+3: // Baseline
+    G.program_test_enable := TRUE;
+    G.program_test_phase := 3;
+    G.program_test_sample_arm := TRUE;
+    IF baseline_timer.Q THEN
+        forward_exec := TRUE;
+        state := 4;
+    END_IF
+
+4: // ForwardToTrigger
+    G.program_test_enable := TRUE;
+    G.program_test_phase := 4;
+    G.program_test_sample_arm := TRUE;
+    IF fb_forward_move.Done THEN
+        forward_exec := FALSE;
+        IF active_mode = 1 THEN
+            G.cylinder1_value := 0;
+            G.cylinder2_value := 0;
+        ELSE
+            G.cylinder3_value := 50;
+            G.cylinder4_value := 0;
+        END_IF
+        state := 5;
+    ELSIF fb_forward_move.Error OR fb_forward_move.CommandAborted THEN
+        G.program_test_status_error_id := fb_forward_move.ErrorID;
+        IF G.program_test_status_error_id = 0 THEN G.program_test_status_error_id := 16#7302; END_IF
+        forward_exec := FALSE;
+        state := 12;
+    END_IF
+
+5: // ReleaseMovingClamp
+    G.program_test_enable := TRUE;
+    G.program_test_phase := 5;
+    G.program_test_sample_arm := TRUE;
+    IF clamp_timer.Q THEN
+        return_exec := TRUE;
+        state := 6;
+    END_IF
+
+6: // ReturnMoving
+    G.program_test_enable := TRUE;
+    G.program_test_phase := 6;
+    G.program_test_sample_arm := TRUE;
+    IF fb_return_move.Done THEN
+        return_exec := FALSE;
+        IF active_mode = 1 THEN
+            G.cylinder1_value := 400;
+            G.cylinder2_value := 600;
+        ELSE
+            G.cylinder3_value := 400;
+            G.cylinder4_value := 500;
+        END_IF
+        state := 7;
+    ELSIF fb_return_move.Error OR fb_return_move.CommandAborted THEN
+        G.program_test_status_error_id := fb_return_move.ErrorID;
+        IF G.program_test_status_error_id = 0 THEN G.program_test_status_error_id := 16#7303; END_IF
+        return_exec := FALSE;
+        state := 12;
+    END_IF
+
+7: // ReclampMovingClamp
+    G.program_test_enable := TRUE;
+    G.program_test_phase := 7;
+    G.program_test_sample_arm := TRUE;
+    IF clamp_timer.Q THEN
+        state := 8;
+    END_IF
+
+8: // CycleDecision
+    G.program_test_enable := TRUE;
+    G.program_test_phase := 8;
+    G.program_test_sample_arm := TRUE;
+    IF G.program_test_cycle_index < G.program_test_cycle_total THEN
+        G.program_test_cycle_index := G.program_test_cycle_index + 1;
+        forward_exec := TRUE;
+        state := 4;
+    ELSIF G.program_test_final_forward_distance_mm > 0.0 THEN
+        final_exec := TRUE;
+        state := 9;
+    ELSE
+        G.program_test_sample_arm := FALSE;
+        state := 10;
+    END_IF
+
+9: // FinalForward，完成后绝不进入释放或回退状态。
+    G.program_test_enable := TRUE;
+    G.program_test_phase := 9;
+    G.program_test_sample_arm := TRUE;
+    IF fb_final_move.Done THEN
+        final_exec := FALSE;
+        G.program_test_sample_arm := FALSE;
+        state := 10;
+    ELSIF fb_final_move.Error OR fb_final_move.CommandAborted THEN
+        G.program_test_status_error_id := fb_final_move.ErrorID;
+        IF G.program_test_status_error_id = 0 THEN G.program_test_status_error_id := 16#7304; END_IF
+        final_exec := FALSE;
+        state := 12;
+    END_IF
+
+10: // Completed
+    G.program_test_enable := FALSE;
+    G.program_test_phase := 10;
+    G.program_test_sample_arm := FALSE;
+
+11: // Aborted
+    G.program_test_enable := FALSE;
+    G.program_test_phase := 11;
+    G.program_test_sample_arm := FALSE;
+    G.program_test_setup_busy := FALSE;
+    forward_exec := FALSE;
+    return_exec := FALSE;
+    final_exec := FALSE;
+    FOR i := 1 TO 7 DO
+        setup_exec[i] := FALSE;
+        stop_exec[i] := active_axis[i];
+    END_FOR
+    IF active_mode = 1 THEN
+        G.cylinder1_value := 400;
+        G.cylinder2_value := 600;
+    ELSIF active_mode = 2 THEN
+        G.cylinder3_value := 400;
+        G.cylinder4_value := 500;
+    END_IF
+
+12: // Error
+    G.program_test_enable := FALSE;
+    G.program_test_phase := 12;
+    G.program_test_sample_arm := FALSE;
+    G.program_test_setup_busy := FALSE;
+    forward_exec := FALSE;
+    return_exec := FALSE;
+    final_exec := FALSE;
+    FOR i := 1 TO 7 DO
+        setup_exec[i] := FALSE;
+        stop_exec[i] := active_axis[i];
+    END_FOR
+END_CASE
+
+// 阶段变化先更新事件号，再写入本周期样本。
+IF G.program_test_phase <> last_phase THEN
+    G.program_test_event_sequence := G.program_test_event_sequence + 1;
+    last_phase := G.program_test_phase;
+END_IF
+
+FOR i := 1 TO 7 DO
+    fb_setup_move[i](Axis := G.axis[i], Position := setup_target[i],
+        Velocity := G.program_test_forward_velocity,
+        Acceleration := G.program_test_forward_acceleration,
+        Deceleration := G.program_test_forward_deceleration,
+        Jerk := G.program_test_forward_jerk,
+        Execute := setup_exec[i]);
+    fb_stop[i](Axis := G.axis[i], Deceleration := G.program_test_return_deceleration,
+        Jerk := G.program_test_return_jerk, Execute := stop_exec[i]);
+END_FOR
+
+fb_forward_move(Axis := G.axis[moving_axis], Position := G.program_test_trigger_target_abs,
+    Velocity := G.program_test_forward_velocity,
+    Acceleration := G.program_test_forward_acceleration,
+    Deceleration := G.program_test_forward_deceleration,
+    Jerk := G.program_test_forward_jerk,
+    Execute := forward_exec);
+fb_return_move(Axis := G.axis[moving_axis], Position := G.program_test_return_target_abs,
+    Velocity := G.program_test_return_velocity,
+    Acceleration := G.program_test_return_acceleration,
+    Deceleration := G.program_test_return_deceleration,
+    Jerk := G.program_test_return_jerk,
+    Execute := return_exec);
+fb_final_move(Axis := G.axis[moving_axis], Position := G.program_test_final_target_abs,
+    Velocity := G.program_test_forward_velocity,
+    Acceleration := G.program_test_forward_acceleration,
+    Deceleration := G.program_test_forward_deceleration,
+    Jerk := G.program_test_forward_jerk,
+    Execute := final_exec);
+
+IF G.program_test_sample_clear THEN
+    G.program_test_sample_count := 0;
+    G.program_test_sample_overflow := FALSE;
+    G.program_test_sample_clear := FALSE;
+END_IF
+
+IF G.program_test_sample_arm AND NOT G.program_test_sample_overflow THEN
+    IF G.program_test_sample_count < 32768 THEN
+        i := UDINT_TO_INT(G.program_test_sample_count);
+        G.program_test_sample_index[i] := G.program_test_sample_count;
+        G.program_test_sample_time_us[i] := UDINT_TO_ULINT(G.program_test_sample_count) * 1000;
+        G.program_test_sample_phase[i] := G.program_test_phase;
+        G.program_test_sample_event_sequence[i] := G.program_test_event_sequence;
+        G.program_test_sample_cycle_index[i] := G.program_test_cycle_index;
+        IF active_mode = 1 THEN
+            G.program_test_sample_axis1_pos[i] := G.axis[1].NcToPlc.ActPos;
+            G.program_test_sample_axis1_vel[i] := G.axis[1].NcToPlc.ActVelo;
+            G.program_test_sample_axis1_acc[i] := G.axis[1].NcToPlc.ActAcc;
+            G.program_test_sample_axis2_pos[i] := G.axis[2].NcToPlc.ActPos;
+            G.program_test_sample_axis2_vel[i] := G.axis[2].NcToPlc.ActVelo;
+            G.program_test_sample_axis2_acc[i] := G.axis[2].NcToPlc.ActAcc;
+            G.program_test_sample_cylinder1[i] := G.cylinder1_value;
+            G.program_test_sample_cylinder2[i] := G.cylinder2_value;
+            G.program_test_sample_fn1[i] := G.fn_1_value;
+            G.program_test_sample_ft1[i] := G.ft_1_value;
+        ELSE
+            G.program_test_sample_axis5_pos[i] := G.axis[5].NcToPlc.ActPos;
+            G.program_test_sample_axis5_vel[i] := G.axis[5].NcToPlc.ActVelo;
+            G.program_test_sample_axis5_acc[i] := G.axis[5].NcToPlc.ActAcc;
+            G.program_test_sample_axis6_pos[i] := G.axis[6].NcToPlc.ActPos;
+            G.program_test_sample_axis6_vel[i] := G.axis[6].NcToPlc.ActVelo;
+            G.program_test_sample_axis6_acc[i] := G.axis[6].NcToPlc.ActAcc;
+            G.program_test_sample_axis7_pos[i] := G.axis[7].NcToPlc.ActPos;
+            G.program_test_sample_axis7_vel[i] := G.axis[7].NcToPlc.ActVelo;
+            G.program_test_sample_axis7_acc[i] := G.axis[7].NcToPlc.ActAcc;
+            G.program_test_sample_cylinder3[i] := G.cylinder3_value;
+            G.program_test_sample_cylinder4[i] := G.cylinder4_value;
+            G.program_test_sample_fn2[i] := G.fn_2_value;
+            G.program_test_sample_ft2[i] := G.ft_2_value;
+        END_IF
+        G.program_test_sample_count := G.program_test_sample_count + 1;
+    ELSE
+        G.program_test_sample_overflow := TRUE;
+    END_IF
+END_IF]]></ST>
+    </Implementation>
+    <LineIds Name="ProgrammedDeliveryExperiment">
+      <LineId Id="1" Count="1" />
+    </LineIds>
+  </POU>
+</TcPlcObject>

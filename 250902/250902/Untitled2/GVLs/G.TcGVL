@@ -180,6 +180,76 @@ VAR_GLOBAL
 	dual_clamp_sample_cylinder2	: ARRAY[0..32767] OF WORD;
 	dual_clamp_sample_cylinder4	: ARRAY[0..32767] OF WORD;
 
+	// 程序递送测试接口，与旧 dual_clamp_* 接口完全独立。
+	// program_test_mode: 0=旧双机构模式，1=导管，2=导丝。
+	program_test_mode			: USINT := 0;
+	program_test_setup_req		: BOOL := FALSE;
+	program_test_start_req		: BOOL := FALSE;
+	program_test_abort_req		: BOOL := FALSE;
+	program_test_axis5_from_left_mm : LREAL := 430.0;
+	program_test_axis2_angle_deg : LREAL := 0.0;
+	program_test_axis7_angle_deg : LREAL := 0.0;
+	program_test_cycle_count		: UINT := 1;
+	program_test_final_forward_distance_mm : LREAL := 10.0;
+	program_test_forward_velocity : LREAL := 20.0;
+	program_test_forward_acceleration : LREAL := 100.0;
+	program_test_forward_deceleration : LREAL := 100.0;
+	program_test_forward_jerk	: LREAL := 1000.0;
+	program_test_return_velocity : LREAL := 20.0;
+	program_test_return_acceleration : LREAL := 100.0;
+	program_test_return_deceleration : LREAL := 100.0;
+	program_test_return_jerk	: LREAL := 1000.0;
+
+	program_test_enable			: BOOL := FALSE;
+	program_test_phase			: USINT := 0;
+	program_test_cycle_index	: UINT := 0;
+	program_test_cycle_total	: UINT := 0;
+	program_test_setup_busy		: BOOL := FALSE;
+	program_test_setup_done		: BOOL := FALSE;
+	program_test_status_error_id : UDINT := 0;
+	program_test_target_axis1_abs : LREAL := 0.0;
+	program_test_target_axis5_abs : LREAL := 0.0;
+	program_test_target_axis6_abs : LREAL := 0.0;
+	program_test_target_axis2_deg : LREAL := 0.0;
+	program_test_target_axis7_deg : LREAL := 0.0;
+	program_test_trigger_target_abs : LREAL := 0.0;
+	program_test_return_target_abs : LREAL := 0.0;
+	program_test_final_target_abs : LREAL := 0.0;
+
+	program_test_sample_arm		: BOOL := FALSE;
+	program_test_sample_clear	: BOOL := FALSE;
+	program_test_sample_count	: UDINT := 0;
+	program_test_sample_overflow : BOOL := FALSE;
+	program_test_event_sequence : UDINT := 0;
+	program_test_sample_index	: ARRAY[0..32767] OF UDINT;
+	program_test_sample_time_us	: ARRAY[0..32767] OF ULINT;
+	program_test_sample_phase	: ARRAY[0..32767] OF USINT;
+	program_test_sample_event_sequence : ARRAY[0..32767] OF UDINT;
+	program_test_sample_cycle_index : ARRAY[0..32767] OF UINT;
+	program_test_sample_axis1_pos : ARRAY[0..32767] OF LREAL;
+	program_test_sample_axis1_vel : ARRAY[0..32767] OF LREAL;
+	program_test_sample_axis1_acc : ARRAY[0..32767] OF LREAL;
+	program_test_sample_axis2_pos : ARRAY[0..32767] OF LREAL;
+	program_test_sample_axis2_vel : ARRAY[0..32767] OF LREAL;
+	program_test_sample_axis2_acc : ARRAY[0..32767] OF LREAL;
+	program_test_sample_axis5_pos : ARRAY[0..32767] OF LREAL;
+	program_test_sample_axis5_vel : ARRAY[0..32767] OF LREAL;
+	program_test_sample_axis5_acc : ARRAY[0..32767] OF LREAL;
+	program_test_sample_axis6_pos : ARRAY[0..32767] OF LREAL;
+	program_test_sample_axis6_vel : ARRAY[0..32767] OF LREAL;
+	program_test_sample_axis6_acc : ARRAY[0..32767] OF LREAL;
+	program_test_sample_axis7_pos : ARRAY[0..32767] OF LREAL;
+	program_test_sample_axis7_vel : ARRAY[0..32767] OF LREAL;
+	program_test_sample_axis7_acc : ARRAY[0..32767] OF LREAL;
+	program_test_sample_cylinder1 : ARRAY[0..32767] OF WORD;
+	program_test_sample_cylinder2 : ARRAY[0..32767] OF WORD;
+	program_test_sample_cylinder3 : ARRAY[0..32767] OF WORD;
+	program_test_sample_cylinder4 : ARRAY[0..32767] OF WORD;
+	program_test_sample_fn1		: ARRAY[0..32767] OF INT;
+	program_test_sample_ft1		: ARRAY[0..32767] OF INT;
+	program_test_sample_fn2		: ARRAY[0..32767] OF INT;
+	program_test_sample_ft2		: ARRAY[0..32767] OF INT;
+
 
 END_VAR]]></Declaration>
   </GVL>

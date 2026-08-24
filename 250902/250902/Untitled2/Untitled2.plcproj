@@ -52,6 +52,9 @@
     <Compile Include="POUs\DualClampExperiment.TcPOU">
       <SubType>Code</SubType>
     </Compile>
+    <Compile Include="POUs\ProgrammedDeliveryExperiment.TcPOU">
+      <SubType>Code</SubType>
+    </Compile>
     <Compile Include="POUs\init.TcPOU">
       <SubType>Code</SubType>
     </Compile>

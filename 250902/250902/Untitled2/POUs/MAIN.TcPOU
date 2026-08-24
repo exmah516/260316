@@ -13,6 +13,7 @@ VAR
 	axis2_sync_ :       Axis2Sync;
 	injector_manual_ :  InjectorManual;
 	dual_clamp_ :       DualClampExperiment;
+	program_test_ :     ProgrammedDeliveryExperiment;
 	axis6_enable_negative : BOOL := TRUE;
 	i:INT;
 END_VAR]]></Declaration>
@@ -31,6 +32,10 @@ IF TwinCAT_SystemInfoVarList._TaskInfo[1].FirstCycle THEN
 	G.estop_hold_req := TRUE;
 	G.selfcheck_reset_req := TRUE;
 	G.dual_clamp_enable := FALSE;
+	G.program_test_enable := FALSE;
+	G.program_test_setup_req := FALSE;
+	G.program_test_start_req := FALSE;
+	G.program_test_abort_req := FALSE;
 	FOR i:=1 TO 7 DO
 		G.SetPointGenEnable[i].Execute := FALSE;
 		G.SetPointGenDisable[i].Execute := FALSE;
@@ -48,7 +53,7 @@ END_IF
 
 // 保留原工程的MC_Power、MC_ExtSetPointGen和MC_Reset实例调用，
 // 其输入由init/SelfCheck/DualClampExperiment按当前阶段赋值。
-IF G.gen_state <> _dual_clamp THEN
+IF (G.gen_state <> _dual_clamp) AND (G.gen_state <> _program_test) THEN
 	POWERED();
 	SETPOSITIONGEN();
 	RESETED();
@@ -61,7 +66,33 @@ IF G.gen_state = _init THEN
 ELSIF G.gen_state = _self_check THEN
 	self_check_();
 ELSIF G.gen_state = _dual_clamp THEN
-	dual_clamp_();
+	// 旧模式仅在空闲、自检完成等待、完成或中止阶段接受切换。
+	IF (G.program_test_mode = 1) OR (G.program_test_mode = 2) THEN
+		IF (G.dual_clamp_phase = 0) OR (G.dual_clamp_phase = 10) OR
+		   (G.dual_clamp_phase = 11) OR (G.dual_clamp_phase = 13) THEN
+			G.gen_state := _program_test;
+		ELSE
+			G.program_test_mode := 0;
+			G.program_test_setup_req := FALSE;
+			G.program_test_start_req := FALSE;
+			G.program_test_status_error_id := 16#7101;
+			dual_clamp_();
+		END_IF
+	ELSE
+		dual_clamp_();
+	END_IF
+ELSIF G.gen_state = _program_test THEN
+	// 程序测试只在空闲、完成或中止阶段允许回到旧模式。
+	IF G.program_test_mode = 0 THEN
+		IF (G.program_test_phase = 0) OR (G.program_test_phase = 10) OR
+		   (G.program_test_phase = 11) OR (G.program_test_phase = 12) THEN
+			G.gen_state := _dual_clamp;
+		ELSE
+			program_test_();
+		END_IF
+	ELSE
+		program_test_();
+	END_IF
 ELSIF G.gen_state = _err THEN
 	err_();
 ELSIF G.gen_state = _clear_err THEN

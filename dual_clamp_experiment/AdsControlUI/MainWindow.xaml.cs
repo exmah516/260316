@@ -27,11 +27,14 @@ namespace DualClampExperimentUI
         private readonly List<double> _torque2 = new List<double>();
         private readonly DispatcherTimer _pollTimer;
         private bool _isPolling;
+        private bool _loaded;
         private bool _selfcheckDone;
         private bool _selfcheckBusy;
         private bool _leftLimitValid;
         private bool _setupBusy;
         private bool _setupDone;
+        private string _guidewireAxis5Text = "430";
+        private string CurrentMode => ((ComboBoxItem)ExperimentModeBox.SelectedItem)?.Tag?.ToString() ?? "legacy";
 
         public MainWindow()
         {
@@ -40,56 +43,46 @@ namespace DualClampExperimentUI
             _pollTimer.Tick += async (_, _) => await PollAsync();
             Loaded += async (_, _) =>
             {
+                _loaded = true;
+                UpdateModeView();
                 await ConnectAsync();
                 _pollTimer.Start();
             };
             Closed += async (_, _) =>
             {
                 _pollTimer.Stop();
-                try
-                {
-                    await SendAsync("QUIT");
-                }
-                catch { }
+                try { await SendAsync("QUIT"); } catch { }
                 DisconnectPipe();
             };
         }
 
-        // 若后端程序未在运行，尝试从相对路径自动拉起
         private void EnsureBackendStarted()
         {
             try
             {
-                Process[] existing = Process.GetProcessesByName("DualClampExperiment");
-                if (existing != null && existing.Length > 0) return;
-
+                if (Process.GetProcessesByName("DualClampExperiment").Length > 0) return;
                 string baseDir = AppDomain.CurrentDomain.BaseDirectory;
-                string[] candidatePaths = new[]
+                string[] candidates =
                 {
-                    System.IO.Path.GetFullPath(System.IO.Path.Combine(baseDir, @"..\..\..\..\..\x64\Debug\DualClampExperiment.exe")),
-                    System.IO.Path.GetFullPath(System.IO.Path.Combine(baseDir, @"..\..\..\..\..\x64\Release\DualClampExperiment.exe")),
                     System.IO.Path.GetFullPath(System.IO.Path.Combine(baseDir, @"..\..\..\..\x64\Debug\DualClampExperiment.exe")),
                     System.IO.Path.GetFullPath(System.IO.Path.Combine(baseDir, @"..\..\..\..\x64\Release\DualClampExperiment.exe")),
-                    System.IO.Path.GetFullPath(System.IO.Path.Combine(baseDir, @"DualClampExperiment.exe")),
-                    System.IO.Path.GetFullPath(System.IO.Path.Combine(baseDir, @"..\DualClampExperiment.exe")),
-                    System.IO.Path.GetFullPath(System.IO.Path.Combine(baseDir, @"..\..\DualClampExperiment.exe"))
+                    System.IO.Path.GetFullPath(System.IO.Path.Combine(baseDir, @"..\..\..\..\..\x64\Debug\DualClampExperiment.exe")),
+                    System.IO.Path.GetFullPath(System.IO.Path.Combine(baseDir, @"..\..\..\..\..\x64\Release\DualClampExperiment.exe")),
+                    System.IO.Path.Combine(baseDir, "DualClampExperiment.exe"),
+                    System.IO.Path.GetFullPath(System.IO.Path.Combine(baseDir, @"..\DualClampExperiment.exe"))
                 };
-
-                foreach (var path in candidatePaths)
+                foreach (string path in candidates)
                 {
-                    if (File.Exists(path))
+                    if (!File.Exists(path)) continue;
+                    Process.Start(new ProcessStartInfo
                     {
-                        var psi = new ProcessStartInfo
-                        {
-                            FileName = path,
-                            Arguments = "--no-ui",
-                            WorkingDirectory = System.IO.Path.GetDirectoryName(path),
-                            UseShellExecute = true
-                        };
-                        Process.Start(psi);
-                        Thread.Sleep(400);
-                        break;
-                    }
+                        FileName = path,
+                        Arguments = "--no-ui",
+                        WorkingDirectory = System.IO.Path.GetDirectoryName(path),
+                        UseShellExecute = true
+                    });
+                    Thread.Sleep(400);
+                    return;
                 }
             }
             catch { }
@@ -99,15 +92,9 @@ namespace DualClampExperimentUI
         {
             try
             {
-                _writer?.Dispose();
-                _writer = null;
-                _reader?.Dispose();
-                _reader = null;
-                if (_pipe != null)
-                {
-                    _pipe.Dispose();
-                    _pipe = null;
-                }
+                _writer?.Dispose(); _writer = null;
+                _reader?.Dispose(); _reader = null;
+                _pipe?.Dispose(); _pipe = null;
             }
             catch { }
         }
@@ -119,32 +106,23 @@ namespace DualClampExperimentUI
             {
                 DisconnectPipe();
                 EnsureBackendStarted();
-
                 var pipe = new NamedPipeClientStream(".", "DualClampExperiment", PipeDirection.InOut, PipeOptions.Asynchronous);
                 await pipe.ConnectAsync(1500);
-
                 _pipe = pipe;
-                _writer = new StreamWriter(_pipe, new UTF8Encoding(false), 4096, true) { AutoFlush = true };
-                _reader = new StreamReader(_pipe, new UTF8Encoding(false), false, 4096, true);
-
+                _writer = new StreamWriter(pipe, new UTF8Encoding(false), 4096, true) { AutoFlush = true };
+                _reader = new StreamReader(pipe, new UTF8Encoding(false), false, 4096, true);
                 SetPipeStatus(true, "UI管道: 已连接");
-                ErrorText.Text = string.Empty;
-
-                // 连上管道后，主动通知后端确保 ADS 连接并获取初始状态
                 await SendCommandInternalAsync("CONNECT_ADS");
-                await SendCommandInternalAsync("GET");
+                await SendCommandInternalAsync(CurrentMode == "legacy" ? "GET" : "GET_PROGRAM");
             }
             catch (Exception ex)
             {
                 DisconnectPipe();
                 SetPipeStatus(false, "UI管道: 未连接");
                 SetAdsStatus(false, "ADS: 未连接");
-                ErrorText.Text = "管道连接失败（请确认后端 DualClampExperiment.exe 是否运行）：" + ex.Message;
+                ErrorText.Text = "管道连接失败：" + ex.Message;
             }
-            finally
-            {
-                _ioLock.Release();
-            }
+            finally { _ioLock.Release(); }
         }
 
         private void SetPipeStatus(bool connected, string text)
@@ -160,217 +138,193 @@ namespace DualClampExperimentUI
         }
 
         private async void Connect_Click(object sender, RoutedEventArgs e) => await ConnectAsync();
-
         private async void ConnectAds_Click(object sender, RoutedEventArgs e) => await SendAsync("CONNECT_ADS");
 
-        private async void SelfCheck_Click(object sender, RoutedEventArgs e)
+        private async void ExperimentMode_Changed(object sender, SelectionChangedEventArgs e)
         {
-            await SendAsync("SELF_CHECK");
+            if (!_loaded || _pipe == null || !_pipe.IsConnected) return;
+            UpdateModeView();
+            try
+            {
+                string mode = CurrentMode;
+                if (mode == "legacy")
+                    await SendAsync("PROGRAM_MODE|mode=legacy");
+                else
+                    await SendAsync("PROGRAM_MODE|mode=" + mode);
+                await PollAsync();
+            }
+            catch (Exception ex) { ErrorText.Text = "切换实验模式失败：" + ex.Message; }
+        }
+
+        private void UpdateModeView()
+        {
+            bool legacy = CurrentMode == "legacy";
+            LegacyToolbar.Visibility = legacy ? Visibility.Visible : Visibility.Collapsed;
+            LegacyPanel.Visibility = legacy ? Visibility.Visible : Visibility.Collapsed;
+            ProgramPanel.Visibility = legacy ? Visibility.Collapsed : Visibility.Visible;
+            bool guidewire = CurrentMode == "guidewire";
+            ProgramPanelTitle.Text = guidewire ? "导丝程序递送参数" : "导管程序递送参数";
+            Axis5PositionLabel.Text = guidewire ? "轴5距左限位 (mm)" : "轴1准备位置 (mm)";
+            Axis6CalculatedLabel.Text = guidewire ? "轴6自动位置 (mm)" : "轴1触发位置 (mm)";
+            if (guidewire)
+            {
+                if (!ProgramAxis5Pos.IsEnabled) ProgramAxis5Pos.Text = _guidewireAxis5Text;
+                ProgramAxis5Pos.IsEnabled = true;
+            }
+            else
+            {
+                if (ProgramAxis5Pos.IsEnabled) _guidewireAxis5Text = ProgramAxis5Pos.Text;
+                ProgramAxis5Pos.Text = "23";
+                ProgramAxis5Pos.IsEnabled = false;
+            }
+            ProgramAxis6Calculated.Text = guidewire ? (ParseOrDefault(ProgramAxis5Pos, 430.0) + 21.0).ToString("F3", CultureInfo.InvariantCulture) : "3.000";
+            ProgramAngleLabel.Text = guidewire ? "轴7角度 (deg)" : "轴2角度 (deg)";
+            ForceTitle.Text = guidewire ? "导丝侧轴向力 fn2" : legacy ? "旧模式轴向力 fn1 / fn2" : "导管侧轴向力 fn1";
+            TorqueTitle.Text = guidewire ? "导丝侧切向力 ft2" : legacy ? "旧模式切向力 ft1 / ft2" : "导管侧切向力 ft1";
+            Force2Line.Visibility = legacy ? Visibility.Visible : Visibility.Collapsed;
+            Torque2Line.Visibility = legacy ? Visibility.Visible : Visibility.Collapsed;
+            _force1.Clear(); _force2.Clear(); _torque1.Clear(); _torque2.Clear();
+        }
+
+        private void ProgramAxis5Pos_Changed(object sender, TextChangedEventArgs e)
+        {
+            if (_loaded && CurrentMode == "guidewire")
+                ProgramAxis6Calculated.Text = (ParseOrDefault(ProgramAxis5Pos, 430.0) + 21.0).ToString("F3", CultureInfo.InvariantCulture);
         }
 
         private async void Prepare_Click(object sender, RoutedEventArgs e)
         {
             try
             {
-                const string command = "PREPARE|instrument={0}|moving_axis={1}|axis1_distance={2}|axis6_distance={3}|axis2_angle={4}|axis7_angle={5}|return_retract={6}|return_velocity={7}|return_acc={8}|return_dec={9}|return_jerk={10}|recovery_mode={11}";
-                string text = string.Format(CultureInfo.InvariantCulture, command,
-                    InstrumentBox.SelectedIndex,
-                    ((ComboBoxItem)MovingAxisBox.SelectedItem).Tag,
-                    Number(Axis1Pos), Number(Axis6Pos), Number(Axis2Angle), Number(Axis7Angle),
-                    Number(ReturnDistance), Number(ReturnVelocity), Number(ReturnAcceleration),
-                    Number(ReturnDeceleration), Number(ReturnJerk), RecoveryBox.SelectedIndex);
-                await SendAsync(text);
+                if (CurrentMode == "legacy")
+                {
+                    string command = string.Format(CultureInfo.InvariantCulture,
+                        "PREPARE|moving_axis={0}|axis1_distance={1}|axis6_distance={2}|axis2_angle={3}|axis7_angle={4}|return_retract={5}|return_velocity={6}|return_acc={7}|return_dec={8}|return_jerk={9}|recovery_mode={10}",
+                        ((ComboBoxItem)MovingAxisBox.SelectedItem).Tag, Number(Axis1Pos), Number(Axis6Pos), Number(Axis2Angle), Number(Axis7Angle),
+                        Number(ReturnDistance), Number(ReturnVelocity), Number(ReturnAcceleration), Number(ReturnDeceleration), Number(ReturnJerk), RecoveryBox.SelectedIndex);
+                    await SendAsync(command);
+                    return;
+                }
+                string mode = CurrentMode;
+                string angleKey = mode == "guidewire" ? "axis7_angle" : "axis2_angle";
+                string commandText = string.Format(CultureInfo.InvariantCulture,
+                    "PROGRAM_PREPARE|mode={0}|axis5_from_left={1}|{2}={3}|cycle_count={4}|final_forward_distance={5}|forward_velocity={6}|forward_acceleration={7}|forward_deceleration={8}|forward_jerk={9}|return_velocity={10}|return_acceleration={11}|return_deceleration={12}|return_jerk={13}",
+                    mode, Number(ProgramAxis5Pos), angleKey, Number(ProgramAngle), Int(ProgramCycleCount), Number(ProgramFinalDistance), Number(ProgramForwardVelocity),
+                    Number(ProgramForwardAcceleration), Number(ProgramForwardDeceleration), Number(ProgramForwardJerk), Number(ProgramReturnVelocity),
+                    Number(ProgramReturnAcceleration), Number(ProgramReturnDeceleration), Number(ProgramReturnJerk));
+                await SendAsync(commandText);
             }
-            catch (Exception ex)
-            {
-                ErrorText.Text = "准备定位参数无效：" + ex.Message;
-            }
+            catch (Exception ex) { ErrorText.Text = "准备定位参数无效：" + ex.Message; }
         }
 
         private async Task PollAsync()
         {
-            if (_isPolling) return;
-            if (_pipe == null || !_pipe.IsConnected) return;
+            if (_isPolling || _pipe == null || !_pipe.IsConnected) return;
             _isPolling = true;
-            try
-            {
-                await SendAsync("GET");
-            }
-            finally
-            {
-                _isPolling = false;
-            }
+            try { await SendAsync(CurrentMode == "legacy" ? "GET" : "GET_PROGRAM"); }
+            finally { _isPolling = false; }
         }
 
         private async void Start_Click(object sender, RoutedEventArgs e)
         {
-            try
-            {
-                if (!_setupDone)
-                {
-                    ErrorText.Text = "请先完成自检并点击准备定位";
-                    return;
-                }
-                await SendAsync("START");
-            }
-            catch (Exception ex) { ErrorText.Text = ex.Message; }
+            if (!_setupDone) { ErrorText.Text = "请等待PLC自动自检完成并完成准备定位"; return; }
+            await SendAsync(CurrentMode == "legacy" ? "START" : "PROGRAM_START");
         }
 
-        private async void Abort_Click(object sender, RoutedEventArgs e) => await SendAsync("ABORT");
+        private async void Abort_Click(object sender, RoutedEventArgs e) => await SendAsync(CurrentMode == "legacy" ? "ABORT" : "PROGRAM_ABORT");
 
         private async void Save_Click(object sender, RoutedEventArgs e)
         {
             string path = System.IO.Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "records", DateTime.Now.ToString("yyyyMMdd_HHmmss"));
-            await SendAsync("SAVE|" + path);
+            await SendAsync((CurrentMode == "legacy" ? "SAVE|" : "PROGRAM_SAVE|") + path);
         }
-
-        private static string Number(TextBox box) => double.Parse(box.Text, CultureInfo.InvariantCulture).ToString(CultureInfo.InvariantCulture);
 
         private async Task<string> SendAsync(string command)
         {
             await _ioLock.WaitAsync();
-            try
-            {
-                return await SendCommandInternalAsync(command);
-            }
-            finally
-            {
-                _ioLock.Release();
-            }
+            try { return await SendCommandInternalAsync(command); }
+            finally { _ioLock.Release(); }
         }
 
         private async Task<string> SendCommandInternalAsync(string command)
         {
-            if (_pipe == null || !_pipe.IsConnected || _writer == null || _reader == null)
-            {
-                SetPipeStatus(false, "UI管道: 未连接");
-                return string.Empty;
-            }
+            if (_pipe == null || !_pipe.IsConnected || _writer == null || _reader == null) return string.Empty;
             try
             {
                 await _writer.WriteLineAsync(command);
                 string response = await _reader.ReadLineAsync() ?? string.Empty;
-                if (string.IsNullOrEmpty(response))
-                {
-                    SetPipeStatus(false, "UI管道: 未连接");
-                    DisconnectPipe();
-                    return string.Empty;
-                }
+                if (string.IsNullOrEmpty(response)) { DisconnectPipe(); return string.Empty; }
                 ParseState(response);
                 return response;
             }
-            catch (Exception ex)
-            {
-                SetPipeStatus(false, "UI管道: 未连接");
-                DisconnectPipe();
-                ErrorText.Text = "管道通讯中断：" + ex.Message;
-                return string.Empty;
-            }
+            catch (Exception ex) { DisconnectPipe(); ErrorText.Text = "管道通讯中断：" + ex.Message; return string.Empty; }
         }
 
         private void ParseState(string response)
         {
-            if (response.StartsWith("STATE|", StringComparison.Ordinal))
-            {
-                SetPipeStatus(true, "UI管道: 已连接");
-                string[] p = response.Split('|');
-                if (p.Length >= 27)
-                {
-                    double axis1Pos = double.Parse(p[2], CultureInfo.InvariantCulture);
-                    double axis6Pos = double.Parse(p[3], CultureInfo.InvariantCulture);
-                    double axis1Vel = double.Parse(p[4], CultureInfo.InvariantCulture);
-                    double axis6Vel = double.Parse(p[5], CultureInfo.InvariantCulture);
-                    double axis1Acc = double.Parse(p[6], CultureInfo.InvariantCulture);
-                    double axis6Acc = double.Parse(p[7], CultureInfo.InvariantCulture);
-                    double axis2Angle = double.Parse(p[8], CultureInfo.InvariantCulture);
-                    double axis7Angle = double.Parse(p[9], CultureInfo.InvariantCulture);
-                    LiveMotionText.Text = string.Format(CultureInfo.InvariantCulture,
-                        "轴1 位置/速度/加速度：{0:F3} mm / {1:F3} mm/s / {2:F3} mm/s²\n轴6 位置/速度/加速度：{3:F3} mm / {4:F3} mm/s / {5:F3} mm/s²\n轴2/轴7 周向角度：{6:F3}° / {7:F3}°",
-                        axis1Pos, axis1Vel, axis1Acc, axis6Pos, axis6Vel, axis6Acc, axis2Angle, axis7Angle);
-                    Add(_force1, double.Parse(p[10], CultureInfo.InvariantCulture));
-                    Add(_force2, double.Parse(p[11], CultureInfo.InvariantCulture));
-                    Add(_torque1, double.Parse(p[12], CultureInfo.InvariantCulture));
-                    Add(_torque2, double.Parse(p[13], CultureInfo.InvariantCulture));
-                    bool adsConnected = p[14] == "1";
-                    _selfcheckDone = p[15] == "1";
-                    _selfcheckBusy = p[16] == "1";
-                    _leftLimitValid = p[17] == "1";
-                    _setupBusy = p[20] == "1";
-                    _setupDone = p[21] == "1";
-                    PhaseText.Text = _selfcheckBusy
-                        ? "SelfCheck (正在执行自检)"
-                        : PhaseName(int.Parse(p[1], CultureInfo.InvariantCulture));
-                    SetAdsStatus(adsConnected, adsConnected ? "ADS: 正常 (Port 851)" : "ADS: 未连接");
-                    ErrorText.Text = p[26];
-                    SelfCheckButton.IsEnabled = adsConnected && !_selfcheckBusy;
-                    PrepareButton.IsEnabled = adsConnected && _selfcheckDone && _leftLimitValid && !_selfcheckBusy && !_setupBusy;
-                    StartButton.IsEnabled = adsConnected && _setupDone && !_setupBusy;
-                    Draw(ForceCanvas, Force1Line, _force1, Force2Line, _force2);
-                    Draw(TorqueCanvas, Torque1Line, _torque1, Torque2Line, _torque2);
-                }
-            }
-            else if (response.StartsWith("OK|CONNECT_ADS", StringComparison.Ordinal))
-            {
-                SetAdsStatus(true, "ADS: 正常 (Port 851)");
-            }
-            else if (response.StartsWith("OK|DISCONNECT_ADS", StringComparison.Ordinal))
-            {
-                SetAdsStatus(false, "ADS: 已断开");
-            }
-            else if (response.StartsWith("ERROR|", StringComparison.Ordinal))
-            {
-                ErrorText.Text = response.Substring(6);
-            }
+            if (response.StartsWith("STATE|", StringComparison.Ordinal)) ParseLegacyState(response);
+            else if (response.StartsWith("PROGRAM_STATE|", StringComparison.Ordinal)) ParseProgramState(response);
+            else if (response.StartsWith("OK|CONNECT_ADS", StringComparison.Ordinal)) SetAdsStatus(true, "ADS: 正常 (Port 851)");
+            else if (response.StartsWith("ERROR|", StringComparison.Ordinal)) ErrorText.Text = response.Substring(6);
         }
 
-        private static void Add(List<double> values, double value)
+        private void ParseLegacyState(string response)
         {
-            values.Add(value);
-            if (values.Count > 240) values.RemoveAt(0);
+            string[] p = response.Split('|');
+            if (p.Length < 27) return;
+            double a1 = D(p[2]), a6 = D(p[3]), v1 = D(p[4]), v6 = D(p[5]), acc1 = D(p[6]), acc6 = D(p[7]);
+            LiveMotionText.Text = string.Format(CultureInfo.InvariantCulture, "轴1：{0:F3} mm / {1:F3} mm/s / {2:F3} mm/s²\n轴6：{3:F3} mm / {4:F3} mm/s / {5:F3} mm/s²\n轴2/轴7角度：{6:F3}° / {7:F3}°", a1, v1, acc1, a6, v6, acc6, D(p[8]), D(p[9]));
+            Add(_force1, D(p[10])); Add(_force2, D(p[11])); Add(_torque1, D(p[12])); Add(_torque2, D(p[13]));
+            bool ads = p[14] == "1"; _selfcheckDone = p[15] == "1"; _selfcheckBusy = p[16] == "1"; _leftLimitValid = p[17] == "1"; _setupBusy = p[20] == "1"; _setupDone = p[21] == "1";
+            PhaseText.Text = _selfcheckBusy ? "SelfCheck (正在执行自检)" : LegacyPhase(int.Parse(p[1], CultureInfo.InvariantCulture));
+            SelfCheckText.Text = _selfcheckBusy ? "PLC自检: 执行中" : _selfcheckDone ? "PLC自检: 已完成" : "PLC自检: 未完成";
+            CycleText.Text = "旧模式"; SetAdsStatus(ads, ads ? "ADS: 正常 (Port 851)" : "ADS: 未连接"); ErrorText.Text = p[26];
+            PrepareButton.IsEnabled = ads && _selfcheckDone && _leftLimitValid && !_selfcheckBusy && !_setupBusy; StartButton.IsEnabled = ads && _setupDone && !_setupBusy;
+            Draw(ForceCanvas, Force1Line, _force1, Force2Line, _force2); Draw(TorqueCanvas, Torque1Line, _torque1, Torque2Line, _torque2);
         }
 
-        private static string PhaseName(int phase) => phase switch
+        private void ParseProgramState(string response)
         {
-            0 => "Idle (空闲待命)",
-            1 => "Prepare (准备阶段)",
-            2 => "Rotate (旋转对齐)",
-            3 => "Baseline (基准采样)",
-            4 => "FixedHold (固定端保持)",
-            5 => "ReleaseMoving (运动端释放)",
-            6 => "ReturnMoving (运动端回程)",
-            7 => "ReclampMoving (运动端重新夹紧)",
-            8 => "RecoverHold (恢复保持)",
-            9 => "RecoverMove (恢复输送)",
-            10 => "Completed (实验完成)",
-            11 => "Aborted (已中止)",
-            12 => "Error (错误)",
-            13 => "SelfCheckDone (自检完成，等待准备定位)",
-            14 => "SetupMove (准备定位)",
-            15 => "ReadyForClamp (准备完成，等待开始)",
-            _ => "Unknown"
-        };
+            string[] p = response.Split('|');
+            if (p.Length < 42) return;
+            int phase = int.Parse(p[2], CultureInfo.InvariantCulture); _setupBusy = p[5] == "1"; _setupDone = p[6] == "1"; _selfcheckDone = p[7] == "1";
+            SelfCheckText.Text = _selfcheckDone ? "PLC自检: 已完成" : "PLC自检: 执行中";
+            bool guidewire = CurrentMode == "guidewire";
+            if (guidewire)
+            {
+                LiveMotionText.Text = string.Format(CultureInfo.InvariantCulture, "轴5：{0:F3} mm / {1:F3} mm/s / {2:F3} mm/s²\n轴6：{3:F3} mm / {4:F3} mm/s / {5:F3} mm/s²\n轴7角度：{6:F3}°", D(p[14]), D(p[15]), D(p[16]), D(p[17]), D(p[18]), D(p[19]), D(p[20]));
+                Add(_force1, D(p[25])); Add(_torque1, D(p[26]));
+            }
+            else
+            {
+                LiveMotionText.Text = string.Format(CultureInfo.InvariantCulture, "轴1：{0:F3} mm / {1:F3} mm/s / {2:F3} mm/s²\n轴2角度：{3:F3}°", D(p[8]), D(p[9]), D(p[10]), D(p[11]));
+                Add(_force1, D(p[23])); Add(_torque1, D(p[24]));
+            }
+            CycleText.Text = string.Format(CultureInfo.InvariantCulture, "周期：{0} / {1}", p[3], p[4]);
+            bool ads = p[40] == "1";
+            PhaseText.Text = ProgramPhase(phase); ErrorText.Text = p[41];
+            SetAdsStatus(ads, ads ? "ADS: 正常 (Port 851)" : "ADS: 未连接");
+            PrepareButton.IsEnabled = ads && _selfcheckDone && !_setupBusy; StartButton.IsEnabled = ads && _setupDone && !_setupBusy;
+            Draw(ForceCanvas, Force1Line, _force1, Force2Line, _force2); Draw(TorqueCanvas, Torque1Line, _torque1, Torque2Line, _torque2);
+        }
+
+        private static double D(string value) => double.Parse(value, CultureInfo.InvariantCulture);
+        private static string Number(TextBox box) => double.Parse(box.Text, CultureInfo.InvariantCulture).ToString(CultureInfo.InvariantCulture);
+        private static string Int(TextBox box) => uint.Parse(box.Text, CultureInfo.InvariantCulture).ToString(CultureInfo.InvariantCulture);
+        private static double ParseOrDefault(TextBox box, double fallback) { double value; return double.TryParse(box.Text, NumberStyles.Float, CultureInfo.InvariantCulture, out value) ? value : fallback; }
+        private static void Add(List<double> values, double value) { values.Add(value); if (values.Count > 240) values.RemoveAt(0); }
+        private static string LegacyPhase(int phase) => phase == 13 ? "自检完成" : phase == 14 ? "准备定位" : phase == 15 ? "准备完成" : phase.ToString(CultureInfo.InvariantCulture);
+        private static string ProgramPhase(int phase) => new[] { "空闲", "准备定位", "准备完成", "基准采样", "前向至触发边", "运动端释放", "运动端回退", "重新夹紧", "周期判定", "最终前向", "完成", "已中止", "错误" }[Math.Max(0, Math.Min(12, phase))];
 
         private static void Draw(Canvas canvas, Polyline a, List<double> av, Polyline b, List<double> bv)
         {
             if (canvas.ActualWidth < 10 || canvas.ActualHeight < 10) return;
-            double min = double.PositiveInfinity, max = double.NegativeInfinity;
-            foreach (double v in av) { min = Math.Min(min, v); max = Math.Max(max, v); }
-            foreach (double v in bv) { min = Math.Min(min, v); max = Math.Max(max, v); }
-            if (double.IsNaN(min) || double.IsInfinity(min) || double.IsNaN(max) || double.IsInfinity(max)) return;
+            var all = new List<double>(av); all.AddRange(bv); if (all.Count == 0) return;
+            double min = double.PositiveInfinity, max = double.NegativeInfinity; foreach (double v in all) { min = Math.Min(min, v); max = Math.Max(max, v); }
             if (Math.Abs(max - min) < 1e-9) { max += 1; min -= 1; }
-            PointCollection pa = new PointCollection(), pb = new PointCollection();
-            AddPoints(pa, av, canvas, min, max); AddPoints(pb, bv, canvas, min, max);
-            a.Points = pa; b.Points = pb;
+            var pa = new PointCollection(); var pb = new PointCollection(); AddPoints(pa, av, canvas, min, max); AddPoints(pb, bv, canvas, min, max); a.Points = pa; b.Points = pb;
         }
-
         private static void AddPoints(PointCollection points, List<double> values, Canvas canvas, double min, double max)
-        {
-            for (int i = 0; i < values.Count; i++)
-            {
-                double x = values.Count <= 1 ? 0 : i * canvas.ActualWidth / (values.Count - 1);
-                double y = canvas.ActualHeight - (values[i] - min) / (max - min) * canvas.ActualHeight;
-                points.Add(new Point(x, y));
-            }
-        }
+        { for (int i = 0; i < values.Count; i++) points.Add(new Point(values.Count <= 1 ? 0 : i * canvas.ActualWidth / (values.Count - 1), canvas.ActualHeight - (values[i] - min) / (max - min) * canvas.ActualHeight)); }
     }
 }

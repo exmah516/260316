@@ -14,7 +14,8 @@
 	_clear_err,
 	_err,
 	_reset,
-	_dual_clamp
+	_dual_clamp,
+	_program_test
 )INT;
 
 END_TYPE]]></Declaration>

@@ -100,12 +100,13 @@ struct ControlConfig
 
 	// 基于左限位参考的爬行窗口。
 	double axis1_window_left_from_left_mm = 3.0;
-	double axis1_window_right_from_left_mm = 18.0;
+	// 轴1固定爬行窗口宽度为20 mm，保留左端3 mm，因此右端为23 mm。
+	double axis1_window_right_from_left_mm = 23.0;
 	double axis6_window_size_mm = 20.0;
 	// 轴6窗口以轴5当前位置为基准，左边界至少领先轴5该距离。
 	double axis6_window_min_gap_from_axis5_mm = 1.0;
-	// 协同模式双边换手目标分别从近端/远端窗口向内缩该距离。
-	double cooperative_axis6_reset_inset_mm = 5.0;
+	// 协同模式换手目标从窗口对侧边界执行；0 表示完整使用20 mm窗口。
+	double cooperative_axis6_reset_inset_mm = 0.0;
 	// 标准启动中间夹持阶段的轴5/6间距；与运行时20 mm窗口宽度相互独立。
 	double axis56_ready_gap_mm = 15.0;
 	double axis3_delivery_stop_from_left_mm = 20.0;

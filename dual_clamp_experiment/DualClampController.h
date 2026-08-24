@@ -13,7 +13,6 @@ class DualClampController
 public:
 	DualClampController();
 
-	bool self_check();
 	bool prepare(const DualClampConfig& config);
 	bool start(const DualClampConfig& config);
 	void abort(const std::string& reason);

@@ -34,6 +34,9 @@
     <ClCompile Include="DualClampTypes.cpp" />
     <ClCompile Include="DualClampAds.cpp" />
     <ClCompile Include="DualClampController.cpp" />
+    <ClCompile Include="ProgrammedDeliveryTypes.cpp" />
+    <ClCompile Include="ProgrammedDeliveryAds.cpp" />
+    <ClCompile Include="ProgrammedDeliveryController.cpp" />
     <ClCompile Include="DualClampPipe.cpp" />
     <ClCompile Include="main.cpp" />
   </ItemGroup>
@@ -44,6 +47,9 @@
     <ClInclude Include="DualClampTypes.h" />
     <ClInclude Include="DualClampAds.h" />
     <ClInclude Include="DualClampController.h" />
+    <ClInclude Include="ProgrammedDeliveryTypes.h" />
+    <ClInclude Include="ProgrammedDeliveryAds.h" />
+    <ClInclude Include="ProgrammedDeliveryController.h" />
     <ClInclude Include="DualClampPipe.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />

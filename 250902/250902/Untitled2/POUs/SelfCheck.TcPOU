@@ -592,7 +592,15 @@ IF all_done THEN
         G.refer_from_left[i] := G.act_pos_from_left[i];
     END_FOR
     G.dual_clamp_selfcheck_req := FALSE;
-    G.gen_state := _dual_clamp;
+	G.program_test_phase := 0;
+	G.program_test_setup_busy := FALSE;
+	G.program_test_setup_done := FALSE;
+	G.program_test_status_error_id := 0;
+	IF (G.program_test_mode = 1) OR (G.program_test_mode = 2) THEN
+		G.gen_state := _program_test;
+	ELSE
+		G.gen_state := _dual_clamp;
+	END_IF
 END_IF
 ]]></ST>
     </Implementation>

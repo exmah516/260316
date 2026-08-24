@@ -46,10 +46,10 @@ namespace
 		const std::filesystem::path backend_path(module_path, module_path + length);
 		const std::filesystem::path project_path = backend_path.parent_path().parent_path().parent_path();
 		const std::vector<std::filesystem::path> candidate_paths = {
-			project_path / L"AdsControlUI" / L"bin" / L"x64" / L"Debug" / L"net472" / L"DualClampExperimentUI.exe",
 			project_path / L"AdsControlUI" / L"bin" / L"Debug" / L"net472" / L"DualClampExperimentUI.exe",
-			project_path / L"AdsControlUI" / L"bin" / L"x64" / L"Release" / L"net472" / L"DualClampExperimentUI.exe",
+			project_path / L"AdsControlUI" / L"bin" / L"x64" / L"Debug" / L"net472" / L"DualClampExperimentUI.exe",
 			project_path / L"AdsControlUI" / L"bin" / L"Release" / L"net472" / L"DualClampExperimentUI.exe",
+			project_path / L"AdsControlUI" / L"bin" / L"x64" / L"Release" / L"net472" / L"DualClampExperimentUI.exe",
 			backend_path.parent_path() / L"DualClampExperimentUI.exe",
 			backend_path.parent_path() / L"net472" / L"DualClampExperimentUI.exe"
 		};
@@ -88,6 +88,7 @@ int main(int argc, char* argv[])
 	std::ios::sync_with_stdio(false);
 
 	DualClampController controller;
+	ProgrammedDeliveryController program_controller;
 	if (controller.is_ads_open())
 	{
 		std::cout << "ADS 状态：已成功建立路由连接（端口 851）。" << std::endl;
@@ -108,5 +109,5 @@ int main(int argc, char* argv[])
 	}
 	DualClampPipeServer server;
 	std::cout << "双机构夹持扰动实验服务端已就绪，正在监听命名管道 \\\\.\\pipe\\DualClampExperiment ..." << std::endl;
-	return server.run(controller);
+	return server.run(controller, program_controller);
 }

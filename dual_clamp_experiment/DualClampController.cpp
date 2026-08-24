@@ -37,25 +37,6 @@ bool DualClampController::is_ads_open() const
 	return ads_.is_open();
 }
 
-bool DualClampController::self_check()
-{
-	std::lock_guard<std::mutex> lock(mutex_);
-	if (!ads_.is_open() && !ads_.open())
-	{
-		last_error_ = "ADS连接失败：" + ads_.last_error();
-		return false;
-	}
-	if (!ads_.request_self_check())
-	{
-		last_error_ = "下发自检请求失败：" + ads_.last_error();
-		return false;
-	}
-	selfcheck_requested_ = true;
-	started_ = false;
-	last_error_.clear();
-	return true;
-}
-
 bool DualClampController::prepare(const DualClampConfig& config)
 {
 	std::lock_guard<std::mutex> lock(mutex_);
@@ -179,7 +160,6 @@ bool DualClampController::write_metadata(const std::string& directory, std::stri
 		return false;
 	}
 	out << "{\n"
-		<< "  \"instrument\": \"" << (config_.instrument == DualClampInstrument::Guidewire ? "guidewire" : "catheter") << "\",\n"
 		<< "  \"moving_axis\": " << config_.moving_axis << ",\n"
 		<< "  \"fixed_axis\": " << (config_.moving_axis == 1 ? 6 : 1) << ",\n"
 		<< "  \"axis1_distance_from_left_mm\": " << config_.axis1_distance_from_left_mm << ",\n"

@@ -38,6 +38,7 @@ IF NOT initialized THEN
     G.dual_clamp_start_req := FALSE;
     G.dual_clamp_sample_arm := FALSE;
     G.dual_clamp_sample_clear := FALSE;
+    // 进入实验功能块时先保持两端释放，准备定位完成后再同时夹紧。
     G.dual_clamp_cylinder2_cmd := G.dual_clamp_cylinder2_release_word;
     G.dual_clamp_cylinder4_cmd := G.dual_clamp_cylinder4_release_word;
     G.dual_clamp_leftlimit_axis1_abs := G.leftlimit[1];
@@ -84,7 +85,6 @@ FOR i := 1 TO 7 DO
         G.SetPointGenDisable_output[i].Busy := G.SetPointGenDisable[i].Busy;
         G.SetPointGenDisable_output[i].Error := G.SetPointGenDisable[i].Error;
         G.SetPointGenDisable_output[i].ErrorID := G.SetPointGenDisable[i].ErrorID;
-        G.SetPointGenDisable_output[i].Enabled := G.SetPointGenDisable[i].Enabled;
     ELSE
         G.power_[i](Axis := G.axis[i], Enable := FALSE, Enable_Positive := TRUE, Enable_Negative := TRUE);
         G.power_output[i].Done := G.power_[i].Status;
@@ -98,7 +98,6 @@ FOR i := 1 TO 7 DO
         G.SetPointGenDisable_output[i].Busy := G.SetPointGenDisable[i].Busy;
         G.SetPointGenDisable_output[i].Error := G.SetPointGenDisable[i].Error;
         G.SetPointGenDisable_output[i].ErrorID := G.SetPointGenDisable[i].ErrorID;
-        G.SetPointGenDisable_output[i].Enabled := G.SetPointGenDisable[i].Enabled;
         setup_exec[i] := FALSE;
         return_exec[i] := FALSE;
     END_IF
@@ -182,8 +181,9 @@ END_IF
 IF state = 20 THEN
     G.dual_clamp_enable := TRUE;
     G.dual_clamp_phase := 15;
-    G.dual_clamp_cylinder2_cmd := G.dual_clamp_cylinder2_release_word;
-    G.dual_clamp_cylinder4_cmd := G.dual_clamp_cylinder4_release_word;
+    // 准备定位完成后，两端先同时夹紧。开始实验后仍由本状态机保证固定端不释放。
+    G.dual_clamp_cylinder2_cmd := G.dual_clamp_cylinder2_clamp_word;
+    G.dual_clamp_cylinder4_cmd := G.dual_clamp_cylinder4_clamp_word;
     IF G.dual_clamp_start_req THEN
         G.dual_clamp_start_req := FALSE;
         G.dual_clamp_phase := 4; // 基准采样
@@ -318,6 +318,9 @@ IF state = 90 THEN
     G.dual_clamp_enable := FALSE;
     G.dual_clamp_phase := 11;
     G.dual_clamp_sample_arm := FALSE;
+    // 中止后保持器械，不让任一端停留在释放状态。
+    G.dual_clamp_cylinder2_cmd := G.dual_clamp_cylinder2_clamp_word;
+    G.dual_clamp_cylinder4_cmd := G.dual_clamp_cylinder4_clamp_word;
     FOR i := 1 TO 7 DO
         setup_exec[i] := FALSE;
         return_exec[i] := FALSE;

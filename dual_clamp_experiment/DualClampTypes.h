@@ -4,12 +4,6 @@
 #include <cstdint>
 #include <string>
 
-enum class DualClampInstrument : int
-{
-	Guidewire = 0,
-	Catheter = 1
-};
-
 enum class DualClampPhase : int
 {
 	Idle = 0,
@@ -37,7 +31,6 @@ enum class DualClampRecoveryMode : int
 
 struct DualClampConfig
 {
-	DualClampInstrument instrument = DualClampInstrument::Guidewire;
 	int moving_axis = 1; // 1 或 6；另一端自动作为固定端。
 	double axis1_distance_from_left_mm = 96.0;
 	double axis6_distance_from_left_mm = 580.0;
