@@ -33,7 +33,9 @@ namespace DualClampExperimentUI
         private bool _leftLimitValid;
         private bool _setupBusy;
         private bool _setupDone;
-        private string _guidewireAxis5Text = "430";
+        private bool _standaloneRecording;
+        private bool _standaloneSelfcheckDone;
+        private bool _standaloneLegacyBusy;
         private string CurrentMode => ((ComboBoxItem)ExperimentModeBox.SelectedItem)?.Tag?.ToString() ?? "legacy";
 
         public MainWindow()
@@ -114,6 +116,7 @@ namespace DualClampExperimentUI
                 SetPipeStatus(true, "UI管道: 已连接");
                 await SendCommandInternalAsync("CONNECT_ADS");
                 await SendCommandInternalAsync(CurrentMode == "legacy" ? "GET" : "GET_PROGRAM");
+                if (CurrentMode == "legacy") await SendCommandInternalAsync("GET_STANDALONE_RECORD");
             }
             catch (Exception ex)
             {
@@ -164,25 +167,28 @@ namespace DualClampExperimentUI
             ProgramPanel.Visibility = legacy ? Visibility.Collapsed : Visibility.Visible;
             bool guidewire = CurrentMode == "guidewire";
             ProgramPanelTitle.Text = guidewire ? "导丝程序递送参数" : "导管程序递送参数";
-            Axis5PositionLabel.Text = guidewire ? "轴5距左限位 (mm)" : "轴1准备位置 (mm)";
-            Axis6CalculatedLabel.Text = guidewire ? "轴6自动位置 (mm)" : "轴1触发位置 (mm)";
-            if (guidewire)
-            {
-                if (!ProgramAxis5Pos.IsEnabled) ProgramAxis5Pos.Text = _guidewireAxis5Text;
-                ProgramAxis5Pos.IsEnabled = true;
-            }
-            else
-            {
-                if (ProgramAxis5Pos.IsEnabled) _guidewireAxis5Text = ProgramAxis5Pos.Text;
-                ProgramAxis5Pos.Text = "23";
-                ProgramAxis5Pos.IsEnabled = false;
-            }
-            ProgramAxis6Calculated.Text = guidewire ? (ParseOrDefault(ProgramAxis5Pos, 430.0) + 21.0).ToString("F3", CultureInfo.InvariantCulture) : "3.000";
+            Visibility catheterVisibility = guidewire ? Visibility.Collapsed : Visibility.Visible;
+            Visibility guidewireVisibility = guidewire ? Visibility.Visible : Visibility.Collapsed;
+            CatheterAxis1PrepareLabel.Visibility = catheterVisibility;
+            CatheterAxis1TriggerLabel.Visibility = catheterVisibility;
+            ProgramAxis1PreparePos.Visibility = catheterVisibility;
+            ProgramAxis1TriggerPos.Visibility = catheterVisibility;
+            Axis5PositionLabel.Visibility = guidewireVisibility;
+            ProgramAxis5Pos.Visibility = guidewireVisibility;
+            Axis6CalculatedLabel.Visibility = guidewireVisibility;
+            ProgramAxis6CalculatedBorder.Visibility = guidewireVisibility;
+            ProgramAxis6Calculated.Text = (ParseOrDefault(ProgramAxis5Pos, 430.0) + 21.0).ToString("F3", CultureInfo.InvariantCulture);
             ProgramAngleLabel.Text = guidewire ? "轴7角度 (deg)" : "轴2角度 (deg)";
-            ForceTitle.Text = guidewire ? "导丝侧轴向力 fn2" : legacy ? "旧模式轴向力 fn1 / fn2" : "导管侧轴向力 fn1";
-            TorqueTitle.Text = guidewire ? "导丝侧切向力 ft2" : legacy ? "旧模式切向力 ft1 / ft2" : "导管侧切向力 ft1";
+			ForceTitle.Text = guidewire ? "导丝侧轴向力 fn2 (N)" : legacy ? "实时轴向力 (N)" : "导管侧轴向力 fn1 (N)";
+			TorqueTitle.Text = guidewire ? "导丝侧力 ft2 (N)" : legacy ? "实时 ft 力 (N)" : "导管侧力 ft1 (N)";
+			Force1LegendText.Text = guidewire ? "fn2 (N)" : "fn1 (N)";
+			Torque1LegendText.Text = guidewire ? "ft2 (N)" : "ft1 (N)";
+            ForceValueText.Text = "未取零";
+            TorqueValueText.Text = "未取零";
             Force2Line.Visibility = legacy ? Visibility.Visible : Visibility.Collapsed;
             Torque2Line.Visibility = legacy ? Visibility.Visible : Visibility.Collapsed;
+            Force2Legend.Visibility = legacy ? Visibility.Visible : Visibility.Collapsed;
+            Torque2Legend.Visibility = legacy ? Visibility.Visible : Visibility.Collapsed;
             _force1.Clear(); _force2.Clear(); _torque1.Clear(); _torque2.Clear();
         }
 
@@ -207,9 +213,12 @@ namespace DualClampExperimentUI
                 }
                 string mode = CurrentMode;
                 string angleKey = mode == "guidewire" ? "axis7_angle" : "axis2_angle";
+                string positionFields = mode == "guidewire"
+                    ? "axis5_from_left=" + Number(ProgramAxis5Pos)
+                    : "axis1_prepare_from_left=" + Number(ProgramAxis1PreparePos) + "|axis1_trigger_from_left=" + Number(ProgramAxis1TriggerPos);
                 string commandText = string.Format(CultureInfo.InvariantCulture,
-                    "PROGRAM_PREPARE|mode={0}|axis5_from_left={1}|{2}={3}|cycle_count={4}|final_forward_distance={5}|forward_velocity={6}|forward_acceleration={7}|forward_deceleration={8}|forward_jerk={9}|return_velocity={10}|return_acceleration={11}|return_deceleration={12}|return_jerk={13}|record_name={14}",
-                    mode, Number(ProgramAxis5Pos), angleKey, Number(ProgramAngle), Int(ProgramCycleCount), Number(ProgramFinalDistance), Number(ProgramForwardVelocity),
+                    "PROGRAM_PREPARE|mode={0}|{1}|{2}={3}|cycle_count={4}|final_forward_distance={5}|release_wait_ms={6}|reclamp_wait_ms={7}|forward_velocity={8}|forward_acceleration={9}|forward_deceleration={10}|forward_jerk={11}|return_velocity={12}|return_acceleration={13}|return_deceleration={14}|return_jerk={15}|record_name={16}",
+                    mode, positionFields, angleKey, Number(ProgramAngle), Int(ProgramCycleCount), Number(ProgramFinalDistance), Int(ProgramReleaseWait), Int(ProgramReclampWait), Number(ProgramForwardVelocity),
                     Number(ProgramForwardAcceleration), Number(ProgramForwardDeceleration), Number(ProgramForwardJerk), Number(ProgramReturnVelocity),
                     Number(ProgramReturnAcceleration), Number(ProgramReturnDeceleration), Number(ProgramReturnJerk), RecordSuffix());
                 await SendAsync(commandText);
@@ -221,7 +230,11 @@ namespace DualClampExperimentUI
         {
             if (_isPolling || _pipe == null || !_pipe.IsConnected) return;
             _isPolling = true;
-            try { await SendAsync(CurrentMode == "legacy" ? "GET" : "GET_PROGRAM"); }
+            try
+            {
+                await SendAsync(CurrentMode == "legacy" ? "GET" : "GET_PROGRAM");
+                if (CurrentMode == "legacy") await SendAsync("GET_STANDALONE_RECORD");
+            }
             finally { _isPolling = false; }
         }
 
@@ -236,12 +249,65 @@ namespace DualClampExperimentUI
             await SendAsync(CurrentMode == "legacy" ? "ZERO_FORCE" : "PROGRAM_ZERO_FORCE");
         }
 
-        private async void Abort_Click(object sender, RoutedEventArgs e) => await SendAsync(CurrentMode == "legacy" ? "ABORT" : "PROGRAM_ABORT");
-
-        private async void Save_Click(object sender, RoutedEventArgs e)
+        private async void ManualCylinderOpen_Click(object sender, RoutedEventArgs e)
         {
-            await SendAsync(CurrentMode == "legacy" ? "SAVE|" : "PROGRAM_SAVE|");
+            if (sender is Button button && int.TryParse(button.Tag?.ToString(), out int cylinder))
+                await SendManualCylinderConfigAndAction(cylinder, true);
         }
+
+        private async void ManualCylinderClose_Click(object sender, RoutedEventArgs e)
+        {
+            if (sender is Button button && int.TryParse(button.Tag?.ToString(), out int cylinder))
+                await SendManualCylinderConfigAndAction(cylinder, false);
+        }
+
+        private async Task SendManualCylinderConfigAndAction(int cylinder, bool open)
+        {
+            try
+            {
+                CheckBox enabled = cylinder == 1 ? Cylinder1Enabled : cylinder == 2 ? Cylinder2Enabled : cylinder == 3 ? Cylinder3Enabled : Cylinder4Enabled;
+                TextBox openBox = cylinder == 1 ? Cylinder1OpenValue : cylinder == 2 ? Cylinder2OpenValue : cylinder == 3 ? Cylinder3OpenValue : Cylinder4OpenValue;
+                TextBox closeBox = cylinder == 1 ? Cylinder1CloseValue : cylinder == 2 ? Cylinder2CloseValue : cylinder == 3 ? Cylinder3CloseValue : Cylinder4CloseValue;
+                uint openValue = uint.Parse(openBox.Text, CultureInfo.InvariantCulture);
+                uint closeValue = uint.Parse(closeBox.Text, CultureInfo.InvariantCulture);
+                if (openValue > 65535 || closeValue > 65535) throw new ArgumentOutOfRangeException();
+                string config = string.Format(CultureInfo.InvariantCulture,
+                    "MANUAL_CYLINDER_CONFIG|cylinder={0}|enabled={1}|open={2}|close={3}", cylinder, enabled.IsChecked == true ? 1 : 0, openValue, closeValue);
+                string result = await SendAsync(config);
+                if (result.StartsWith("OK|", StringComparison.Ordinal))
+                    await SendAsync(string.Format(CultureInfo.InvariantCulture, "MANUAL_CYLINDER_{0}|cylinder={1}", open ? "OPEN" : "CLOSE", cylinder));
+            }
+            catch (Exception ex) { ErrorText.Text = "电缸参数无效：" + ex.Message; }
+        }
+
+        private async void StandaloneRecordStart_Click(object sender, RoutedEventArgs e)
+        {
+            try
+            {
+                ulong fields = BuildStandaloneFieldMask();
+                if (fields == 0) { ErrorText.Text = "请至少选择一个独立记录字段"; return; }
+                string command = string.Format(CultureInfo.InvariantCulture,
+                    "STANDALONE_RECORD_START|record_name={0}|fields=0x{1:X}", RecordSuffix(), fields);
+                await SendAsync(command);
+            }
+            catch (Exception ex) { ErrorText.Text = "独立记录参数无效：" + ex.Message; }
+        }
+
+        private async void StandaloneRecordStop_Click(object sender, RoutedEventArgs e) => await SendAsync("STANDALONE_RECORD_STOP");
+
+        private async void StandaloneZero_Click(object sender, RoutedEventArgs e) => await SendAsync("STANDALONE_ZERO_FORCE");
+
+        private void StandaloneSelectAll_Click(object sender, RoutedEventArgs e)
+        {
+            foreach (CheckBox box in StandaloneFieldBoxes()) box.IsChecked = true;
+        }
+
+        private void StandaloneClearAll_Click(object sender, RoutedEventArgs e)
+        {
+            foreach (CheckBox box in StandaloneFieldBoxes()) box.IsChecked = false;
+        }
+
+        private async void Abort_Click(object sender, RoutedEventArgs e) => await SendAsync(CurrentMode == "legacy" ? "ABORT" : "PROGRAM_ABORT");
 
         private async Task<string> SendAsync(string command)
         {
@@ -268,6 +334,7 @@ namespace DualClampExperimentUI
         {
             if (response.StartsWith("STATE|", StringComparison.Ordinal)) ParseLegacyState(response);
             else if (response.StartsWith("PROGRAM_STATE|", StringComparison.Ordinal)) ParseProgramState(response);
+            else if (response.StartsWith("STANDALONE_STATE|", StringComparison.Ordinal)) ParseStandaloneState(response);
             else if (response.StartsWith("OK|CONNECT_ADS", StringComparison.Ordinal)) SetAdsStatus(true, "ADS: 正常 (Port 851)");
             else if (response.StartsWith("ERROR|", StringComparison.Ordinal)) ErrorText.Text = response.Substring(6);
         }
@@ -278,7 +345,6 @@ namespace DualClampExperimentUI
             if (p.Length < 27) return;
             double a1 = D(p[2]), a6 = D(p[3]), v1 = D(p[4]), v6 = D(p[5]), acc1 = D(p[6]), acc6 = D(p[7]);
             LiveMotionText.Text = string.Format(CultureInfo.InvariantCulture, "轴1：{0:F3} mm / {1:F3} mm/s / {2:F3} mm/s²\n轴6：{3:F3} mm / {4:F3} mm/s / {5:F3} mm/s²\n轴2/轴7角度：{6:F3}° / {7:F3}°", a1, v1, acc1, a6, v6, acc6, D(p[8]), D(p[9]));
-            Add(_force1, D(p[10])); Add(_force2, D(p[11])); Add(_torque1, D(p[12])); Add(_torque2, D(p[13]));
             bool ads = p[14] == "1"; _selfcheckDone = p[15] == "1"; _selfcheckBusy = p[16] == "1"; _leftLimitValid = p[17] == "1"; _setupBusy = p[20] == "1"; _setupDone = p[21] == "1";
             PhaseText.Text = _selfcheckBusy ? "SelfCheck (正在执行自检)" : LegacyPhase(int.Parse(p[1], CultureInfo.InvariantCulture));
             SelfCheckText.Text = _selfcheckBusy ? "PLC自检: 执行中" : _selfcheckDone ? "PLC自检: 已完成" : "PLC自检: 未完成";
@@ -287,10 +353,24 @@ namespace DualClampExperimentUI
             ZeroStatusText.Text = p.Length > legacyZeroDone && p[legacyZeroBusy] == "1" ? "力感零点：采集中" : p.Length > legacyZeroDone && p[legacyZeroDone] == "1" ? "力感零点：已完成" : "力感零点：未完成";
             string legacyDirectory = p.Length > 36 ? p[36] : string.Empty;
             bool legacyArchived = p.Length > 37 && p[37] == "1";
-            RecordStatusText.Text = legacyArchived ? "实时记录：已归档（" + p[34] + "点）" : p.Length > 34 && p[33] == "1" ? "实时记录：进行中（" + p[34] + "点）" : p.Length > 34 && p[34] != "0" ? "实时记录：待归档（" + p[34] + "点）" : "实时记录：未开始";
+            RecordStatusText.Text = legacyArchived ? "实时记录：已归档（" + p[34] + "点）" : p.Length > 34 && p[33] == "1" ? "实时记录：进行中（" + p[34] + "点）" : p.Length > 34 && p[34] != "0" ? "实时记录：自动归档中（" + p[34] + "点）" : "实时记录：未开始";
             if (!string.IsNullOrWhiteSpace(legacyDirectory)) RecordStatusText.Text += "\n目录：" + legacyDirectory;
-            ZeroValuesText.Text = p.Length > 32 ? string.Format(CultureInfo.InvariantCulture, "fn1零点：{0:F3}  ft1零点：{1:F3}\nfn2零点：{2:F3}  ft2零点：{3:F3}", D(p[29]), D(p[30]), D(p[31]), D(p[32])) : "";
+            ZeroValuesText.Text = p.Length > 32 ? string.Format(CultureInfo.InvariantCulture, "零点值（原始计数 count）\nfn1：{0:F3}  ft1：{1:F3}\nfn2：{2:F3}  ft2：{3:F3}", D(p[29]), D(p[30]), D(p[31]), D(p[32])) : "";
             ErrorText.Text = p[legacyError];
+            bool forceValid = p.Length > 38 && p[38] == "1";
+            if (forceValid)
+            {
+                double fn1 = D(p[39]), ft1 = D(p[40]), fn2 = D(p[41]), ft2 = D(p[42]);
+                Add(_force1, fn1); Add(_force2, fn2); Add(_torque1, ft1); Add(_torque2, ft2);
+                ForceValueText.Text = string.Format(CultureInfo.InvariantCulture, "fn1: {0:F3} N   fn2: {1:F3} N", fn1, fn2);
+				TorqueValueText.Text = string.Format(CultureInfo.InvariantCulture, "ft1: {0:F6} N   ft2: {1:F6} N", ft1, ft2);
+            }
+            else
+            {
+                _force1.Clear(); _force2.Clear(); _torque1.Clear(); _torque2.Clear();
+                ForceValueText.Text = "未取零";
+                TorqueValueText.Text = "未取零";
+            }
             PrepareButton.IsEnabled = ads && _selfcheckDone && _leftLimitValid && !_selfcheckBusy && !_setupBusy; StartButton.IsEnabled = ads && _setupDone && p.Length > 28 && p[28] == "1" && !_setupBusy; ZeroButton.IsEnabled = ads && _selfcheckDone && _setupDone && !_setupBusy && !_selfcheckBusy;
             Draw(ForceCanvas, Force1Line, _force1, Force2Line, _force2); Draw(TorqueCanvas, Torque1Line, _torque1, Torque2Line, _torque2);
         }
@@ -300,31 +380,153 @@ namespace DualClampExperimentUI
             string[] p = response.Split('|');
             if (p.Length < 42) return;
             int phase = int.Parse(p[2], CultureInfo.InvariantCulture); _setupBusy = p[5] == "1"; _setupDone = p[6] == "1"; _selfcheckDone = p[7] == "1";
-            SelfCheckText.Text = _selfcheckDone ? "PLC自检: 已完成" : "PLC自检: 执行中";
+            bool ads = p[40] == "1";
+            _selfcheckBusy = p.Length > 64 && p[64] == "1";
+            SelfCheckText.Text = !ads
+                ? "PLC自检: 状态未知"
+                : _selfcheckBusy
+                    ? "PLC自检: 执行中"
+                    : _selfcheckDone
+                        ? "PLC自检: 已完成"
+                        : "PLC自检: 未完成";
             bool guidewire = CurrentMode == "guidewire";
             if (guidewire)
             {
                 LiveMotionText.Text = string.Format(CultureInfo.InvariantCulture, "轴5：{0:F3} mm / {1:F3} mm/s / {2:F3} mm/s²\n轴6：{3:F3} mm / {4:F3} mm/s / {5:F3} mm/s²\n轴7角度：{6:F3}°", D(p[14]), D(p[15]), D(p[16]), D(p[17]), D(p[18]), D(p[19]), D(p[20]));
-                Add(_force1, D(p[25])); Add(_torque1, D(p[26]));
             }
             else
             {
                 LiveMotionText.Text = string.Format(CultureInfo.InvariantCulture, "轴1：{0:F3} mm / {1:F3} mm/s / {2:F3} mm/s²\n轴2角度：{3:F3}°", D(p[8]), D(p[9]), D(p[10]), D(p[11]));
-                Add(_force1, D(p[23])); Add(_torque1, D(p[24]));
             }
-            CycleText.Text = string.Format(CultureInfo.InvariantCulture, "周期：{0} / {1}", p[3], p[4]);
-            bool ads = p[40] == "1";
+            CycleText.Text = string.Format(CultureInfo.InvariantCulture, "往复夹持次数：{0} / {1}", p[3], p[4]);
             int programZeroBusy = 42, programZeroDone = 43, programError = 41;
             ZeroStatusText.Text = p.Length > programZeroDone && p[programZeroBusy] == "1" ? "力感零点：采集中" : p.Length > programZeroDone && p[programZeroDone] == "1" ? "力感零点：已完成" : "力感零点：未完成";
             string programDirectory = p.Length > 51 ? p[51] : string.Empty;
             bool programArchived = p.Length > 52 && p[52] == "1";
-            RecordStatusText.Text = programArchived ? "实时记录：已归档（" + p[49] + "点）" : p.Length > 49 && p[48] == "1" ? "实时记录：进行中（" + p[49] + "点）" : p.Length > 49 && p[49] != "0" ? "实时记录：待归档（" + p[49] + "点）" : "实时记录：未开始";
+            RecordStatusText.Text = programArchived ? "实时记录：已归档（" + p[49] + "点）" : p.Length > 49 && p[48] == "1" ? "实时记录：进行中（" + p[49] + "点）" : p.Length > 49 && p[49] != "0" ? "实时记录：自动归档中（" + p[49] + "点）" : "实时记录：未开始";
             if (!string.IsNullOrWhiteSpace(programDirectory)) RecordStatusText.Text += "\n目录：" + programDirectory;
-            ZeroValuesText.Text = p.Length > 47 ? string.Format(CultureInfo.InvariantCulture, "fn1零点：{0:F3}  ft1零点：{1:F3}\nfn2零点：{2:F3}  ft2零点：{3:F3}", D(p[44]), D(p[45]), D(p[46]), D(p[47])) : "";
-            PhaseText.Text = ProgramPhase(phase); ErrorText.Text = p[programError];
+            ZeroValuesText.Text = p.Length > 47 ? string.Format(CultureInfo.InvariantCulture, "零点值（原始计数 count）\nfn1：{0:F3}  ft1：{1:F3}\nfn2：{2:F3}  ft2：{3:F3}", D(p[44]), D(p[45]), D(p[46]), D(p[47])) : "";
+            int waitAction = p.Length > 53 ? int.Parse(p[53], CultureInfo.InvariantCulture) : 0;
+            PhaseText.Text = waitAction == 1 ? "等待电缸释放" : waitAction == 2 ? "等待重新夹紧" : ProgramPhase(phase);
+            ErrorText.Text = p[programError];
+            if (p.Length > 58 && int.Parse(p[39], CultureInfo.InvariantCulture) != 0 && p[54] != "0")
+            {
+                string source = p[54] == "1" ? "准备定位" : p[54] == "2" ? "前向至触发位置" : p[54] == "3" ? "回退" : p[54] == "4" ? "最终前向" : "未知动作";
+                ErrorText.Text = p[55] == "1" || p[55] == "5" || p[55] == "6"
+                    ? string.Format(CultureInfo.InvariantCulture, "PLC运动错误：ID {0}；轴{1}；{2}；目标距左限位 {3:F3} mm", p[39], p[55], source, D(p[58]))
+                    : string.Format(CultureInfo.InvariantCulture, "PLC运动错误：ID {0}；轴{1}；{2}；目标值 {3:F3}", p[39], p[55], source, D(p[57]));
+            }
+            bool forceValid = p.Length > 63 && p[59] == "1";
+            if (forceValid)
+            {
+                double fn1 = D(p[60]), ft1 = D(p[61]), fn2 = D(p[62]), ft2 = D(p[63]);
+                if (guidewire)
+                {
+                    Add(_force1, fn2); Add(_torque1, ft2);
+                    ForceValueText.Text = string.Format(CultureInfo.InvariantCulture, "fn2: {0:F3} N", fn2);
+					TorqueValueText.Text = string.Format(CultureInfo.InvariantCulture, "ft2: {0:F6} N", ft2);
+                }
+                else
+                {
+                    Add(_force1, fn1); Add(_torque1, ft1);
+                    ForceValueText.Text = string.Format(CultureInfo.InvariantCulture, "fn1: {0:F3} N", fn1);
+					TorqueValueText.Text = string.Format(CultureInfo.InvariantCulture, "ft1: {0:F6} N", ft1);
+                }
+            }
+            else
+            {
+                _force1.Clear(); _force2.Clear(); _torque1.Clear(); _torque2.Clear();
+                ForceValueText.Text = "未取零";
+                TorqueValueText.Text = "未取零";
+            }
             SetAdsStatus(ads, ads ? "ADS: 正常 (Port 851)" : "ADS: 未连接");
-            PrepareButton.IsEnabled = ads && _selfcheckDone && !_setupBusy; StartButton.IsEnabled = ads && _setupDone && p.Length > programZeroDone && p[programZeroDone] == "1" && !_setupBusy; ZeroButton.IsEnabled = ads && _selfcheckDone && _setupDone && !_setupBusy && phase == 2;
+            PrepareButton.IsEnabled = ads && _selfcheckDone && !_selfcheckBusy && !_setupBusy; StartButton.IsEnabled = ads && _setupDone && phase == 2 && p.Length > programZeroDone && p[programZeroDone] == "1" && !_selfcheckBusy && !_setupBusy; ZeroButton.IsEnabled = ads && _selfcheckDone && _setupDone && !_selfcheckBusy && !_setupBusy && phase == 2;
             Draw(ForceCanvas, Force1Line, _force1, Force2Line, _force2); Draw(TorqueCanvas, Torque1Line, _torque1, Torque2Line, _torque2);
+        }
+
+        private void ParseStandaloneState(string response)
+        {
+            string[] p = response.Split('|');
+            if (p.Length < 23) return;
+            bool ads = p[1] == "1";
+            _standaloneSelfcheckDone = p[2] == "1";
+            int legacyPhase = int.Parse(p[3], CultureInfo.InvariantCulture);
+            _standaloneLegacyBusy = legacyPhase >= 3 && legacyPhase <= 9 || legacyPhase == 14;
+            _standaloneRecording = p[9] == "1";
+            SelfCheckText.Text = _standaloneSelfcheckDone ? "PLC自检: 已完成" : "PLC自检: 执行中或未完成";
+            Cylinder1Current.Text = p[4]; Cylinder2Current.Text = p[5]; Cylinder3Current.Text = p[6]; Cylinder4Current.Text = p[7];
+            ManualCylinderHint.Text = _standaloneSelfcheckDone
+                ? (_standaloneLegacyBusy ? "实验运动或夹爪切换中，电缸手动按钮暂时禁用。" : "电缸手动控制可用；独立记录可单独开始。")
+                : "记录可直接开始，电缸控制等待PLC自检完成。";
+            bool cylinderEnabled = ads && _standaloneSelfcheckDone && !_standaloneLegacyBusy;
+            foreach (Button button in FindVisualChildren<Button>(LegacyPanel))
+            {
+                if (button.Tag is string tag && (button.Content?.ToString() == "开" || button.Content?.ToString() == "闭")) button.IsEnabled = cylinderEnabled;
+            }
+            bool standaloneStopping = p[22] == "1";
+            StandaloneRecordStartButton.IsEnabled = ads && !_standaloneRecording && !standaloneStopping && !_standaloneLegacyBusy;
+            StandaloneRecordStopButton.IsEnabled = ads && _standaloneRecording;
+            StandaloneZeroButton.IsEnabled = ads && !_standaloneRecording && !standaloneStopping && !_standaloneLegacyBusy;
+            if (_standaloneRecording || standaloneStopping || !string.IsNullOrWhiteSpace(p[12]))
+            {
+                string statusText = _standaloneRecording ? "独立记录：进行中（" + p[10] + "点）" : standaloneStopping ? "独立记录：停止收尾中（" + p[10] + "点）" : "独立记录：已归档（" + p[10] + "点）";
+                RecordStatusText.Text = statusText +
+                    (string.IsNullOrWhiteSpace(p[12]) ? string.Empty : "\n目录：" + p[12]);
+            }
+            ZeroStatusText.Text = p[14] == "1" ? "力感零点：采集中" : p[15] == "1" ? "力感零点：已完成" : "力感零点：未完成";
+            if (!string.IsNullOrWhiteSpace(p[21])) ErrorText.Text = p[21];
+        }
+
+        private ulong BuildStandaloneFieldMask()
+        {
+            ulong mask = 0;
+            AddField(ref mask, FieldAxis1Pos, 0); AddField(ref mask, FieldAxis1Velocity, 1); AddField(ref mask, FieldAxis1Acceleration, 2);
+            AddField(ref mask, FieldAxis2Pos, 3); AddField(ref mask, FieldAxis2Velocity, 4); AddField(ref mask, FieldAxis2Acceleration, 5);
+            AddField(ref mask, FieldAxis5Pos, 6); AddField(ref mask, FieldAxis5Velocity, 7); AddField(ref mask, FieldAxis5Acceleration, 8);
+            AddField(ref mask, FieldAxis6Pos, 9); AddField(ref mask, FieldAxis6Velocity, 10); AddField(ref mask, FieldAxis6Acceleration, 11);
+            AddField(ref mask, FieldAxis7Pos, 12); AddField(ref mask, FieldAxis7Velocity, 13); AddField(ref mask, FieldAxis7Acceleration, 14);
+            AddField(ref mask, FieldCylinder1, 15); AddField(ref mask, FieldCylinder2, 16); AddField(ref mask, FieldCylinder3, 17); AddField(ref mask, FieldCylinder4, 18);
+            AddField(ref mask, FieldFn1Raw, 19); AddField(ref mask, FieldFt1Raw, 20); AddField(ref mask, FieldFn2Raw, 21); AddField(ref mask, FieldFt2Raw, 22);
+            AddField(ref mask, FieldFn1Zeroed, 23); AddField(ref mask, FieldFt1Zeroed, 24); AddField(ref mask, FieldFn2Zeroed, 25); AddField(ref mask, FieldFt2Zeroed, 26);
+            AddField(ref mask, FieldFn1Sensor, 27); AddField(ref mask, FieldFt1Sensor, 28);
+            AddField(ref mask, FieldFn1CalDelta, 29); AddField(ref mask, FieldFn1CalAbs, 30); AddField(ref mask, FieldFt1CalDelta, 31); AddField(ref mask, FieldFt1CalAbs, 32);
+            AddField(ref mask, FieldTorque1CalDelta, 33); AddField(ref mask, FieldTorque1CalAbs, 34);
+            AddField(ref mask, FieldFn1DecoupledDelta, 35); AddField(ref mask, FieldTorque1DecoupledDelta, 36);
+            AddField(ref mask, FieldFn1DecoupledAbs, 37); AddField(ref mask, FieldTorque1DecoupledAbs, 38); AddField(ref mask, FieldAxis2Angle, 39);
+            AddField(ref mask, FieldFn2Sensor, 40); AddField(ref mask, FieldFt2Sensor, 41);
+            AddField(ref mask, FieldFn2CalDelta, 42); AddField(ref mask, FieldFn2CalAbs, 43); AddField(ref mask, FieldFt2CalDelta, 44); AddField(ref mask, FieldFt2CalAbs, 45);
+            AddField(ref mask, FieldTorque2CalDelta, 46); AddField(ref mask, FieldTorque2CalAbs, 47);
+            AddField(ref mask, FieldFn2DecoupledDelta, 48); AddField(ref mask, FieldTorque2DecoupledDelta, 49);
+            AddField(ref mask, FieldFn2DecoupledAbs, 50); AddField(ref mask, FieldTorque2DecoupledAbs, 51); AddField(ref mask, FieldAxis7Angle, 52);
+            return mask;
+        }
+
+        private static void AddField(ref ulong mask, CheckBox box, int bit)
+        {
+            if (box.IsChecked == true) mask |= 1UL << bit;
+        }
+
+        private IEnumerable<CheckBox> StandaloneFieldBoxes()
+        {
+            return new[] { FieldAxis1Pos, FieldAxis1Velocity, FieldAxis1Acceleration, FieldAxis2Pos, FieldAxis2Velocity, FieldAxis2Acceleration,
+                FieldAxis5Pos, FieldAxis5Velocity, FieldAxis5Acceleration, FieldAxis6Pos, FieldAxis6Velocity, FieldAxis6Acceleration,
+                FieldAxis7Pos, FieldAxis7Velocity, FieldAxis7Acceleration, FieldCylinder1, FieldCylinder2, FieldCylinder3, FieldCylinder4,
+                FieldFn1Raw, FieldFt1Raw, FieldFn2Raw, FieldFt2Raw, FieldFn1Zeroed, FieldFt1Zeroed, FieldFn2Zeroed, FieldFt2Zeroed,
+                FieldFn1Sensor, FieldFt1Sensor, FieldFn1CalDelta, FieldFn1CalAbs, FieldFt1CalDelta, FieldFt1CalAbs,
+                FieldTorque1CalDelta, FieldTorque1CalAbs, FieldFn1DecoupledDelta, FieldTorque1DecoupledDelta, FieldFn1DecoupledAbs, FieldTorque1DecoupledAbs, FieldAxis2Angle,
+                FieldFn2Sensor, FieldFt2Sensor, FieldFn2CalDelta, FieldFn2CalAbs, FieldFt2CalDelta, FieldFt2CalAbs,
+                FieldTorque2CalDelta, FieldTorque2CalAbs, FieldFn2DecoupledDelta, FieldTorque2DecoupledDelta, FieldFn2DecoupledAbs, FieldTorque2DecoupledAbs, FieldAxis7Angle };
+        }
+
+        private static IEnumerable<T> FindVisualChildren<T>(DependencyObject dependencyObject) where T : DependencyObject
+        {
+            if (dependencyObject == null) yield break;
+            for (int i = 0; i < VisualTreeHelper.GetChildrenCount(dependencyObject); i++)
+            {
+                DependencyObject child = VisualTreeHelper.GetChild(dependencyObject, i);
+                if (child is T typedChild) yield return typedChild;
+                foreach (T descendant in FindVisualChildren<T>(child)) yield return descendant;
+            }
         }
 
         private static double D(string value) => double.Parse(value, CultureInfo.InvariantCulture);

@@ -15,6 +15,7 @@ VAR
 	dual_clamp_ :       DualClampExperiment;
 	program_test_ :     ProgrammedDeliveryExperiment;
 	experiment_recorder_ : ExperimentRecorder;
+	manual_cylinder_ : ManualCylinderControl;
 	axis6_enable_negative : BOOL := TRUE;
 	i:INT;
 END_VAR]]></Declaration>
@@ -37,6 +38,10 @@ IF TwinCAT_SystemInfoVarList._TaskInfo[1].FirstCycle THEN
 	G.program_test_setup_req := FALSE;
 	G.program_test_start_req := FALSE;
 	G.program_test_abort_req := FALSE;
+	G.standalone_record_enable := FALSE;
+	G.standalone_record_event_seq := 0;
+	G.manual_cylinder_enable := FALSE;
+	G.manual_cylinder_error_id := 0;
 	G.experiment_record_clear := TRUE;
 	G.experiment_zero_req := FALSE;
 	G.experiment_zero_busy := FALSE;
@@ -107,7 +112,10 @@ ELSIF G.gen_state = _reset THEN
 END_IF
 
 // 实验数据分块记录和力感取零独立于运动状态机，每个PLC任务周期执行一次。
-experiment_recorder_();]]></ST>
+experiment_recorder_();
+
+// 手动电缸控制必须最后执行，避免被实验功能块的空闲输出覆盖。
+manual_cylinder_();]]></ST>
     </Implementation>
     <Folder Name="block" Id="{8d2a06f7-1a45-482f-85f8-8678060c15b3}" />
     <Action Name="POWERED" Id="{98a6d293-ca3a-4d71-85c7-080c2df57892}" FolderPath="block\">

@@ -605,7 +605,7 @@ unsigned long CADSComm::ADSGetAddr(const char* paraName)
 		&cbReturn);
 	if (nErr != 0)
 	{
-		sprintf_s(m_lastError, sizeof(m_lastError), "Error: AdsSyncReadWriteReqEx2(HNDBYNAME): %ld\n", nErr);
+		sprintf_s(m_lastError, sizeof(m_lastError), "Error: AdsSyncReadWriteReqEx2(HNDBYNAME) symbol=%s: %ld\n", paraName, nErr);
 		return 0;
 	}
 	if (cbReturn != sizeof(handle) || handle == 0)

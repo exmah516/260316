@@ -44,12 +44,14 @@ namespace
 		if (length == 0 || length >= std::size(module_path)) return false;
 
 		const std::filesystem::path backend_path(module_path, module_path + length);
+		// Debug输出位于 dual_clamp_experiment\x64\Debug，向上三层是项目根目录。
 		const std::filesystem::path project_path = backend_path.parent_path().parent_path().parent_path();
 		const std::vector<std::filesystem::path> candidate_paths = {
-			project_path / L"AdsControlUI" / L"bin" / L"Debug" / L"net472" / L"DualClampExperimentUI.exe",
 			project_path / L"AdsControlUI" / L"bin" / L"x64" / L"Debug" / L"net472" / L"DualClampExperimentUI.exe",
-			project_path / L"AdsControlUI" / L"bin" / L"Release" / L"net472" / L"DualClampExperimentUI.exe",
 			project_path / L"AdsControlUI" / L"bin" / L"x64" / L"Release" / L"net472" / L"DualClampExperimentUI.exe",
+			project_path / L"AdsControlUI" / L"bin" / L"Debug" / L"net472" / L"DualClampExperimentUI.exe",
+			project_path / L"AdsControlUI" / L"bin" / L"Release" / L"net472" / L"DualClampExperimentUI.exe",
+			// 兼容后端被复制到项目根目录或其他输出目录的情况。
 			backend_path.parent_path() / L"DualClampExperimentUI.exe",
 			backend_path.parent_path() / L"net472" / L"DualClampExperimentUI.exe"
 		};
@@ -71,12 +73,26 @@ namespace
 		const bool started = CreateProcessW(
 			nullptr, command_line.data(), nullptr, nullptr, FALSE, 0, nullptr,
 			ui_path.parent_path().c_str(), &startup, &process) != FALSE;
-		if (started)
+		if (!started)
 		{
-			CloseHandle(process.hThread);
-			CloseHandle(process.hProcess);
+			std::cerr << "WPF界面进程创建失败，Windows错误码：" << GetLastError() << std::endl;
+			return false;
 		}
-		return started;
+
+		CloseHandle(process.hThread);
+		// CreateProcessW成功不代表WPF已正常显示；等待片刻以识别XAML加载等启动期崩溃。
+		const DWORD wait_result = WaitForSingleObject(process.hProcess, 1200);
+		if (wait_result == WAIT_OBJECT_0)
+		{
+			DWORD exit_code = 0;
+			GetExitCodeProcess(process.hProcess, &exit_code);
+			CloseHandle(process.hProcess);
+			std::cerr << "WPF界面启动后立即退出，退出码：" << exit_code << std::endl;
+			return false;
+		}
+
+		CloseHandle(process.hProcess);
+		return true;
 	}
 }
 
@@ -89,13 +105,14 @@ int main(int argc, char* argv[])
 
 	DualClampController controller;
 	ProgrammedDeliveryController program_controller;
+	StandaloneRecordController standalone_controller;
 	if (controller.is_ads_open())
 	{
 		std::cout << "ADS 状态：已成功建立路由连接（端口 851）。" << std::endl;
 	}
 	else
 	{
-		std::cout << "ADS 状态：尚未就绪（" << controller.last_error() << "），等待PLC就绪或UI连接。" << std::endl;
+		std::cout << "ADS 状态：当前未连接；后端和WPF界面仍会启动，连接ADS按钮可稍后重试。" << std::endl;
 	}
 
 	const bool no_ui = argc > 1 && std::string(argv[1]) == "--no-ui";
@@ -109,5 +126,5 @@ int main(int argc, char* argv[])
 	}
 	DualClampPipeServer server;
 	std::cout << "双机构夹持扰动实验服务端已就绪，正在监听命名管道 \\\\.\\pipe\\DualClampExperiment ..." << std::endl;
-	return server.run(controller, program_controller);
+	return server.run(controller, program_controller, standalone_controller);
 }

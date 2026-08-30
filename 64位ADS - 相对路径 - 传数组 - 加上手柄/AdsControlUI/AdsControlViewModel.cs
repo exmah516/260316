@@ -639,12 +639,13 @@ namespace AdsControlUI
 		{
 			switch (eventCode)
 			{
-				case 1: return "物理按钮触发：导管递送";
-				case 2: return "物理按钮触发：导管撤出";
-				case 3: return "物理按钮触发：导丝递送";
-				case 4: return "物理按钮触发：导丝撤出";
+				case 1: return "SN 587 B7：已选择导管递送";
+				case 2: return "SN 587 B7：已选择导管撤出";
+				case 3: return "SN 582 B7：已选择导丝递送";
+				case 4: return "SN 582 B7：已选择导丝撤出";
 				case 5: return "物理按钮触发：协同递送";
 				case 6: return "物理按钮触发：协同撤出";
+				case 7: return "物理按钮冲突：两只手柄同时按下 B7，本次模式切换已忽略";
 				default: return "物理按钮触发";
 			}
 		}

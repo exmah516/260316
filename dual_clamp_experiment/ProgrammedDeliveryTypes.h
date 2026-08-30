@@ -31,11 +31,15 @@ enum class ProgrammedDeliveryPhase : std::uint8_t
 struct ProgrammedDeliveryConfig
 {
 	ProgrammedDeliveryMode mode = ProgrammedDeliveryMode::Catheter;
+	double axis1_prepare_from_left_mm = 23.0;
+	double axis1_trigger_from_left_mm = 3.0;
 	double axis5_from_left_mm = 430.0;
 	double axis2_angle_deg = 0.0;
 	double axis7_angle_deg = 0.0;
 	std::uint16_t cycle_count = 1;
 	double final_forward_distance_mm = 10.0;
+	std::uint32_t release_wait_ms = 150;
+	std::uint32_t reclamp_wait_ms = 150;
 	double forward_velocity_mm_s = 20.0;
 	double forward_acceleration_mm_s2 = 100.0;
 	double forward_deceleration_mm_s2 = 100.0;
@@ -56,7 +60,14 @@ struct ProgrammedDeliveryLiveFrame
 	bool setup_busy = false;
 	bool setup_done = false;
 	bool selfcheck_done = false;
+	bool selfcheck_busy = false;
 	std::uint32_t status_error_id = 0;
+	std::uint8_t wait_action = 0;
+	std::uint8_t error_source = 0;
+	std::uint8_t error_axis = 0;
+	std::uint8_t error_phase = 0;
+	double error_target_abs_mm = 0.0;
+	double error_target_from_left_mm = 0.0;
 	double leftlimit_axis1_abs_mm = 0.0;
 	double leftlimit_axis5_abs_mm = 0.0;
 	double leftlimit_axis6_abs_mm = 0.0;

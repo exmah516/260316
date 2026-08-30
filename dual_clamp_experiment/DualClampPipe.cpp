@@ -1,4 +1,5 @@
 #include "DualClampPipe.h"
+#include "ForceCalibration.h"
 
 #include <windows.h>
 
@@ -116,7 +117,9 @@ namespace
 			double value = 0.0;
 			try { value = std::stod(text); }
 			catch (const std::exception&) { error = "参数不是有效数字：" + key; return false; }
-			if (key == "axis5_from_left") config.axis5_from_left_mm = value;
+			if (key == "axis1_prepare_from_left") config.axis1_prepare_from_left_mm = value;
+			else if (key == "axis1_trigger_from_left") config.axis1_trigger_from_left_mm = value;
+			else if (key == "axis5_from_left") config.axis5_from_left_mm = value;
 			else if (key == "axis2_angle") config.axis2_angle_deg = value;
 			else if (key == "axis7_angle") config.axis7_angle_deg = value;
 			else if (key == "cycle_count")
@@ -137,9 +140,54 @@ namespace
 			else if (key == "return_acceleration") config.return_acceleration_mm_s2 = value;
 			else if (key == "return_deceleration") config.return_deceleration_mm_s2 = value;
 			else if (key == "return_jerk") config.return_jerk_mm_s3 = value;
+			else if (key == "release_wait_ms" || key == "reclamp_wait_ms")
+			{
+				if (!std::isfinite(value) || value < 0.0 || value > 60000.0 || std::floor(value) != value)
+				{
+					error = key + "必须是0至60000之间的整数";
+					return false;
+				}
+				if (key == "release_wait_ms") config.release_wait_ms = static_cast<std::uint32_t>(value);
+				else config.reclamp_wait_ms = static_cast<std::uint32_t>(value);
+			}
 		}
 		return true;
 	}
+
+	std::string command_field(const std::string& command, const std::string& key)
+	{
+		std::istringstream fields(command);
+		std::string field;
+		const std::string prefix = key + "=";
+		while (std::getline(fields, field, '|'))
+		{
+			if (field.rfind(prefix, 0) == 0) return field.substr(prefix.size());
+		}
+		return {};
+	}
+
+	bool parse_unsigned_field(const std::string& command, const std::string& key, std::uint64_t& value, std::string& error)
+	{
+		const std::string text = command_field(command, key);
+		if (text.empty())
+		{
+			error = "缺少参数：" + key;
+			return false;
+		}
+		try
+		{
+			std::size_t used = 0;
+			value = std::stoull(text, &used, 0);
+			if (used != text.size()) throw std::invalid_argument("trailing");
+		}
+		catch (const std::exception&)
+		{
+			error = "参数不是有效整数：" + key;
+			return false;
+		}
+		return true;
+	}
+
 }
 
 DualClampPipeServer::DualClampPipeServer() = default;
@@ -150,13 +198,19 @@ std::string DualClampPipeServer::handle_command(DualClampController& controller,
 	{
 		const DualClampLiveFrame live = controller.live();
 		const bool ads_open = controller.is_ads_open();
+		const ForceZeroState zero = controller.zero_state();
+		const forcecal::Result force = forcecal::calculate(live.fn_1_raw, live.ft_1_raw, live.fn_2_raw, live.ft_2_raw, zero.value, zero.valid);
+		const double fn1_realtime = force.valid ? force.side1.force_cal_delta_n : 0.0;
+		const double fn2_realtime = force.valid ? force.side2.force_cal_delta_n : 0.0;
+		const double ft1_realtime = force.valid ? force.side1.ft_cal_delta_n : 0.0;
+		const double ft2_realtime = force.valid ? force.side2.ft_cal_delta_n : 0.0;
 		std::ostringstream out;
 		out << "STATE|" << static_cast<int>(controller.phase()) << '|'
 			<< live.axis1_pos_abs_mm << '|' << live.axis6_pos_abs_mm << '|'
 			<< live.axis1_velocity_mm_s << '|' << live.axis6_velocity_mm_s << '|'
 			<< live.axis1_acceleration_mm_s2 << '|' << live.axis6_acceleration_mm_s2 << '|'
 			<< live.axis2_angle_abs_deg << '|' << live.axis7_angle_abs_deg << '|'
-			<< live.fn_1_raw << '|' << live.fn_2_raw << '|' << live.ft_1_raw << '|' << live.ft_2_raw << '|'
+			<< fn1_realtime << '|' << fn2_realtime << '|' << ft1_realtime << '|' << ft2_realtime << '|'
 			<< (ads_open ? 1 : 0) << '|'
 			<< (live.selfcheck_done ? 1 : 0) << '|'
 			<< (live.selfcheck_busy ? 1 : 0) << '|'
@@ -178,7 +232,9 @@ std::string DualClampPipeServer::handle_command(DualClampController& controller,
 			<< controller.zero_state().value[3] << '|'
 			<< (live.recording ? 1 : 0) << '|' << live.recording_sample_count << '|' << live.recording_error_id << '|'
 			<< sanitize_for_pipe(controller.recording_directory()) << '|'
-			<< (controller.recording_archived() ? 1 : 0);
+			<< (controller.recording_archived() ? 1 : 0) << '|'
+			<< (force.valid ? 1 : 0) << '|' << force.side1.force_cal_delta_n << '|' << force.side1.ft_cal_delta_n << '|'
+			<< force.side2.force_cal_delta_n << '|' << force.side2.ft_cal_delta_n;
 		return out.str();
 	}
 	if (command == "ZERO_STATUS") return handle_command(controller, "GET");
@@ -244,6 +300,12 @@ std::string DualClampPipeServer::handle_program_command(ProgrammedDeliveryContro
 	{
 		const ProgrammedDeliveryLiveFrame live = controller.live();
 		const bool ads_open = controller.is_ads_open();
+		const ForceZeroState zero = controller.zero_state();
+		const forcecal::Result force = forcecal::calculate(live.fn1, live.ft1, live.fn2, live.ft2, zero.value, zero.valid);
+		const double fn1_realtime = force.valid ? force.side1.force_cal_delta_n : 0.0;
+		const double fn2_realtime = force.valid ? force.side2.force_cal_delta_n : 0.0;
+		const double ft1_realtime = force.valid ? force.side1.ft_cal_delta_n : 0.0;
+		const double ft2_realtime = force.valid ? force.side2.ft_cal_delta_n : 0.0;
 		std::ostringstream out;
 		out << "PROGRAM_STATE|" << static_cast<unsigned>(live.mode) << '|'
 			<< static_cast<unsigned>(live.phase) << '|' << live.cycle_index << '|' << live.cycle_total << '|'
@@ -254,7 +316,7 @@ std::string DualClampPipeServer::handle_program_command(ProgrammedDeliveryContro
 			<< live.axis5_pos << '|' << live.axis5_vel << '|' << live.axis5_acc << '|'
 			<< live.axis6_pos << '|' << live.axis6_vel << '|' << live.axis6_acc << '|'
 			<< live.axis7_pos << '|' << live.axis7_vel << '|' << live.axis7_acc << '|'
-			<< live.fn1 << '|' << live.ft1 << '|' << live.fn2 << '|' << live.ft2 << '|'
+			<< fn1_realtime << '|' << ft1_realtime << '|' << fn2_realtime << '|' << ft2_realtime << '|'
 			<< live.cylinder1 << '|' << live.cylinder2 << '|' << live.cylinder3 << '|' << live.cylinder4 << '|'
 			<< live.target_axis1_abs_mm << '|' << live.target_axis5_abs_mm << '|' << live.target_axis6_abs_mm << '|'
 			<< live.target_axis2_deg << '|' << live.target_axis7_deg << '|'
@@ -269,7 +331,15 @@ std::string DualClampPipeServer::handle_program_command(ProgrammedDeliveryContro
 			<< controller.zero_state().value[3] << '|'
 			<< (live.recording ? 1 : 0) << '|' << live.recording_sample_count << '|' << live.recording_error_id << '|'
 			<< sanitize_for_pipe(controller.recording_directory()) << '|'
-			<< (controller.recording_archived() ? 1 : 0);
+			<< (controller.recording_archived() ? 1 : 0) << '|'
+			<< static_cast<unsigned>(live.wait_action) << '|'
+			<< static_cast<unsigned>(live.error_source) << '|'
+			<< static_cast<unsigned>(live.error_axis) << '|'
+			<< static_cast<unsigned>(live.error_phase) << '|'
+			<< live.error_target_abs_mm << '|' << live.error_target_from_left_mm << '|'
+			<< (force.valid ? 1 : 0) << '|' << force.side1.force_cal_delta_n << '|' << force.side1.ft_cal_delta_n << '|'
+			<< force.side2.force_cal_delta_n << '|' << force.side2.ft_cal_delta_n << '|'
+			<< (live.selfcheck_busy ? 1 : 0);
 		return out.str();
 	}
 	if (command == "PROGRAM_ZERO_STATUS") return handle_program_command(controller, "GET_PROGRAM");
@@ -313,6 +383,86 @@ std::string DualClampPipeServer::handle_program_command(ProgrammedDeliveryContro
 		return controller.save_samples("", error) ? "OK|PROGRAM_SAVE" : "ERROR|" + sanitize_for_pipe(error);
 	}
 	return "ERROR|unknown program command";
+}
+
+std::string DualClampPipeServer::handle_standalone_command(StandaloneRecordController& controller, const std::string& command)
+{
+	if (command == "GET_STANDALONE_RECORD" || command == "STANDALONE_ZERO_STATUS")
+	{
+		const StandaloneRecordLiveFrame live = controller.live();
+		const ForceZeroState zero = controller.zero_state();
+		std::ostringstream out;
+		out << "STANDALONE_STATE|"
+			<< (controller.is_ads_open() ? 1 : 0) << '|'
+			<< (live.selfcheck_done ? 1 : 0) << '|'
+			<< live.legacy_phase << '|'
+			<< live.cylinder[0] << '|' << live.cylinder[1] << '|' << live.cylinder[2] << '|' << live.cylinder[3] << '|'
+			<< (live.manual_control_enabled ? 1 : 0) << '|'
+			<< (controller.recording_active() ? 1 : 0) << '|'
+			<< controller.recording_sample_count() << '|'
+			<< (live.manual_error_id != 0 ? live.manual_error_id : 0) << '|'
+			<< sanitize_for_pipe(controller.recording_directory()) << '|'
+			<< (controller.recording_archived() ? 1 : 0) << '|'
+			<< (zero.busy ? 1 : 0) << '|'
+			<< (zero.done ? 1 : 0) << '|'
+			<< zero.value[0] << '|' << zero.value[1] << '|' << zero.value[2] << '|' << zero.value[3] << '|'
+			<< controller.field_mask() << '|'
+			<< sanitize_for_pipe(controller.last_error()) << '|'
+			<< (controller.recording_stopping() ? 1 : 0);
+		return out.str();
+	}
+	if (command.rfind("MANUAL_CYLINDER_CONFIG", 0) == 0)
+	{
+		std::uint64_t cylinder = 0, enabled = 1, open_value = 0, close_value = 0;
+		std::string error;
+		if (!parse_unsigned_field(command, "cylinder", cylinder, error) ||
+			!parse_unsigned_field(command, "enabled", enabled, error) ||
+			!parse_unsigned_field(command, "open", open_value, error) ||
+			!parse_unsigned_field(command, "close", close_value, error))
+			return "ERROR|" + sanitize_for_pipe(error);
+		if (cylinder < 1 || cylinder > 4 || open_value > 65535 || close_value > 65535 || enabled > 1)
+			return "ERROR|电缸配置参数超出范围";
+		return controller.set_cylinder_config(static_cast<int>(cylinder), enabled != 0,
+			static_cast<std::uint16_t>(open_value), static_cast<std::uint16_t>(close_value))
+			? "OK|MANUAL_CYLINDER_CONFIG" : "ERROR|" + sanitize_for_pipe(controller.last_error());
+	}
+	if (command.rfind("MANUAL_CYLINDER_OPEN", 0) == 0 || command.rfind("MANUAL_CYLINDER_CLOSE", 0) == 0)
+	{
+		std::uint64_t cylinder = 0;
+		std::string error;
+		if (!parse_unsigned_field(command, "cylinder", cylinder, error) || cylinder < 1 || cylinder > 4)
+			return "ERROR|" + sanitize_for_pipe(error.empty() ? "电缸编号必须为1至4" : error);
+		const bool ok = command.rfind("MANUAL_CYLINDER_OPEN", 0) == 0
+			? controller.cylinder_open(static_cast<int>(cylinder))
+			: controller.cylinder_close(static_cast<int>(cylinder));
+		return ok ? "OK|" + std::string(command.rfind("MANUAL_CYLINDER_OPEN", 0) == 0 ? "MANUAL_CYLINDER_OPEN" : "MANUAL_CYLINDER_CLOSE")
+			: "ERROR|" + sanitize_for_pipe(controller.last_error());
+	}
+	if (command.rfind("STANDALONE_RECORD_START", 0) == 0)
+	{
+		std::uint64_t fields = 0;
+		std::string error;
+		if (!parse_unsigned_field(command, "fields", fields, error)) return "ERROR|" + sanitize_for_pipe(error);
+		const std::string suffix = command_field(command, "record_name");
+		return controller.start_record(suffix, fields) ? "OK|STANDALONE_RECORD_START" : "ERROR|" + sanitize_for_pipe(controller.last_error());
+	}
+	if (command == "STANDALONE_RECORD_STOP")
+		return controller.stop_record() ? "OK|STANDALONE_RECORD_STOP" : "ERROR|" + sanitize_for_pipe(controller.last_error());
+	if (command == "STANDALONE_RECORD_ABORT")
+		return controller.abort_record("UI abort") ? "OK|STANDALONE_RECORD_ABORT" : "ERROR|" + sanitize_for_pipe(controller.last_error());
+	if (command == "STANDALONE_ZERO_FORCE")
+		return controller.request_zero() ? "OK|STANDALONE_ZERO_FORCE" : "ERROR|" + sanitize_for_pipe(controller.last_error());
+	if (command == "STANDALONE_RECORD_SAVE")
+	{
+		std::string error;
+		return controller.save(error) ? "OK|STANDALONE_RECORD_SAVE" : "ERROR|" + sanitize_for_pipe(error);
+	}
+	if (command == "STANDALONE_RELEASE_MANUAL")
+	{
+		controller.release_manual_control();
+		return "OK|STANDALONE_RELEASE_MANUAL";
+	}
+	return "ERROR|unknown standalone command";
 }
 
 int DualClampPipeServer::run(DualClampController& controller)
@@ -376,6 +526,8 @@ int DualClampPipeServer::run(DualClampController& controller, ProgrammedDelivery
 		while (running.load())
 		{
 			controller.tick(0.01);
+			const DualClampLiveFrame legacy_live = controller.live();
+			program_controller.set_shared_selfcheck_state(legacy_live.selfcheck_done, legacy_live.selfcheck_busy);
 			program_controller.tick();
 			std::this_thread::sleep_for(std::chrono::milliseconds(10));
 		}
@@ -421,7 +573,105 @@ int DualClampPipeServer::run(DualClampController& controller, ProgrammedDelivery
 					controller.invalidate_zero();
 					program_controller.invalidate_zero();
 				}
-				write_line(pipe, is_program ? handle_program_command(program_controller, command) : handle_command(controller, command));
+				try
+				{
+					write_line(pipe, is_program ? handle_program_command(program_controller, command) : handle_command(controller, command));
+				}
+				catch (const std::exception& ex)
+				{
+					write_line(pipe, "ERROR|后端处理命令异常：" + sanitize_for_pipe(ex.what()));
+				}
+			}
+		}
+		FlushFileBuffers(pipe); DisconnectNamedPipe(pipe); CloseHandle(pipe);
+	}
+}
+
+int DualClampPipeServer::run(DualClampController& controller, ProgrammedDeliveryController& program_controller,
+	StandaloneRecordController& standalone_controller)
+{
+	std::atomic<bool> running{ true };
+	std::thread tick_thread([&]()
+	{
+		while (running.load())
+		{
+			controller.tick(0.01);
+			const DualClampLiveFrame legacy_live = controller.live();
+			program_controller.set_shared_selfcheck_state(legacy_live.selfcheck_done, legacy_live.selfcheck_busy);
+			// 旧双机构模式不需要轮询程序递送整帧；否则在线PLC缺少新增程序符号时，
+			// 后端会在旧模式下持续产生隐藏的ADS错误。
+			if (program_controller.config().mode != ProgrammedDeliveryMode::Legacy)
+				program_controller.tick();
+			standalone_controller.tick();
+			std::this_thread::sleep_for(std::chrono::milliseconds(10));
+		}
+	});
+	for (;;)
+	{
+		HANDLE pipe = CreateNamedPipeW(
+			kPipeName, PIPE_ACCESS_DUPLEX, PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT,
+			PIPE_UNLIMITED_INSTANCES, 8192, 8192, 0, nullptr);
+		if (pipe == INVALID_HANDLE_VALUE) { std::this_thread::sleep_for(std::chrono::milliseconds(100)); continue; }
+		const BOOL connected = ConnectNamedPipe(pipe, nullptr) ? TRUE : (GetLastError() == ERROR_PIPE_CONNECTED);
+		if (connected)
+		{
+			for (;;)
+			{
+				const std::string command = read_line(pipe);
+				if (command.empty()) break;
+				if (command == "QUIT")
+				{
+					standalone_controller.abort_record("程序退出");
+					standalone_controller.release_manual_control();
+					write_line(pipe, "OK|QUIT"); FlushFileBuffers(pipe); DisconnectNamedPipe(pipe); CloseHandle(pipe);
+					running.store(false); tick_thread.join(); return 0;
+				}
+				if (command == "CONNECT_ADS" || command == "CONNECT")
+				{
+					const bool legacy_connected = controller.open_ads();
+					const bool program_connected = program_controller.open_ads();
+					const bool standalone_connected = standalone_controller.open_ads();
+					if (legacy_connected && program_connected && standalone_connected) write_line(pipe, "OK|CONNECT_ADS");
+					else
+					{
+						const std::string error = !legacy_connected ? controller.last_error() : !program_connected ? program_controller.last_error() : standalone_controller.last_error();
+						write_line(pipe, "ERROR|ADS连接失败：" + sanitize_for_pipe(error));
+					}
+					continue;
+				}
+				if (command == "DISCONNECT_ADS")
+				{
+					controller.close_ads();
+					program_controller.close_ads();
+					standalone_controller.close_ads();
+					write_line(pipe, "OK|DISCONNECT_ADS");
+					continue;
+				}
+				if (command.rfind("PROGRAM_MODE", 0) == 0)
+				{
+					if (standalone_controller.recording_active() || standalone_controller.recording_stopping())
+					{
+						write_line(pipe, "ERROR|独立记录进行中，请先停止并归档记录后再切换模式");
+						continue;
+					}
+					controller.invalidate_zero();
+					program_controller.invalidate_zero();
+					standalone_controller.invalidate_zero();
+					standalone_controller.release_manual_control();
+				}
+				try
+				{
+					if (command.rfind("MANUAL_CYLINDER_", 0) == 0 || command.rfind("STANDALONE_", 0) == 0 || command == "GET_STANDALONE_RECORD")
+						write_line(pipe, handle_standalone_command(standalone_controller, command));
+					else if (command.rfind("PROGRAM_", 0) == 0 || command == "GET_PROGRAM")
+						write_line(pipe, handle_program_command(program_controller, command));
+					else
+						write_line(pipe, handle_command(controller, command));
+				}
+				catch (const std::exception& ex)
+				{
+					write_line(pipe, "ERROR|后端处理命令异常：" + sanitize_for_pipe(ex.what()));
+				}
 			}
 		}
 		FlushFileBuffers(pipe); DisconnectNamedPipe(pipe); CloseHandle(pipe);

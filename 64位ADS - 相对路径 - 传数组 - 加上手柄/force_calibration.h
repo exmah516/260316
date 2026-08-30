@@ -3,16 +3,16 @@
 
 namespace force_direct_calibration
 {
-	// 2026-08-03 实机砝码标定。正常链路以 raw/1000.0 表示电压；系数仅由 ADS 数据验证。
+	// 2026-08-29 实机砝码标定。正常链路以 raw/1000.0 表示电压；系数仅由 ADS 数据验证。
 	constexpr double counts_per_volt = 1000.0;
 	constexpr double ft_1_slope_n_per_count = 0.000703683250522;
 	constexpr double ft_1_intercept_n = 0.017083888668;
 	constexpr double fn_1_slope_n_per_count = 0.000614437208097;
 	constexpr double fn_1_intercept_n = 0.508483950049;
-	constexpr double fn_2_slope_n_per_count = 0.000484209690578;
-	constexpr double fn_2_intercept_n = 0.678319980964;
-	constexpr double ft_2_slope_n_per_count = 0.00036652860894;
-	constexpr double ft_2_intercept_n = -0.0742765932021;
+	constexpr double fn_2_slope_n_per_count = 0.001134444473;
+	constexpr double fn_2_intercept_n = 0.87021858;
+	constexpr double ft_2_slope_n_per_count = 0.000133373639;
+	constexpr double ft_2_intercept_n = 0.57396876;
 	constexpr double ft_1_slope_n_per_volt = ft_1_slope_n_per_count * counts_per_volt;
 	constexpr double fn_1_slope_n_per_volt = fn_1_slope_n_per_count * counts_per_volt;
 	constexpr double fn_2_slope_n_per_volt = fn_2_slope_n_per_count * counts_per_volt;

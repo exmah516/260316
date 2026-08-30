@@ -12,6 +12,7 @@ VAR
     source_mode : USINT := 0;
     phase_value : USINT := 0;
     cycle_value : UINT := 0;
+    event_value : UDINT := 0;
     zero_index : UINT := 0;
     zero_sum_fn1 : LREAL := 0.0;
     zero_sum_ft1 : LREAL := 0.0;
@@ -114,15 +115,22 @@ IF G.experiment_zero_busy THEN
     END_IF
 END_IF
 
-record_active := G.dual_clamp_sample_arm OR G.program_test_sample_arm;
+record_active := G.dual_clamp_sample_arm OR G.program_test_sample_arm OR G.standalone_record_enable;
 IF G.program_test_sample_arm THEN
     source_mode := G.program_test_mode;
     phase_value := G.program_test_phase;
     cycle_value := G.program_test_cycle_index;
+    event_value := G.program_test_event_sequence;
 ELSIF G.dual_clamp_sample_arm THEN
     source_mode := 0;
     phase_value := UINT_TO_USINT(G.dual_clamp_phase);
     cycle_value := 0;
+    event_value := G.dual_clamp_event_sequence;
+ELSIF G.standalone_record_enable THEN
+    source_mode := 3;
+    phase_value := 0;
+    cycle_value := 0;
+    event_value := G.standalone_record_event_seq;
 END_IF
 IF record_active THEN
     G.experiment_record_source_mode := source_mode;
@@ -145,7 +153,7 @@ IF record_active AND NOT G.experiment_record_overflow THEN
             G.experiment_record_block0_index[write_index] := G.experiment_record_total_count;
             G.experiment_record_block0_time_us[write_index] := UDINT_TO_ULINT(G.experiment_record_total_count) * 1000;
             G.experiment_record_block0_phase[write_index] := phase_value;
-            G.experiment_record_block0_event_sequence[write_index] := G.program_test_event_sequence + G.dual_clamp_event_sequence;
+            G.experiment_record_block0_event_sequence[write_index] := event_value;
             G.experiment_record_block0_cycle_index[write_index] := cycle_value;
             G.experiment_record_block0_axis1_pos[write_index] := G.axis[1].NcToPlc.ActPos;
             G.experiment_record_block0_axis1_vel[write_index] := G.axis[1].NcToPlc.ActVelo;
@@ -174,7 +182,7 @@ IF record_active AND NOT G.experiment_record_overflow THEN
             G.experiment_record_block1_index[write_index] := G.experiment_record_total_count;
             G.experiment_record_block1_time_us[write_index] := UDINT_TO_ULINT(G.experiment_record_total_count) * 1000;
             G.experiment_record_block1_phase[write_index] := phase_value;
-            G.experiment_record_block1_event_sequence[write_index] := G.program_test_event_sequence + G.dual_clamp_event_sequence;
+            G.experiment_record_block1_event_sequence[write_index] := event_value;
             G.experiment_record_block1_cycle_index[write_index] := cycle_value;
             G.experiment_record_block1_axis1_pos[write_index] := G.axis[1].NcToPlc.ActPos;
             G.experiment_record_block1_axis1_vel[write_index] := G.axis[1].NcToPlc.ActVelo;

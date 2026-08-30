@@ -109,6 +109,8 @@ struct DualClampSample
 	double axis6_pos_abs_mm = 0.0;
 	double axis6_velocity_mm_s = 0.0;
 	double axis6_acceleration_mm_s2 = 0.0;
+	double axis2_angle_abs_deg = 0.0;
+	double axis7_angle_abs_deg = 0.0;
 	short ft_1_raw = 0;
 	short fn_1_raw = 0;
 	short ft_2_raw = 0;

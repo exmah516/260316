@@ -18,7 +18,10 @@ VAR
     fb_final_move : MC_MoveAbsolute;
     fb_stop : ARRAY[1..7] OF MC_Stop;
     baseline_timer : TON;
-    clamp_timer : TON;
+    release_timer : TON;
+    reclamp_timer : TON;
+    setup_release_wait_active : BOOL := FALSE;
+    initial_reclamp_wait_active : BOOL := FALSE;
     forward_exec : BOOL := FALSE;
     return_exec : BOOL := FALSE;
     final_exec : BOOL := FALSE;
@@ -40,6 +43,11 @@ IF NOT initialized THEN
     G.program_test_cycle_index := 0;
     G.program_test_cycle_total := 0;
     G.program_test_status_error_id := 0;
+    G.program_test_wait_action := 0;
+    G.program_test_error_source := 0;
+    G.program_test_error_axis := 0;
+    G.program_test_error_phase := 0;
+    G.program_test_error_target_abs := 0.0;
     G.program_test_sample_arm := FALSE;
     G.program_test_event_sequence := 0;
     last_phase := 0;
@@ -66,6 +74,11 @@ IF G.program_test_mode <> active_mode THEN
         G.program_test_cycle_index := 0;
         G.program_test_cycle_total := 0;
         G.program_test_status_error_id := 0;
+        G.program_test_wait_action := 0;
+        G.program_test_error_source := 0;
+        G.program_test_error_axis := 0;
+        G.program_test_error_phase := 0;
+        G.program_test_error_target_abs := 0.0;
         G.program_test_sample_arm := FALSE;
         forward_exec := FALSE;
         return_exec := FALSE;
@@ -115,7 +128,10 @@ END_FOR
 
 G.estop_hold_req := FALSE;
 baseline_timer(IN := state = 3, PT := T#1S);
-clamp_timer(IN := (state = 5) OR (state = 7), PT := T#150MS);
+release_timer(IN := ((state = 1) AND setup_release_wait_active) OR (state = 5),
+    PT := UDINT_TO_TIME(G.program_test_release_wait_ms));
+reclamp_timer(IN := ((state = 2) AND initial_reclamp_wait_active) OR (state = 7),
+    PT := UDINT_TO_TIME(G.program_test_reclamp_wait_ms));
 
 IF G.program_test_abort_req THEN
     G.program_test_abort_req := FALSE;
@@ -129,6 +145,13 @@ IF ((state = 10) OR (state = 11) OR (state = 12)) AND G.program_test_setup_req T
     G.program_test_setup_busy := FALSE;
     G.program_test_start_req := FALSE;
     G.program_test_status_error_id := 0;
+    G.program_test_wait_action := 0;
+    G.program_test_error_source := 0;
+    G.program_test_error_axis := 0;
+    G.program_test_error_phase := 0;
+    G.program_test_error_target_abs := 0.0;
+    setup_release_wait_active := FALSE;
+    initial_reclamp_wait_active := FALSE;
     G.program_test_sample_arm := FALSE;
     forward_exec := FALSE;
     return_exec := FALSE;
@@ -148,6 +171,11 @@ CASE state OF
     IF G.program_test_setup_req THEN
         G.program_test_setup_req := FALSE;
         G.program_test_status_error_id := 0;
+        G.program_test_wait_action := 0;
+        G.program_test_error_source := 0;
+        G.program_test_error_axis := 0;
+        G.program_test_error_phase := 0;
+        G.program_test_error_target_abs := 0.0;
         IF NOT G.self_check_done THEN
             G.program_test_status_error_id := 16#7201;
             state := 12;
@@ -157,7 +185,17 @@ CASE state OF
         ELSIF G.program_test_cycle_count < 1 THEN
             G.program_test_status_error_id := 16#7203;
             state := 12;
-        ELSIF (G.program_test_final_forward_distance_mm < 0.0) OR (G.program_test_final_forward_distance_mm > 20.0) THEN
+        ELSIF (active_mode = 1) AND
+              ((G.program_test_axis1_trigger_from_left_mm < 0.0) OR
+               (G.program_test_axis1_prepare_from_left_mm <= G.program_test_axis1_trigger_from_left_mm) OR
+               (G.program_test_final_forward_distance_mm < 0.0) OR
+               (G.program_test_final_forward_distance_mm >
+                G.program_test_axis1_prepare_from_left_mm - G.program_test_axis1_trigger_from_left_mm)) THEN
+            G.program_test_status_error_id := 16#7204;
+            state := 12;
+        ELSIF (active_mode = 2) AND
+              ((G.program_test_final_forward_distance_mm < 0.0) OR
+               (G.program_test_final_forward_distance_mm > 20.0)) THEN
             G.program_test_status_error_id := 16#7204;
             state := 12;
         ELSIF (G.program_test_forward_velocity <= 0.0) OR (G.program_test_forward_acceleration <= 0.0) OR
@@ -169,6 +207,9 @@ CASE state OF
         ELSIF (active_mode = 2) AND ((G.program_test_axis5_from_left_mm < 0.0) OR (G.program_test_axis5_from_left_mm > 649.0)) THEN
             G.program_test_status_error_id := 16#7206;
             state := 12;
+        ELSIF (G.program_test_release_wait_ms > 60000) OR (G.program_test_reclamp_wait_ms > 60000) THEN
+            G.program_test_status_error_id := 16#7207;
+            state := 12;
         ELSE
             G.program_test_setup_busy := TRUE;
             G.program_test_setup_done := FALSE;
@@ -176,13 +217,13 @@ CASE state OF
             G.program_test_cycle_total := G.program_test_cycle_count;
             G.program_test_target_axis2_deg := G.program_test_axis2_angle_deg;
             G.program_test_target_axis7_deg := G.program_test_axis7_angle_deg;
-            G.program_test_target_axis1_abs := G.leftlimit[1] + 23.0;
+            G.program_test_target_axis1_abs := G.leftlimit[1] + G.program_test_axis1_prepare_from_left_mm;
             G.program_test_target_axis5_abs := G.leftlimit[5] + G.program_test_axis5_from_left_mm;
             G.program_test_target_axis6_abs := G.leftlimit[6] + G.program_test_axis5_from_left_mm + 21.0;
             IF active_mode = 1 THEN
                 setup_target[1] := G.program_test_target_axis1_abs;
                 setup_target[2] := G.program_test_target_axis2_deg;
-                G.program_test_trigger_target_abs := G.leftlimit[1] + 3.0;
+                G.program_test_trigger_target_abs := G.leftlimit[1] + G.program_test_axis1_trigger_from_left_mm;
                 G.program_test_return_target_abs := G.program_test_target_axis1_abs;
                 G.program_test_final_target_abs := G.program_test_target_axis1_abs - G.program_test_final_forward_distance_mm;
                 // 准备移动时运动端释放，定位完成后再切入正常夹持组合。
@@ -198,9 +239,11 @@ CASE state OF
                 G.cylinder3_value := 50;
                 G.cylinder4_value := 0;
             END_IF
+            setup_release_wait_active := TRUE;
+            initial_reclamp_wait_active := FALSE;
             FOR i := 1 TO 7 DO
                 setup_done[i] := NOT active_axis[i];
-                setup_exec[i] := active_axis[i];
+                setup_exec[i] := FALSE;
                 stop_exec[i] := FALSE;
             END_FOR
             state := 1;
@@ -210,25 +253,40 @@ CASE state OF
 1: // SetupMove
     G.program_test_enable := TRUE;
     G.program_test_phase := 1;
-    all_setup_done := TRUE;
-    FOR i := 1 TO 7 DO
-        IF active_axis[i] THEN
-            IF fb_setup_move[i].Done THEN
-                setup_done[i] := TRUE;
-                setup_exec[i] := FALSE;
-            ELSIF fb_setup_move[i].Error OR fb_setup_move[i].CommandAborted THEN
-                G.program_test_status_error_id := fb_setup_move[i].ErrorID;
-                IF G.program_test_status_error_id = 0 THEN G.program_test_status_error_id := 16#7301; END_IF
-                setup_exec[i] := FALSE;
-                state := 12;
-            END_IF
-            IF NOT setup_done[i] THEN all_setup_done := FALSE; END_IF
+    IF setup_release_wait_active THEN
+        G.program_test_wait_action := 1;
+        IF release_timer.Q THEN
+            setup_release_wait_active := FALSE;
+            G.program_test_wait_action := 0;
+            FOR i := 1 TO 7 DO
+                setup_exec[i] := active_axis[i];
+            END_FOR
         END_IF
-    END_FOR
-    IF all_setup_done THEN
-        G.program_test_setup_busy := FALSE;
-        G.program_test_setup_done := TRUE;
-        state := 2;
+    ELSE
+        all_setup_done := TRUE;
+        FOR i := 1 TO 7 DO
+            IF active_axis[i] THEN
+                IF fb_setup_move[i].Done THEN
+                    setup_done[i] := TRUE;
+                    setup_exec[i] := FALSE;
+                ELSIF fb_setup_move[i].Error OR fb_setup_move[i].CommandAborted THEN
+                    G.program_test_status_error_id := fb_setup_move[i].ErrorID;
+                    IF G.program_test_status_error_id = 0 THEN G.program_test_status_error_id := 16#7301; END_IF
+                    G.program_test_error_source := 1;
+                    G.program_test_error_axis := INT_TO_USINT(i);
+                    G.program_test_error_phase := G.program_test_phase;
+                    G.program_test_error_target_abs := setup_target[i];
+                    setup_exec[i] := FALSE;
+                    state := 12;
+                END_IF
+                IF NOT setup_done[i] THEN all_setup_done := FALSE; END_IF
+            END_IF
+        END_FOR
+        IF all_setup_done THEN
+            initial_reclamp_wait_active := TRUE;
+            G.program_test_wait_action := 2;
+            state := 2;
+        END_IF
     END_IF
 
 2: // Ready
@@ -241,7 +299,15 @@ CASE state OF
         G.cylinder3_value := 400;
         G.cylinder4_value := 500;
     END_IF
-    IF G.program_test_start_req THEN
+    IF initial_reclamp_wait_active THEN
+        G.program_test_wait_action := 2;
+        IF reclamp_timer.Q THEN
+            initial_reclamp_wait_active := FALSE;
+            G.program_test_wait_action := 0;
+            G.program_test_setup_busy := FALSE;
+            G.program_test_setup_done := TRUE;
+        END_IF
+    ELSIF G.program_test_start_req THEN
         G.program_test_start_req := FALSE;
         G.program_test_cycle_index := 1;
         G.program_test_sample_arm := TRUE;
@@ -270,10 +336,15 @@ CASE state OF
             G.cylinder3_value := 50;
             G.cylinder4_value := 0;
         END_IF
+        G.program_test_wait_action := 1;
         state := 5;
     ELSIF fb_forward_move.Error OR fb_forward_move.CommandAborted THEN
         G.program_test_status_error_id := fb_forward_move.ErrorID;
         IF G.program_test_status_error_id = 0 THEN G.program_test_status_error_id := 16#7302; END_IF
+        G.program_test_error_source := 2;
+        G.program_test_error_axis := INT_TO_USINT(moving_axis);
+        G.program_test_error_phase := G.program_test_phase;
+        G.program_test_error_target_abs := G.program_test_trigger_target_abs;
         forward_exec := FALSE;
         state := 12;
     END_IF
@@ -282,7 +353,9 @@ CASE state OF
     G.program_test_enable := TRUE;
     G.program_test_phase := 5;
     G.program_test_sample_arm := TRUE;
-    IF clamp_timer.Q THEN
+    G.program_test_wait_action := 1;
+    IF release_timer.Q THEN
+        G.program_test_wait_action := 0;
         return_exec := TRUE;
         state := 6;
     END_IF
@@ -304,6 +377,10 @@ CASE state OF
     ELSIF fb_return_move.Error OR fb_return_move.CommandAborted THEN
         G.program_test_status_error_id := fb_return_move.ErrorID;
         IF G.program_test_status_error_id = 0 THEN G.program_test_status_error_id := 16#7303; END_IF
+        G.program_test_error_source := 3;
+        G.program_test_error_axis := INT_TO_USINT(moving_axis);
+        G.program_test_error_phase := G.program_test_phase;
+        G.program_test_error_target_abs := G.program_test_return_target_abs;
         return_exec := FALSE;
         state := 12;
     END_IF
@@ -312,7 +389,9 @@ CASE state OF
     G.program_test_enable := TRUE;
     G.program_test_phase := 7;
     G.program_test_sample_arm := TRUE;
-    IF clamp_timer.Q THEN
+    G.program_test_wait_action := 2;
+    IF reclamp_timer.Q THEN
+        G.program_test_wait_action := 0;
         state := 8;
     END_IF
 
@@ -343,6 +422,10 @@ CASE state OF
     ELSIF fb_final_move.Error OR fb_final_move.CommandAborted THEN
         G.program_test_status_error_id := fb_final_move.ErrorID;
         IF G.program_test_status_error_id = 0 THEN G.program_test_status_error_id := 16#7304; END_IF
+        G.program_test_error_source := 4;
+        G.program_test_error_axis := INT_TO_USINT(moving_axis);
+        G.program_test_error_phase := G.program_test_phase;
+        G.program_test_error_target_abs := G.program_test_final_target_abs;
         final_exec := FALSE;
         state := 12;
     END_IF
@@ -351,11 +434,15 @@ CASE state OF
     G.program_test_enable := FALSE;
     G.program_test_phase := 10;
     G.program_test_sample_arm := FALSE;
+    G.program_test_wait_action := 0;
 
 11: // Aborted
     G.program_test_enable := FALSE;
     G.program_test_phase := 11;
     G.program_test_sample_arm := FALSE;
+    G.program_test_wait_action := 0;
+    setup_release_wait_active := FALSE;
+    initial_reclamp_wait_active := FALSE;
     G.program_test_setup_busy := FALSE;
     forward_exec := FALSE;
     return_exec := FALSE;
@@ -376,6 +463,9 @@ CASE state OF
     G.program_test_enable := FALSE;
     G.program_test_phase := 12;
     G.program_test_sample_arm := FALSE;
+    G.program_test_wait_action := 0;
+    setup_release_wait_active := FALSE;
+    initial_reclamp_wait_active := FALSE;
     G.program_test_setup_busy := FALSE;
     forward_exec := FALSE;
     return_exec := FALSE;

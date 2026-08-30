@@ -16,6 +16,7 @@ public:
 	bool open_ads();
 	void close_ads();
 	bool is_ads_open() const;
+	void set_shared_selfcheck_state(bool done, bool busy);
 	bool select_mode(ProgrammedDeliveryMode mode);
 	bool prepare(const ProgrammedDeliveryConfig& config);
 	bool start();
@@ -51,5 +52,8 @@ private:
 	std::uint32_t expected_block_sequence_ = 0;
 	std::uint32_t expected_sample_index_ = 0;
 	bool zero_file_written_ = false;
+	bool shared_selfcheck_done_ = false;
+	bool shared_selfcheck_busy_ = false;
+	bool shared_selfcheck_valid_ = false;
 	void poll_stream_locked();
 };

@@ -1,47 +1,525 @@
 <Window x:Class="DualClampExperimentUI.MainWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="双机构夹持扰动实验" Width="1240" Height="820" MinWidth="1020" MinHeight="680"
-        Background="#FFFFFF" Foreground="{StaticResource Ink}">
-    <Grid Margin="20">
-        <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
-        <DockPanel Grid.Row="0" Margin="0,0,0,14">
-            <StackPanel DockPanel.Dock="Left"><TextBlock Text="双机构夹持扰动实验" FontSize="26" FontWeight="SemiBold"/><TextBlock Text="旧模式与程序递送测试" Foreground="{StaticResource Muted}" Margin="0,4,0,0"/></StackPanel>
+        Title="双机构夹持扰动实验控制平台" Width="1280" Height="850" MinWidth="1080" MinHeight="700"
+        Background="{StaticResource AppBackground}" Foreground="{StaticResource Ink}"
+        FontFamily="{StaticResource AppFont}"
+        UseLayoutRounding="True" SnapsToDevicePixels="True" WindowStartupLocation="CenterScreen">
+    <Grid Margin="16">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+        </Grid.RowDefinitions>
+
+        <!-- 顶部标题与系统状态栏 -->
+        <DockPanel Grid.Row="0" Margin="0,0,0,12">
+            <StackPanel DockPanel.Dock="Left" Orientation="Horizontal" VerticalAlignment="Center">
+                <Border Width="4" Height="38" CornerRadius="2" Background="{StaticResource Accent}" Margin="0,0,12,0"/>
+                <StackPanel VerticalAlignment="Center">
+                    <TextBlock Text="双机构夹持扰动实验" FontSize="22" FontWeight="Bold" Foreground="{StaticResource Ink}"/>
+                    <StackPanel Orientation="Horizontal" Margin="0,3,0,0">
+                        <Border Background="#E0F2FE" CornerRadius="3" Padding="5,1" Margin="0,0,6,0">
+                            <TextBlock Text="DUAL-CLAMP INTERVENTION" FontSize="10" FontWeight="Bold" Foreground="#0369A1"/>
+                        </Border>
+                        <TextBlock Text="旧模式对照与导管/导丝程序递送测试平台" FontSize="12" Foreground="{StaticResource Muted}"/>
+                    </StackPanel>
+                </StackPanel>
+            </StackPanel>
+
             <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center">
-                <Border Background="#F1F5F9" CornerRadius="4" Padding="10,6" Margin="0,0,10,0"><StackPanel Orientation="Horizontal"><Ellipse x:Name="PipeIndicator" Width="10" Height="10" Fill="#EF4444" Margin="0,0,6,0" VerticalAlignment="Center"/><TextBlock x:Name="PipeStatusText" Text="UI管道: 未连接" FontSize="14" FontWeight="Medium" VerticalAlignment="Center"/></StackPanel></Border>
-                <Border Background="#F1F5F9" CornerRadius="4" Padding="10,6" Margin="0,0,10,0"><StackPanel Orientation="Horizontal"><Ellipse x:Name="AdsIndicator" Width="10" Height="10" Fill="#EF4444" Margin="0,0,6,0" VerticalAlignment="Center"/><TextBlock x:Name="AdsStatusText" Text="ADS: 未连接" FontSize="14" FontWeight="Medium" VerticalAlignment="Center"/></StackPanel></Border>
-                <Border Background="#F1F5F9" CornerRadius="4" Padding="10,6"><TextBlock x:Name="SelfCheckText" Text="PLC自检: 等待状态" FontSize="14" FontWeight="Medium"/></Border>
+                <!-- UI管道状态 -->
+                <Border Background="#FFFFFF" BorderBrush="{StaticResource BorderBrushColor}" BorderThickness="1" CornerRadius="16" Padding="12,5" Margin="0,0,8,0">
+                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                        <Ellipse x:Name="PipeIndicator" Width="9" Height="9" Fill="#EF4444" Margin="0,0,8,0" VerticalAlignment="Center"/>
+                        <TextBlock x:Name="PipeStatusText" Text="UI管道: 未连接" FontSize="12.5" FontWeight="SemiBold" VerticalAlignment="Center" Foreground="{StaticResource Ink}"/>
+                    </StackPanel>
+                </Border>
+                <!-- ADS通讯状态 -->
+                <Border Background="#FFFFFF" BorderBrush="{StaticResource BorderBrushColor}" BorderThickness="1" CornerRadius="16" Padding="12,5" Margin="0,0,8,0">
+                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                        <Ellipse x:Name="AdsIndicator" Width="9" Height="9" Fill="#EF4444" Margin="0,0,8,0" VerticalAlignment="Center"/>
+                        <TextBlock x:Name="AdsStatusText" Text="ADS: 未连接" FontSize="12.5" FontWeight="SemiBold" VerticalAlignment="Center" Foreground="{StaticResource Ink}"/>
+                    </StackPanel>
+                </Border>
+                <!-- PLC自检状态 -->
+                <Border Background="#FFFFFF" BorderBrush="{StaticResource BorderBrushColor}" BorderThickness="1" CornerRadius="16" Padding="12,5">
+                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                        <Border Width="7" Height="7" CornerRadius="3.5" Background="#64748B" Margin="0,0,8,0" VerticalAlignment="Center"/>
+                        <TextBlock x:Name="SelfCheckText" Text="PLC自检: 等待状态" FontSize="12.5" FontWeight="SemiBold" VerticalAlignment="Center" Foreground="{StaticResource Ink}"/>
+                    </StackPanel>
+                </Border>
             </StackPanel>
         </DockPanel>
-        <Border Grid.Row="1" Background="{StaticResource Panel}" Padding="14" CornerRadius="6" Margin="0,0,0,14">
-            <WrapPanel>
-                <TextBlock Text="实验模式" VerticalAlignment="Center" Margin="0,0,6,0"/>
-                <ComboBox x:Name="ExperimentModeBox" Width="210" SelectedIndex="0" SelectionChanged="ExperimentMode_Changed" Margin="0,0,16,0"><ComboBoxItem Content="旧双机构对照模式" Tag="legacy"/><ComboBoxItem Content="导管程序递送测试" Tag="catheter"/><ComboBoxItem Content="导丝程序递送测试" Tag="guidewire"/></ComboBox>
+
+        <!-- 顶部操作工具栏卡片 -->
+        <Border Grid.Row="1" Background="#FFFFFF" BorderBrush="{StaticResource BorderBrushColor}" BorderThickness="1" CornerRadius="8" Padding="14,10" Margin="0,0,0,12">
+            <WrapPanel VerticalAlignment="Center">
+                <TextBlock Text="实验模式" FontWeight="SemiBold" VerticalAlignment="Center" Margin="0,0,6,0" Foreground="{StaticResource Ink}"/>
+                <ComboBox x:Name="ExperimentModeBox" Width="190" SelectedIndex="0" SelectionChanged="ExperimentMode_Changed" Margin="0,0,14,0">
+                    <ComboBoxItem Content="旧双机构对照模式" Tag="legacy"/>
+                    <ComboBoxItem Content="导管程序递送测试" Tag="catheter"/>
+                    <ComboBoxItem Content="导丝程序递送测试" Tag="guidewire"/>
+                </ComboBox>
+
+                <!-- 旧模式工具栏选项 -->
                 <StackPanel x:Name="LegacyToolbar" Orientation="Horizontal">
-                    <TextBlock Text="运动端" VerticalAlignment="Center" Margin="0,0,6,0"/><ComboBox x:Name="MovingAxisBox" Width="190" SelectedIndex="0" Margin="0,0,16,0"><ComboBoxItem Content="轴1运动（轴6固定，电缸4夹紧）" Tag="1"/><ComboBoxItem Content="轴6运动（轴1固定，电缸2夹紧）" Tag="6"/></ComboBox>
-                    <TextBlock Text="恢复" VerticalAlignment="Center" Margin="0,0,6,0"/><ComboBox x:Name="RecoveryBox" Width="120" SelectedIndex="1" Margin="0,0,16,0"><ComboBoxItem Content="夹紧后静止"/><ComboBoxItem Content="夹紧后输送"/></ComboBox>
+                    <TextBlock Text="运动端" FontWeight="SemiBold" VerticalAlignment="Center" Margin="0,0,6,0" Foreground="{StaticResource Ink}"/>
+                    <ComboBox x:Name="MovingAxisBox" Width="200" SelectedIndex="0" Margin="0,0,14,0">
+                        <ComboBoxItem Content="轴1运动（轴6固定，电缸4夹紧）" Tag="1"/>
+                        <ComboBoxItem Content="轴6运动（轴1固定，电缸2夹紧）" Tag="6"/>
+                    </ComboBox>
+                    <TextBlock Text="恢复" FontWeight="SemiBold" VerticalAlignment="Center" Margin="0,0,6,0" Foreground="{StaticResource Ink}"/>
+                    <ComboBox x:Name="RecoveryBox" Width="110" SelectedIndex="1" Margin="0,0,14,0">
+                        <ComboBoxItem Content="夹紧后静止"/>
+                        <ComboBoxItem Content="夹紧后输送"/>
+                    </ComboBox>
                 </StackPanel>
-                <TextBlock Text="保存后缀" VerticalAlignment="Center" Margin="0,0,6,0"/><TextBox x:Name="RecordSuffixText" Width="150" Text="experiment" Margin="0,0,12,0"/>
-                <Button Content="连接/重连" Click="Connect_Click" Padding="16,7" Margin="0,0,8,0" FontWeight="SemiBold"/><Button Content="连接ADS" Click="ConnectAds_Click" Padding="14,7" Margin="0,0,8,0"/><Button x:Name="PrepareButton" Content="准备定位" Click="Prepare_Click" Padding="16,7" Margin="0,0,8,0"/><Button x:Name="StartButton" Content="开始测试" Click="Start_Click" Padding="16,7" Margin="0,0,8,0" Background="{StaticResource Accent}" Foreground="White"/><Button x:Name="ZeroButton" Content="力感取零点" Click="Zero_Click" Padding="14,7" Margin="0,0,8,0"/><Button Content="中止" Click="Abort_Click" Padding="16,7"/>
+
+                <TextBlock Text="保存后缀" FontWeight="SemiBold" VerticalAlignment="Center" Margin="0,0,6,0" Foreground="{StaticResource Ink}"/>
+                <TextBox x:Name="RecordSuffixText" Width="130" Text="experiment" Margin="0,0,14,0"/>
+
+                <!-- 操作按钮组 -->
+                <Button Content="连接/重连" Click="Connect_Click" Padding="14,6" Margin="0,0,6,0"/>
+                <Button Content="连接ADS" Click="ConnectAds_Click" Padding="12,6" Margin="0,0,6,0"/>
+                <Button x:Name="PrepareButton" Content="准备定位" Click="Prepare_Click" Style="{StaticResource TintBtnStyle}" Padding="14,6" Margin="0,0,6,0"/>
+                <Button x:Name="StartButton" Content="开始测试" Click="Start_Click" Style="{StaticResource AccentBtnStyle}" Padding="18,6" Margin="0,0,6,0"/>
+                <Button x:Name="ZeroButton" Content="力感取零点" Click="Zero_Click" Padding="12,6" Margin="0,0,6,0"/>
+                <Button Content="中止" Click="Abort_Click" Style="{StaticResource DangerBtnStyle}" Padding="16,6"/>
             </WrapPanel>
         </Border>
+
+        <!-- 主内容区：左右分栏 -->
         <Grid Grid.Row="2">
-            <Grid.ColumnDefinitions><ColumnDefinition Width="355"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
-            <ScrollViewer Grid.Column="0" VerticalScrollBarVisibility="Auto" Margin="0,0,16,0">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="380"/>
+                <ColumnDefinition Width="*"/>
+            </Grid.ColumnDefinitions>
+
+            <!-- 左栏：参数配置与运行监控 -->
+            <ScrollViewer Grid.Column="0" VerticalScrollBarVisibility="Auto" Margin="0,0,12,0" Padding="0,0,4,0">
                 <StackPanel>
-                    <StackPanel x:Name="LegacyPanel">
-                        <TextBlock Text="旧模式参数" FontSize="18" FontWeight="SemiBold" Margin="0,0,0,8"/><Grid><Grid.ColumnDefinitions><ColumnDefinition Width="165"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions><Grid.RowDefinitions><RowDefinition/><RowDefinition/><RowDefinition/><RowDefinition/><RowDefinition/><RowDefinition/><RowDefinition/><RowDefinition/><RowDefinition/></Grid.RowDefinitions>
-                            <TextBlock Grid.Row="0" Text="轴1距左限位 (mm)" Margin="0,5"/><TextBox x:Name="Axis1Pos" Grid.Row="0" Grid.Column="1" Text="96" Margin="4"/><TextBlock Grid.Row="1" Text="轴6距左限位 (mm)" Margin="0,5"/><TextBox x:Name="Axis6Pos" Grid.Row="1" Grid.Column="1" Text="580" Margin="4"/><TextBlock Grid.Row="2" Text="轴2角度 (deg)" Margin="0,5"/><TextBox x:Name="Axis2Angle" Grid.Row="2" Grid.Column="1" Text="0" Margin="4"/><TextBlock Grid.Row="3" Text="轴7角度 (deg)" Margin="0,5"/><TextBox x:Name="Axis7Angle" Grid.Row="3" Grid.Column="1" Text="0" Margin="4"/><TextBlock Grid.Row="4" Text="回程距离 (mm)" Margin="0,5"/><TextBox x:Name="ReturnDistance" Grid.Row="4" Grid.Column="1" Text="10" Margin="4"/><TextBlock Grid.Row="5" Text="回程速度 (mm/s)" Margin="0,5"/><TextBox x:Name="ReturnVelocity" Grid.Row="5" Grid.Column="1" Text="20" Margin="4"/><TextBlock Grid.Row="6" Text="回程加速度 (mm/s²)" Margin="0,5"/><TextBox x:Name="ReturnAcceleration" Grid.Row="6" Grid.Column="1" Text="100" Margin="4"/><TextBlock Grid.Row="7" Text="回程减速度 (mm/s²)" Margin="0,5"/><TextBox x:Name="ReturnDeceleration" Grid.Row="7" Grid.Column="1" Text="100" Margin="4"/><TextBlock Grid.Row="8" Text="回程Jerk (mm/s³)" Margin="0,5"/><TextBox x:Name="ReturnJerk" Grid.Row="8" Grid.Column="1" Text="1000" Margin="4"/>
-                        </Grid>
-                    </StackPanel>
-                    <StackPanel x:Name="ProgramPanel" Visibility="Collapsed">
-                        <TextBlock x:Name="ProgramPanelTitle" Text="程序递送参数" FontSize="18" FontWeight="SemiBold" Margin="0,0,0,8"/><Grid><Grid.ColumnDefinitions><ColumnDefinition Width="185"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions><Grid.RowDefinitions><RowDefinition/><RowDefinition/><RowDefinition/><RowDefinition/><RowDefinition/><RowDefinition/><RowDefinition/><RowDefinition/><RowDefinition/><RowDefinition/><RowDefinition/><RowDefinition/><RowDefinition/></Grid.RowDefinitions>
-                            <TextBlock x:Name="Axis5PositionLabel" Grid.Row="0" Text="轴5距左限位 (mm)" Margin="0,5"/><TextBox x:Name="ProgramAxis5Pos" Grid.Row="0" Grid.Column="1" Text="430" Margin="4" TextChanged="ProgramAxis5Pos_Changed"/><TextBlock x:Name="Axis6CalculatedLabel" Grid.Row="1" Text="轴6自动位置 (mm)" Margin="0,5"/><TextBlock x:Name="ProgramAxis6Calculated" Grid.Row="1" Grid.Column="1" Text="451.000" Margin="4" VerticalAlignment="Center" Foreground="{StaticResource Muted}"/><TextBlock x:Name="ProgramAngleLabel" Grid.Row="2" Text="轴2角度 (deg)" Margin="0,5"/><TextBox x:Name="ProgramAngle" Grid.Row="2" Grid.Column="1" Text="0" Margin="4"/><TextBlock Grid.Row="3" Text="周期数" Margin="0,5"/><TextBox x:Name="ProgramCycleCount" Grid.Row="3" Grid.Column="1" Text="1" Margin="4"/><TextBlock Grid.Row="4" Text="最终前向距离 (mm)" Margin="0,5"/><TextBox x:Name="ProgramFinalDistance" Grid.Row="4" Grid.Column="1" Text="10" Margin="4"/><TextBlock Grid.Row="5" Text="前向速度 (mm/s)" Margin="0,5"/><TextBox x:Name="ProgramForwardVelocity" Grid.Row="5" Grid.Column="1" Text="20" Margin="4"/><TextBlock Grid.Row="6" Text="前向加速度 (mm/s²)" Margin="0,5"/><TextBox x:Name="ProgramForwardAcceleration" Grid.Row="6" Grid.Column="1" Text="100" Margin="4"/><TextBlock Grid.Row="7" Text="前向减速度 (mm/s²)" Margin="0,5"/><TextBox x:Name="ProgramForwardDeceleration" Grid.Row="7" Grid.Column="1" Text="100" Margin="4"/><TextBlock Grid.Row="8" Text="前向Jerk (mm/s³)" Margin="0,5"/><TextBox x:Name="ProgramForwardJerk" Grid.Row="8" Grid.Column="1" Text="1000" Margin="4"/><TextBlock Grid.Row="9" Text="回退速度 (mm/s)" Margin="0,5"/><TextBox x:Name="ProgramReturnVelocity" Grid.Row="9" Grid.Column="1" Text="20" Margin="4"/><TextBlock Grid.Row="10" Text="回退加速度 (mm/s²)" Margin="0,5"/><TextBox x:Name="ProgramReturnAcceleration" Grid.Row="10" Grid.Column="1" Text="100" Margin="4"/><TextBlock Grid.Row="11" Text="回退减速度 (mm/s²)" Margin="0,5"/><TextBox x:Name="ProgramReturnDeceleration" Grid.Row="11" Grid.Column="1" Text="100" Margin="4"/><TextBlock Grid.Row="12" Text="回退Jerk (mm/s³)" Margin="0,5"/><TextBox x:Name="ProgramReturnJerk" Grid.Row="12" Grid.Column="1" Text="1000" Margin="4"/></Grid><TextBlock Text="PLC上电后自动自检；界面只等待自检完成，不发送自检请求。" TextWrapping="Wrap" Foreground="{StaticResource Muted}" Margin="0,12,0,0"/>
-                    </StackPanel>
-                    <TextBlock Text="当前阶段" FontSize="18" FontWeight="SemiBold" Margin="0,20,0,8"/><TextBlock x:Name="PhaseText" Text="Idle" FontSize="22" Foreground="{StaticResource Accent}"/><TextBlock x:Name="CycleText" Text="周期：-- / --" Margin="0,6,0,0" Foreground="{StaticResource Muted}"/><TextBlock x:Name="LiveMotionText" Text="实时运动量：--" TextWrapping="Wrap" Margin="0,10,0,0" Foreground="{StaticResource Muted}"/><TextBlock x:Name="RecordStatusText" Text="实时记录：未开始" TextWrapping="Wrap" Margin="0,8,0,0" Foreground="{StaticResource Muted}"/><TextBlock x:Name="ZeroStatusText" Text="力感零点：未完成" TextWrapping="Wrap" Margin="0,4,0,0" Foreground="{StaticResource Muted}"/><TextBlock x:Name="ZeroValuesText" TextWrapping="Wrap" Margin="0,4,0,0" Foreground="{StaticResource Muted}"/><TextBlock x:Name="ErrorText" TextWrapping="Wrap" Foreground="#B42318" Margin="0,8,0,0"/><Button Content="归档并保存数据" Click="Save_Click" Padding="12,8" Margin="0,20,0,0"/>
+                    <!-- 参数设置卡片 -->
+                    <Border Background="#FFFFFF" BorderBrush="{StaticResource BorderBrushColor}" BorderThickness="1" CornerRadius="8" Padding="14" Margin="0,0,0,12">
+                        <StackPanel>
+                            <!-- 旧模式参数面板 -->
+                            <StackPanel x:Name="LegacyPanel">
+                                <DockPanel Margin="0,0,0,10">
+                                    <TextBlock Text="旧模式参数配置" FontSize="15" FontWeight="Bold" Foreground="{StaticResource Ink}"/>
+                                </DockPanel>
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="155"/>
+                                        <ColumnDefinition Width="*"/>
+                                    </Grid.ColumnDefinitions>
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="Auto"/>
+                                    </Grid.RowDefinitions>
+                                    <TextBlock Grid.Row="0" Text="轴1距左限位 (mm)" VerticalAlignment="Center" Foreground="#475569" FontSize="12.5" Margin="0,3"/>
+                                    <TextBox x:Name="Axis1Pos" Grid.Row="0" Grid.Column="1" Text="96" Margin="0,3" Height="28"/>
+                                    <TextBlock Grid.Row="1" Text="轴6距左限位 (mm)" VerticalAlignment="Center" Foreground="#475569" FontSize="12.5" Margin="0,3"/>
+                                    <TextBox x:Name="Axis6Pos" Grid.Row="1" Grid.Column="1" Text="580" Margin="0,3" Height="28"/>
+                                    <TextBlock Grid.Row="2" Text="轴2角度 (deg)" VerticalAlignment="Center" Foreground="#475569" FontSize="12.5" Margin="0,3"/>
+                                    <TextBox x:Name="Axis2Angle" Grid.Row="2" Grid.Column="1" Text="0" Margin="0,3" Height="28"/>
+                                    <TextBlock Grid.Row="3" Text="轴7角度 (deg)" VerticalAlignment="Center" Foreground="#475569" FontSize="12.5" Margin="0,3"/>
+                                    <TextBox x:Name="Axis7Angle" Grid.Row="3" Grid.Column="1" Text="0" Margin="0,3" Height="28"/>
+                                    <TextBlock Grid.Row="4" Text="回程距离 (mm)" VerticalAlignment="Center" Foreground="#475569" FontSize="12.5" Margin="0,3"/>
+                                    <TextBox x:Name="ReturnDistance" Grid.Row="4" Grid.Column="1" Text="10" Margin="0,3" Height="28"/>
+                                    <TextBlock Grid.Row="5" Text="回程速度 (mm/s)" VerticalAlignment="Center" Foreground="#475569" FontSize="12.5" Margin="0,3"/>
+                                    <TextBox x:Name="ReturnVelocity" Grid.Row="5" Grid.Column="1" Text="20" Margin="0,3" Height="28"/>
+                                    <TextBlock Grid.Row="6" Text="回程加速度 (mm/s²)" VerticalAlignment="Center" Foreground="#475569" FontSize="12.5" Margin="0,3"/>
+                                    <TextBox x:Name="ReturnAcceleration" Grid.Row="6" Grid.Column="1" Text="100" Margin="0,3" Height="28"/>
+                                    <TextBlock Grid.Row="7" Text="回程减速度 (mm/s²)" VerticalAlignment="Center" Foreground="#475569" FontSize="12.5" Margin="0,3"/>
+                                    <TextBox x:Name="ReturnDeceleration" Grid.Row="7" Grid.Column="1" Text="100" Margin="0,3" Height="28"/>
+                                    <TextBlock Grid.Row="8" Text="回程Jerk (mm/s³)" VerticalAlignment="Center" Foreground="#475569" FontSize="12.5" Margin="0,3"/>
+                                    <TextBox x:Name="ReturnJerk" Grid.Row="8" Grid.Column="1" Text="1000" Margin="0,3" Height="28"/>
+                                </Grid>
+
+                                <Separator Margin="0,12,0,10"/>
+                                <TextBlock Text="电缸手动控制" FontSize="14" FontWeight="Bold" Foreground="{StaticResource Ink}" Margin="0,0,0,8"/>
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="52"/>
+                                        <ColumnDefinition Width="42"/>
+                                        <ColumnDefinition Width="58"/>
+                                        <ColumnDefinition Width="58"/>
+                                        <ColumnDefinition Width="58"/>
+                                        <ColumnDefinition Width="58"/>
+                                    </Grid.ColumnDefinitions>
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="Auto"/>
+                                    </Grid.RowDefinitions>
+                                    <TextBlock Grid.Column="1" Text="启用" FontSize="11" Foreground="{StaticResource Muted}" HorizontalAlignment="Center"/>
+                                    <TextBlock Grid.Column="2" Text="开值" FontSize="11" Foreground="{StaticResource Muted}" HorizontalAlignment="Center"/>
+                                    <TextBlock Grid.Column="3" Text="闭值" FontSize="11" Foreground="{StaticResource Muted}" HorizontalAlignment="Center"/>
+                                    <TextBlock Grid.Column="4" Text="当前" FontSize="11" Foreground="{StaticResource Muted}" HorizontalAlignment="Center"/>
+                                    <TextBlock Grid.Column="5" Text="操作" FontSize="11" Foreground="{StaticResource Muted}" HorizontalAlignment="Center"/>
+
+                                    <TextBlock Grid.Row="1" Text="电缸1" VerticalAlignment="Center" FontSize="12"/>
+                                    <CheckBox x:Name="Cylinder1Enabled" Grid.Row="1" Grid.Column="1" IsChecked="True" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                    <TextBox x:Name="Cylinder1OpenValue" Grid.Row="1" Grid.Column="2" Text="1000" Height="25" Margin="2"/>
+                                    <TextBox x:Name="Cylinder1CloseValue" Grid.Row="1" Grid.Column="3" Text="0" Height="25" Margin="2"/>
+                                    <TextBlock x:Name="Cylinder1Current" Grid.Row="1" Grid.Column="4" Text="1000" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                    <StackPanel Grid.Row="1" Grid.Column="5" Orientation="Horizontal" HorizontalAlignment="Center">
+                                        <Button Content="开" Tag="1" Click="ManualCylinderOpen_Click" Padding="5,2" Margin="1"/>
+                                        <Button Content="闭" Tag="1" Click="ManualCylinderClose_Click" Padding="5,2" Margin="1"/>
+                                    </StackPanel>
+
+                                    <TextBlock Grid.Row="2" Text="电缸2" VerticalAlignment="Center" FontSize="12"/>
+                                    <CheckBox x:Name="Cylinder2Enabled" Grid.Row="2" Grid.Column="1" IsChecked="True" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                    <TextBox x:Name="Cylinder2OpenValue" Grid.Row="2" Grid.Column="2" Text="0" Height="25" Margin="2"/>
+                                    <TextBox x:Name="Cylinder2CloseValue" Grid.Row="2" Grid.Column="3" Text="600" Height="25" Margin="2"/>
+                                    <TextBlock x:Name="Cylinder2Current" Grid.Row="2" Grid.Column="4" Text="0" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                    <StackPanel Grid.Row="2" Grid.Column="5" Orientation="Horizontal" HorizontalAlignment="Center">
+                                        <Button Content="开" Tag="2" Click="ManualCylinderOpen_Click" Padding="5,2" Margin="1"/>
+                                        <Button Content="闭" Tag="2" Click="ManualCylinderClose_Click" Padding="5,2" Margin="1"/>
+                                    </StackPanel>
+
+                                    <TextBlock Grid.Row="3" Text="电缸3" VerticalAlignment="Center" FontSize="12"/>
+                                    <CheckBox x:Name="Cylinder3Enabled" Grid.Row="3" Grid.Column="1" IsChecked="True" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                    <TextBox x:Name="Cylinder3OpenValue" Grid.Row="3" Grid.Column="2" Text="400" Height="25" Margin="2"/>
+                                    <TextBox x:Name="Cylinder3CloseValue" Grid.Row="3" Grid.Column="3" Text="50" Height="25" Margin="2"/>
+                                    <TextBlock x:Name="Cylinder3Current" Grid.Row="3" Grid.Column="4" Text="400" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                    <StackPanel Grid.Row="3" Grid.Column="5" Orientation="Horizontal" HorizontalAlignment="Center">
+                                        <Button Content="开" Tag="3" Click="ManualCylinderOpen_Click" Padding="5,2" Margin="1"/>
+                                        <Button Content="闭" Tag="3" Click="ManualCylinderClose_Click" Padding="5,2" Margin="1"/>
+                                    </StackPanel>
+
+                                    <TextBlock Grid.Row="4" Text="电缸4" VerticalAlignment="Center" FontSize="12"/>
+                                    <CheckBox x:Name="Cylinder4Enabled" Grid.Row="4" Grid.Column="1" IsChecked="True" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                    <TextBox x:Name="Cylinder4OpenValue" Grid.Row="4" Grid.Column="2" Text="0" Height="25" Margin="2"/>
+                                    <TextBox x:Name="Cylinder4CloseValue" Grid.Row="4" Grid.Column="3" Text="500" Height="25" Margin="2"/>
+                                    <TextBlock x:Name="Cylinder4Current" Grid.Row="4" Grid.Column="4" Text="0" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                    <StackPanel Grid.Row="4" Grid.Column="5" Orientation="Horizontal" HorizontalAlignment="Center">
+                                        <Button Content="开" Tag="4" Click="ManualCylinderOpen_Click" Padding="5,2" Margin="1"/>
+                                        <Button Content="闭" Tag="4" Click="ManualCylinderClose_Click" Padding="5,2" Margin="1"/>
+                                    </StackPanel>
+                                </Grid>
+                                <TextBlock x:Name="ManualCylinderHint" Text="自检完成后可控制电缸；记录不受自检和准备定位限制。" TextWrapping="Wrap" Foreground="{StaticResource Muted}" FontSize="11" Margin="0,7,0,0"/>
+
+                                <Separator Margin="0,12,0,10"/>
+                                <TextBlock Text="独立数据记录" FontSize="14" FontWeight="Bold" Foreground="{StaticResource Ink}" Margin="0,0,0,8"/>
+                                <TextBlock Text="选择需要写入CSV的字段（采样序号、PLC时间、阶段和事件序号始终记录）" TextWrapping="Wrap" FontSize="11" Foreground="{StaticResource Muted}" Margin="0,0,0,5"/>
+                                <WrapPanel>
+                                    <Button Content="全选" Click="StandaloneSelectAll_Click" Padding="7,3" Margin="0,0,5,5"/>
+                                    <Button Content="清空" Click="StandaloneClearAll_Click" Padding="7,3" Margin="0,0,5,5"/>
+                                    <Button x:Name="StandaloneRecordStartButton" Content="开始记录" Click="StandaloneRecordStart_Click" Style="{StaticResource AccentBtnStyle}" Padding="9,3" Margin="0,0,5,5"/>
+                                    <Button x:Name="StandaloneRecordStopButton" Content="停止记录" Click="StandaloneRecordStop_Click" Style="{StaticResource DangerBtnStyle}" Padding="9,3" Margin="0,0,5,5"/>
+                                    <Button x:Name="StandaloneZeroButton" Content="力感取零点（可选）" Click="StandaloneZero_Click" Padding="9,3" Margin="0,0,0,5"/>
+                                </WrapPanel>
+                                <TextBlock Text="轴1" FontWeight="SemiBold" FontSize="11" Margin="0,3,0,0"/>
+                                <WrapPanel>
+                                    <CheckBox x:Name="FieldAxis1Pos" Content="位置" IsChecked="True" Margin="0,0,8,0"/>
+                                    <CheckBox x:Name="FieldAxis1Velocity" Content="速度" IsChecked="True" Margin="0,0,8,0"/>
+                                    <CheckBox x:Name="FieldAxis1Acceleration" Content="加速度" IsChecked="True" Margin="0,0,8,0"/>
+                                </WrapPanel>
+                                <TextBlock Text="轴2" FontWeight="SemiBold" FontSize="11" Margin="0,3,0,0"/>
+                                <WrapPanel>
+                                    <CheckBox x:Name="FieldAxis2Pos" Content="位置" Margin="0,0,8,0"/>
+                                    <CheckBox x:Name="FieldAxis2Velocity" Content="速度" Margin="0,0,8,0"/>
+                                    <CheckBox x:Name="FieldAxis2Acceleration" Content="加速度" Margin="0,0,8,0"/>
+                                </WrapPanel>
+                                <TextBlock Text="轴5/轴6/轴7" FontWeight="SemiBold" FontSize="11" Margin="0,3,0,0"/>
+                                <WrapPanel>
+                                    <CheckBox x:Name="FieldAxis5Pos" Content="轴5位置" Margin="0,0,6,0"/>
+                                    <CheckBox x:Name="FieldAxis5Velocity" Content="轴5速度" Margin="0,0,6,0"/>
+                                    <CheckBox x:Name="FieldAxis5Acceleration" Content="轴5加速度" Margin="0,0,6,0"/>
+                                    <CheckBox x:Name="FieldAxis6Pos" Content="轴6位置" Margin="0,0,6,0"/>
+                                    <CheckBox x:Name="FieldAxis6Velocity" Content="轴6速度" Margin="0,0,6,0"/>
+                                    <CheckBox x:Name="FieldAxis6Acceleration" Content="轴6加速度" Margin="0,0,6,0"/>
+                                    <CheckBox x:Name="FieldAxis7Pos" Content="轴7位置" Margin="0,0,6,0"/>
+                                    <CheckBox x:Name="FieldAxis7Velocity" Content="轴7速度" Margin="0,0,6,0"/>
+                                    <CheckBox x:Name="FieldAxis7Acceleration" Content="轴7加速度" Margin="0,0,6,0"/>
+                                </WrapPanel>
+                                <TextBlock Text="电缸" FontWeight="SemiBold" FontSize="11" Margin="0,3,0,0"/>
+                                <WrapPanel>
+                                    <CheckBox x:Name="FieldCylinder1" Content="电缸1" IsChecked="True" Margin="0,0,8,0"/>
+                                    <CheckBox x:Name="FieldCylinder2" Content="电缸2" IsChecked="True" Margin="0,0,8,0"/>
+                                    <CheckBox x:Name="FieldCylinder3" Content="电缸3" IsChecked="True" Margin="0,0,8,0"/>
+                                    <CheckBox x:Name="FieldCylinder4" Content="电缸4" IsChecked="True" Margin="0,0,8,0"/>
+                                </WrapPanel>
+                                <TextBlock Text="力感" FontWeight="SemiBold" FontSize="11" Margin="0,3,0,0"/>
+                                <WrapPanel>
+                                    <CheckBox x:Name="FieldFn1Raw" Content="fn1原始" Margin="0,0,6,0"/>
+                                    <CheckBox x:Name="FieldFt1Raw" Content="ft1原始" Margin="0,0,6,0"/>
+                                    <CheckBox x:Name="FieldFn2Raw" Content="fn2原始" Margin="0,0,6,0"/>
+                                    <CheckBox x:Name="FieldFt2Raw" Content="ft2原始" Margin="0,0,6,0"/>
+                                    <CheckBox x:Name="FieldFn1Zeroed" Content="fn1去零" Margin="0,0,6,0"/>
+                                    <CheckBox x:Name="FieldFt1Zeroed" Content="ft1去零" Margin="0,0,6,0"/>
+                                    <CheckBox x:Name="FieldFn2Zeroed" Content="fn2去零" Margin="0,0,6,0"/>
+                                    <CheckBox x:Name="FieldFt2Zeroed" Content="ft2去零" Margin="0,0,6,0"/>
+                                </WrapPanel>
+                                <TextBlock Text="标定与解耦" FontWeight="SemiBold" FontSize="11" Margin="0,3,0,0"/>
+                                <WrapPanel>
+                                    <CheckBox x:Name="FieldFn1Sensor" Content="fn1传感器N" Margin="0,0,6,0"/>
+                                    <CheckBox x:Name="FieldFt1Sensor" Content="ft1传感器N" Margin="0,0,6,0"/>
+                                    <CheckBox x:Name="FieldFn1CalDelta" Content="fn1校正增量N" Margin="0,0,6,0"/>
+                                    <CheckBox x:Name="FieldFn1CalAbs" Content="fn1校正绝对N" Margin="0,0,6,0"/>
+                                    <CheckBox x:Name="FieldFt1CalDelta" Content="ft1校正增量N" Margin="0,0,6,0"/>
+                                    <CheckBox x:Name="FieldFt1CalAbs" Content="ft1校正绝对N" Margin="0,0,6,0"/>
+                                    <CheckBox x:Name="FieldTorque1CalDelta" Content="扭矩1校正增量N·mm" Margin="0,0,6,0"/>
+                                    <CheckBox x:Name="FieldTorque1CalAbs" Content="扭矩1校正绝对N·mm" Margin="0,0,6,0"/>
+                                    <CheckBox x:Name="FieldFn1DecoupledDelta" Content="fn1解耦增量N" Margin="0,0,6,0"/>
+                                    <CheckBox x:Name="FieldTorque1DecoupledDelta" Content="扭矩1解耦增量N·mm" Margin="0,0,6,0"/>
+                                    <CheckBox x:Name="FieldFn1DecoupledAbs" Content="fn1解耦绝对N" Margin="0,0,6,0"/>
+                                    <CheckBox x:Name="FieldTorque1DecoupledAbs" Content="扭矩1解耦绝对N·mm" Margin="0,0,6,0"/>
+                                    <CheckBox x:Name="FieldAxis2Angle" Content="轴2角度" Margin="0,0,6,0"/>
+                                    <CheckBox x:Name="FieldFn2Sensor" Content="fn2传感器N" Margin="0,0,6,0"/>
+                                    <CheckBox x:Name="FieldFt2Sensor" Content="ft2传感器N" Margin="0,0,6,0"/>
+                                    <CheckBox x:Name="FieldFn2CalDelta" Content="fn2校正增量N" Margin="0,0,6,0"/>
+                                    <CheckBox x:Name="FieldFn2CalAbs" Content="fn2校正绝对N" Margin="0,0,6,0"/>
+                                    <CheckBox x:Name="FieldFt2CalDelta" Content="ft2校正增量N" Margin="0,0,6,0"/>
+                                    <CheckBox x:Name="FieldFt2CalAbs" Content="ft2校正绝对N" Margin="0,0,6,0"/>
+                                    <CheckBox x:Name="FieldTorque2CalDelta" Content="扭矩2校正增量N·mm" Margin="0,0,6,0"/>
+                                    <CheckBox x:Name="FieldTorque2CalAbs" Content="扭矩2校正绝对N·mm" Margin="0,0,6,0"/>
+                                    <CheckBox x:Name="FieldFn2DecoupledDelta" Content="fn2解耦增量N" Margin="0,0,6,0"/>
+                                    <CheckBox x:Name="FieldTorque2DecoupledDelta" Content="扭矩2解耦增量N·mm" Margin="0,0,6,0"/>
+                                    <CheckBox x:Name="FieldFn2DecoupledAbs" Content="fn2解耦绝对N" Margin="0,0,6,0"/>
+                                    <CheckBox x:Name="FieldTorque2DecoupledAbs" Content="扭矩2解耦绝对N·mm" Margin="0,0,6,0"/>
+                                    <CheckBox x:Name="FieldAxis7Angle" Content="轴7角度" Margin="0,0,6,0"/>
+                                </WrapPanel>
+                            </StackPanel>
+
+                            <!-- 程序递送参数面板 -->
+                            <StackPanel x:Name="ProgramPanel" Visibility="Collapsed">
+                                <DockPanel Margin="0,0,0,10">
+                                    <TextBlock x:Name="ProgramPanelTitle" Text="程序递送参数配置" FontSize="15" FontWeight="Bold" Foreground="{StaticResource Ink}"/>
+                                </DockPanel>
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="165"/>
+                                        <ColumnDefinition Width="*"/>
+                                    </Grid.ColumnDefinitions>
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="Auto"/>
+                                    </Grid.RowDefinitions>
+                                    <TextBlock x:Name="CatheterAxis1PrepareLabel" Grid.Row="0" Text="轴1准备位置 (mm)" VerticalAlignment="Center" Foreground="#475569" FontSize="12.5" Margin="0,3"/>
+                                    <TextBox x:Name="ProgramAxis1PreparePos" Grid.Row="0" Grid.Column="1" Text="23" Margin="0,3" Height="28"/>
+                                    <TextBlock x:Name="CatheterAxis1TriggerLabel" Grid.Row="1" Text="轴1触发位置 (mm)" VerticalAlignment="Center" Foreground="#475569" FontSize="12.5" Margin="0,3"/>
+                                    <TextBox x:Name="ProgramAxis1TriggerPos" Grid.Row="1" Grid.Column="1" Text="3" Margin="0,3" Height="28"/>
+                                    <TextBlock x:Name="Axis5PositionLabel" Grid.Row="0" Text="轴5距左限位 (mm)" Visibility="Collapsed" VerticalAlignment="Center" Foreground="#475569" FontSize="12.5" Margin="0,3"/>
+                                    <TextBox x:Name="ProgramAxis5Pos" Grid.Row="0" Grid.Column="1" Text="430" Visibility="Collapsed" Margin="0,3" Height="28" TextChanged="ProgramAxis5Pos_Changed"/>
+                                    <TextBlock x:Name="Axis6CalculatedLabel" Grid.Row="1" Text="轴6自动位置 (mm)" Visibility="Collapsed" VerticalAlignment="Center" Foreground="#475569" FontSize="12.5" Margin="0,3"/>
+                                    <Border x:Name="ProgramAxis6CalculatedBorder" Grid.Row="1" Grid.Column="1" Visibility="Collapsed" Background="#F8FAFC" BorderBrush="{StaticResource BorderBrushColor}" BorderThickness="1" CornerRadius="5" Margin="0,3" Height="28" Padding="8,0">
+                                        <TextBlock x:Name="ProgramAxis6Calculated" Text="451.000" VerticalAlignment="Center" FontWeight="SemiBold" Foreground="{StaticResource Accent}"/>
+                                    </Border>
+                                    <TextBlock x:Name="ProgramAngleLabel" Grid.Row="2" Text="轴2角度 (deg)" VerticalAlignment="Center" Foreground="#475569" FontSize="12.5" Margin="0,3"/>
+                                    <TextBox x:Name="ProgramAngle" Grid.Row="2" Grid.Column="1" Text="0" Margin="0,3" Height="28"/>
+                                    <TextBlock Grid.Row="3" Text="往复夹持次数" VerticalAlignment="Center" Foreground="#475569" FontSize="12.5" Margin="0,3"/>
+                                    <TextBox x:Name="ProgramCycleCount" Grid.Row="3" Grid.Column="1" Text="1" Margin="0,3" Height="28"/>
+                                    <TextBlock Grid.Row="4" Text="最终前向距离 (mm)" VerticalAlignment="Center" Foreground="#475569" FontSize="12.5" Margin="0,3"/>
+                                    <TextBox x:Name="ProgramFinalDistance" Grid.Row="4" Grid.Column="1" Text="10" Margin="0,3" Height="28"/>
+                                    <TextBlock Grid.Row="5" Text="前向速度 (mm/s)" VerticalAlignment="Center" Foreground="#475569" FontSize="12.5" Margin="0,3"/>
+                                    <TextBox x:Name="ProgramForwardVelocity" Grid.Row="5" Grid.Column="1" Text="20" Margin="0,3" Height="28"/>
+                                    <TextBlock Grid.Row="6" Text="前向加速度 (mm/s²)" VerticalAlignment="Center" Foreground="#475569" FontSize="12.5" Margin="0,3"/>
+                                    <TextBox x:Name="ProgramForwardAcceleration" Grid.Row="6" Grid.Column="1" Text="100" Margin="0,3" Height="28"/>
+                                    <TextBlock Grid.Row="7" Text="前向减速度 (mm/s²)" VerticalAlignment="Center" Foreground="#475569" FontSize="12.5" Margin="0,3"/>
+                                    <TextBox x:Name="ProgramForwardDeceleration" Grid.Row="7" Grid.Column="1" Text="100" Margin="0,3" Height="28"/>
+                                    <TextBlock Grid.Row="8" Text="前向Jerk (mm/s³)" VerticalAlignment="Center" Foreground="#475569" FontSize="12.5" Margin="0,3"/>
+                                    <TextBox x:Name="ProgramForwardJerk" Grid.Row="8" Grid.Column="1" Text="1000" Margin="0,3" Height="28"/>
+                                    <TextBlock Grid.Row="9" Text="回退速度 (mm/s)" VerticalAlignment="Center" Foreground="#475569" FontSize="12.5" Margin="0,3"/>
+                                    <TextBox x:Name="ProgramReturnVelocity" Grid.Row="9" Grid.Column="1" Text="20" Margin="0,3" Height="28"/>
+                                    <TextBlock Grid.Row="10" Text="回退加速度 (mm/s²)" VerticalAlignment="Center" Foreground="#475569" FontSize="12.5" Margin="0,3"/>
+                                    <TextBox x:Name="ProgramReturnAcceleration" Grid.Row="10" Grid.Column="1" Text="100" Margin="0,3" Height="28"/>
+                                    <TextBlock Grid.Row="11" Text="回退减速度 (mm/s²)" VerticalAlignment="Center" Foreground="#475569" FontSize="12.5" Margin="0,3"/>
+                                    <TextBox x:Name="ProgramReturnDeceleration" Grid.Row="11" Grid.Column="1" Text="100" Margin="0,3" Height="28"/>
+                                    <TextBlock Grid.Row="12" Text="回退Jerk (mm/s³)" VerticalAlignment="Center" Foreground="#475569" FontSize="12.5" Margin="0,3"/>
+                                    <TextBox x:Name="ProgramReturnJerk" Grid.Row="12" Grid.Column="1" Text="1000" Margin="0,3" Height="28"/>
+                                    <TextBlock Grid.Row="13" Text="释放后等待 (ms)" VerticalAlignment="Center" Foreground="#475569" FontSize="12.5" Margin="0,3"/>
+                                    <TextBox x:Name="ProgramReleaseWait" Grid.Row="13" Grid.Column="1" Text="150" Margin="0,3" Height="28"/>
+                                    <TextBlock Grid.Row="14" Text="重新夹紧后等待 (ms)" VerticalAlignment="Center" Foreground="#475569" FontSize="12.5" Margin="0,3"/>
+                                    <TextBox x:Name="ProgramReclampWait" Grid.Row="14" Grid.Column="1" Text="150" Margin="0,3" Height="28"/>
+                                </Grid>
+                                <Border Background="#F0FDF4" BorderBrush="#BBF7D0" BorderThickness="1" CornerRadius="6" Padding="10,8" Margin="0,10,0,0">
+                                    <TextBlock Text="PLC上电后自动自检；界面只等待自检完成，不发送自检请求。" TextWrapping="Wrap" Foreground="#166534" FontSize="12" LineHeight="16"/>
+                                </Border>
+                            </StackPanel>
+                        </StackPanel>
+                    </Border>
+
+                    <!-- 运行状态与监控卡片 -->
+                    <Border Background="#FFFFFF" BorderBrush="{StaticResource BorderBrushColor}" BorderThickness="1" CornerRadius="8" Padding="14" Margin="0,0,0,12">
+                        <StackPanel>
+                            <TextBlock Text="运行状态与监控" FontSize="15" FontWeight="Bold" Foreground="{StaticResource Ink}" Margin="0,0,0,10"/>
+
+                            <!-- 当前阶段高亮横幅 -->
+                            <Border Background="#F0FDFA" BorderBrush="#CCFBF1" BorderThickness="1" CornerRadius="6" Padding="12,8" Margin="0,0,0,8">
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="Auto"/>
+                                        <ColumnDefinition Width="*"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Text="当前阶段" FontSize="12.5" FontWeight="SemiBold" Foreground="#0F766E" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                                    <TextBlock x:Name="PhaseText" Grid.Column="1" Text="Idle" FontSize="17" FontWeight="Bold" Foreground="{StaticResource Accent}" HorizontalAlignment="Right" VerticalAlignment="Center"/>
+                                </Grid>
+                            </Border>
+
+                            <!-- 状态详细指标块 -->
+                            <Border Background="#F8FAFC" BorderBrush="{StaticResource BorderBrushColor}" BorderThickness="1" CornerRadius="6" Padding="10,6" Margin="0,0,0,6">
+                                <TextBlock x:Name="CycleText" Text="周期：-- / --" FontSize="12.5" FontWeight="Medium" Foreground="{StaticResource Ink}"/>
+                            </Border>
+
+                            <Border Background="#F8FAFC" BorderBrush="{StaticResource BorderBrushColor}" BorderThickness="1" CornerRadius="6" Padding="10,6" Margin="0,0,0,6">
+                                <TextBlock x:Name="LiveMotionText" Text="实时运动量：--" TextWrapping="Wrap" FontSize="12" LineHeight="18" Foreground="{StaticResource Ink}"/>
+                            </Border>
+
+                            <Border Background="#F8FAFC" BorderBrush="{StaticResource BorderBrushColor}" BorderThickness="1" CornerRadius="6" Padding="10,6" Margin="0,0,0,6">
+                                <StackPanel>
+                                    <TextBlock x:Name="ZeroStatusText" Text="力感零点：未完成" FontSize="12.5" FontWeight="Medium" Foreground="{StaticResource Ink}"/>
+                                     <TextBlock x:Name="ZeroValuesText" Text="零点值（原始计数 count）" TextWrapping="Wrap" FontSize="12" Margin="0,4,0,0" LineHeight="16" Foreground="{StaticResource Muted}"/>
+                                </StackPanel>
+                            </Border>
+
+                            <Border Background="#F8FAFC" BorderBrush="{StaticResource BorderBrushColor}" BorderThickness="1" CornerRadius="6" Padding="10,6" Margin="0,0,0,6">
+                                <TextBlock x:Name="RecordStatusText" Text="实时记录：未开始" TextWrapping="Wrap" FontSize="12" LineHeight="17" Foreground="{StaticResource Ink}"/>
+                            </Border>
+
+                            <TextBlock x:Name="ErrorText" TextWrapping="Wrap" Foreground="#DC2626" FontSize="12" FontWeight="SemiBold" Margin="0,4,0,0"/>
+
+                        </StackPanel>
+                    </Border>
                 </StackPanel>
             </ScrollViewer>
-            <Grid Grid.Column="1"><Grid.RowDefinitions><RowDefinition Height="*"/><RowDefinition Height="*"/></Grid.RowDefinitions><Border Grid.Row="0" BorderBrush="#D7DEE3" BorderThickness="1" Padding="10" Margin="0,0,0,10"><Grid><TextBlock x:Name="ForceTitle" Text="实时轴向力通道" FontSize="16" FontWeight="SemiBold"/><Canvas x:Name="ForceCanvas" Margin="0,30,0,0" Background="#FBFCFD"><Polyline x:Name="Force1Line" Stroke="#0F766E" StrokeThickness="2"/><Polyline x:Name="Force2Line" Stroke="#C2410C" StrokeThickness="2"/></Canvas></Grid></Border><Border Grid.Row="1" BorderBrush="#D7DEE3" BorderThickness="1" Padding="10"><Grid><TextBlock x:Name="TorqueTitle" Text="实时切向力通道" FontSize="16" FontWeight="SemiBold"/><Canvas x:Name="TorqueCanvas" Margin="0,30,0,0" Background="#FBFCFD"><Polyline x:Name="Torque1Line" Stroke="#2563EB" StrokeThickness="2"/><Polyline x:Name="Torque2Line" Stroke="#9333EA" StrokeThickness="2"/></Canvas></Grid></Border></Grid>
+
+            <!-- 右栏：双通道波形监视器卡片 -->
+            <Grid Grid.Column="1">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="*"/>
+                    <RowDefinition Height="*"/>
+                </Grid.RowDefinitions>
+
+                <!-- 实时轴向力通道 -->
+                <Border Grid.Row="0" Background="#FFFFFF" BorderBrush="{StaticResource BorderBrushColor}" BorderThickness="1" CornerRadius="8" Padding="14,12" Margin="0,0,0,8">
+                    <Grid>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="*"/>
+                        </Grid.RowDefinitions>
+
+                        <!-- 通道标题与图例 -->
+                        <DockPanel Grid.Row="0">
+                            <StackPanel Orientation="Horizontal" DockPanel.Dock="Left" VerticalAlignment="Center">
+                                <Border Width="3" Height="14" Background="#0D9488" CornerRadius="1.5" Margin="0,0,8,0"/>
+                                <StackPanel>
+                                    <TextBlock x:Name="ForceTitle" Text="实时轴向力 (N)" FontSize="15" FontWeight="Bold" Foreground="{StaticResource Ink}"/>
+                                    <TextBlock x:Name="ForceValueText" Text="未取零" FontSize="11" Foreground="{StaticResource Muted}" Margin="0,2,0,0"/>
+                                </StackPanel>
+                            </StackPanel>
+
+                            <StackPanel Orientation="Horizontal" DockPanel.Dock="Right" VerticalAlignment="Center">
+                                <Border x:Name="Force1Legend" Background="#F0FDFA" BorderBrush="#CCFBF1" BorderThickness="1" CornerRadius="4" Padding="8,2" Margin="0,0,8,0">
+                                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                        <Ellipse Width="8" Height="8" Fill="#0D9488" Margin="0,0,6,0"/>
+                                        <TextBlock x:Name="Force1LegendText" Text="fn1 (N)" FontSize="11.5" FontWeight="SemiBold" Foreground="#0F766E"/>
+                                    </StackPanel>
+                                </Border>
+                                <Border x:Name="Force2Legend" Background="#FFF7ED" BorderBrush="#FFEDD5" BorderThickness="1" CornerRadius="4" Padding="8,2">
+                                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                        <Ellipse Width="8" Height="8" Fill="#EA580C" Margin="0,0,6,0"/>
+                                        <TextBlock Text="fn2 (N)" FontSize="11.5" FontWeight="SemiBold" Foreground="#C2410C"/>
+                                    </StackPanel>
+                                </Border>
+                            </StackPanel>
+                        </DockPanel>
+
+                        <!-- 波形绘图区 -->
+                        <Border Grid.Row="1" Background="#F8FAFC" BorderBrush="{StaticResource BorderBrushColor}" BorderThickness="1" CornerRadius="6" Margin="0,10,0,0" ClipToBounds="True">
+                            <Grid>
+                                <!-- 背景辅助标尺网格 -->
+                                <UniformGrid Rows="4" Columns="1" IsHitTestVisible="False">
+                                    <Border BorderBrush="#EEF2F6" BorderThickness="0,0,0,1"/>
+                                    <Border BorderBrush="#EEF2F6" BorderThickness="0,0,0,1"/>
+                                    <Border BorderBrush="#EEF2F6" BorderThickness="0,0,0,1"/>
+                                    <Border/>
+                                </UniformGrid>
+                                <Canvas x:Name="ForceCanvas" Background="Transparent">
+                                    <Polyline x:Name="Force1Line" Stroke="#0D9488" StrokeThickness="2.2" StrokeLineJoin="Round"/>
+                                    <Polyline x:Name="Force2Line" Stroke="#EA580C" StrokeThickness="2.2" StrokeLineJoin="Round"/>
+                                </Canvas>
+                            </Grid>
+                        </Border>
+                    </Grid>
+                </Border>
+
+                <!-- 实时 ft 力通道 -->
+                <Border Grid.Row="1" Background="#FFFFFF" BorderBrush="{StaticResource BorderBrushColor}" BorderThickness="1" CornerRadius="8" Padding="14,12" Margin="0,0,0,0">
+                    <Grid>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="*"/>
+                        </Grid.RowDefinitions>
+
+                        <!-- 通道标题与图例 -->
+                        <DockPanel Grid.Row="0">
+                            <StackPanel Orientation="Horizontal" DockPanel.Dock="Left" VerticalAlignment="Center">
+                                <Border Width="3" Height="14" Background="#2563EB" CornerRadius="1.5" Margin="0,0,8,0"/>
+                                <StackPanel>
+                                    <TextBlock x:Name="TorqueTitle" Text="实时 ft 力 (N)" FontSize="15" FontWeight="Bold" Foreground="{StaticResource Ink}"/>
+                                    <TextBlock x:Name="TorqueValueText" Text="未取零" FontSize="11" Foreground="{StaticResource Muted}" Margin="0,2,0,0"/>
+                                </StackPanel>
+                            </StackPanel>
+
+                            <StackPanel Orientation="Horizontal" DockPanel.Dock="Right" VerticalAlignment="Center">
+                                <Border x:Name="Torque1Legend" Background="#EFF6FF" BorderBrush="#DBEAFE" BorderThickness="1" CornerRadius="4" Padding="8,2" Margin="0,0,8,0">
+                                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                        <Ellipse Width="8" Height="8" Fill="#2563EB" Margin="0,0,6,0"/>
+                                        <TextBlock x:Name="Torque1LegendText" Text="ft1 (N)" FontSize="11.5" FontWeight="SemiBold" Foreground="#1D4ED8"/>
+                                    </StackPanel>
+                                </Border>
+                                <Border x:Name="Torque2Legend" Background="#FAF5FF" BorderBrush="#F3E8FF" BorderThickness="1" CornerRadius="4" Padding="8,2">
+                                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                        <Ellipse Width="8" Height="8" Fill="#9333EA" Margin="0,0,6,0"/>
+                                        <TextBlock Text="ft2 (N)" FontSize="11.5" FontWeight="SemiBold" Foreground="#7E22CE"/>
+                                    </StackPanel>
+                                </Border>
+                            </StackPanel>
+                        </DockPanel>
+
+                        <!-- 波形绘图区 -->
+                        <Border Grid.Row="1" Background="#F8FAFC" BorderBrush="{StaticResource BorderBrushColor}" BorderThickness="1" CornerRadius="6" Margin="0,10,0,0" ClipToBounds="True">
+                            <Grid>
+                                <!-- 背景辅助标尺网格 -->
+                                <UniformGrid Rows="4" Columns="1" IsHitTestVisible="False">
+                                    <Border BorderBrush="#EEF2F6" BorderThickness="0,0,0,1"/>
+                                    <Border BorderBrush="#EEF2F6" BorderThickness="0,0,0,1"/>
+                                    <Border BorderBrush="#EEF2F6" BorderThickness="0,0,0,1"/>
+                                    <Border/>
+                                </UniformGrid>
+                                <Canvas x:Name="TorqueCanvas" Background="Transparent">
+                                    <Polyline x:Name="Torque1Line" Stroke="#2563EB" StrokeThickness="2.2" StrokeLineJoin="Round"/>
+                                    <Polyline x:Name="Torque2Line" Stroke="#9333EA" StrokeThickness="2.2" StrokeLineJoin="Round"/>
+                                </Canvas>
+                            </Grid>
+                        </Border>
+                    </Grid>
+                </Border>
+            </Grid>
         </Grid>
     </Grid>
 </Window>

@@ -39,6 +39,9 @@
     <ClCompile Include="ProgrammedDeliveryController.cpp" />
     <ClCompile Include="ExperimentStreamAds.cpp" />
     <ClCompile Include="ExperimentStreamRecorder.cpp" />
+    <ClCompile Include="ForceCalibration.cpp" />
+    <ClCompile Include="StandaloneRecordAds.cpp" />
+    <ClCompile Include="StandaloneRecordController.cpp" />
     <ClCompile Include="DualClampPipe.cpp" />
     <ClCompile Include="main.cpp" />
   </ItemGroup>
@@ -54,6 +57,10 @@
     <ClInclude Include="ProgrammedDeliveryController.h" />
     <ClInclude Include="ExperimentStreamAds.h" />
     <ClInclude Include="ExperimentStreamRecorder.h" />
+    <ClInclude Include="ForceCalibration.h" />
+    <ClInclude Include="StandaloneRecordAds.h" />
+    <ClInclude Include="StandaloneRecordController.h" />
+    <ClInclude Include="StandaloneRecordTypes.h" />
     <ClInclude Include="DualClampPipe.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />

@@ -86,15 +86,14 @@ struct ControlConfig
 	// 手柄运动缩放系数与符号约定。
 	double k_handle_to_mm = 500.0 * (75.0 / 50.0); // 手柄线性位移差 -> 轴位移增量(mm)
 	double axis_push_sign = -1.0; // 手柄“推/拉”到轴“正/负”方向的映射符号
-	double axis_rot_scale_deg = Rad;
+	// 轴2和轴7使用相同的旋转映射符号；当前实机标定方向为 -Rad，机构两轴同向旋转。
+	double axis_rot_scale_deg = -Rad;
 
 	// 力反馈输出配置：轴向力映射到 SDK 三轴力向量中的一个轴。
 	int axial_force_axis = 1;
 	double axial_force_sign = -1.0;
 
 	// 按键映射来自 buttons2 位掩码。
-	unsigned char btn_b0 = 0x01;
-	unsigned char btn_b5 = 0x20;
 	unsigned char btn_b6 = 0x40;
 	unsigned char btn_b7 = 0x80;
 
@@ -149,13 +148,13 @@ struct ControlConfig
 	double axis1_return_acc_mm_s2 = 4800.0; // 原值 2400 mm/s^2
 	double axis1_return_dec_mm_s2 = 4800.0; // 原值 2400 mm/s^2
 	double axis1_return_jerk_mm_s3 = 70000.0; // 原值 35000 mm/s^3
-	// 自动换手先同时下发电缸目标并稳定 50 ms，再启动电机轴；到位后不增加等待。
-	DWORD axis1_pre_move_cylinder_wait_ms = 50;
+	// 自动换手先同时下发电缸目标并按配置稳定，再启动电机轴；回退到位后不增加机械稳定等待。
+	DWORD axis1_pre_move_cylinder_wait_ms = 75;
 	double axis6_return_velocity_mm_s = 400.0; // 原值 200 mm/s
 	double axis6_return_acc_mm_s2 = 4800.0; // 原值 2400 mm/s^2
 	double axis6_return_dec_mm_s2 = 4800.0; // 原值 2400 mm/s^2
 	double axis6_return_jerk_mm_s3 = 70000.0; // 原值 35000 mm/s^3
-	DWORD axis6_pre_move_cylinder_wait_ms = 50;
+	DWORD axis6_pre_move_cylinder_wait_ms = 75;
 	// 统一计划回退握手：只允许在PLC尚未启动动作时自动重试一次。
 	DWORD planned_return_ack_timeout_ms = 250;
 	DWORD planned_return_retry_clear_timeout_ms = 500;

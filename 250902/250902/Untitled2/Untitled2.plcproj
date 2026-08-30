@@ -64,6 +64,9 @@
     <Compile Include="POUs\MAIN.TcPOU">
       <SubType>Code</SubType>
     </Compile>
+    <Compile Include="POUs\ManualCylinderControl.TcPOU">
+      <SubType>Code</SubType>
+    </Compile>
     <Compile Include="POUs\reset.TcPOU">
       <SubType>Code</SubType>
     </Compile>

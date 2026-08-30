@@ -76,8 +76,10 @@ bool ProgrammedDeliveryAds::read_live(ProgrammedDeliveryLiveFrame& frame)
 {
 	std::uint8_t mode = 0, phase = 0;
 	std::uint16_t cycle_index = 0, cycle_total = 0;
-	bool setup_busy = false, setup_done = false, selfcheck_done = false;
+	bool setup_busy = false, setup_done = false, selfcheck_done = false, selfcheck_busy = false;
 	std::uint32_t status_error_id = 0;
+	std::uint8_t wait_action = 0, error_source = 0, error_axis = 0, error_phase = 0;
+	double error_target_abs = 0.0;
 	double left1 = 0.0, left5 = 0.0, left6 = 0.0;
 	double target1 = 0.0, target5 = 0.0, target6 = 0.0, target2 = 0.0, target7 = 0.0;
 	double trigger = 0.0, return_target = 0.0, final_target = 0.0;
@@ -89,7 +91,8 @@ bool ProgrammedDeliveryAds::read_live(ProgrammedDeliveryLiveFrame& frame)
 
 	const char* symbols[] = {
 		"G.program_test_mode", "G.program_test_phase", "G.program_test_cycle_index", "G.program_test_cycle_total",
-		"G.program_test_setup_busy", "G.program_test_setup_done", "G.self_check_done", "G.program_test_status_error_id",
+		"G.program_test_setup_busy", "G.program_test_setup_done", "G.dual_clamp_selfcheck_done", "G.dual_clamp_selfcheck_busy", "G.program_test_status_error_id",
+		"G.program_test_wait_action", "G.program_test_error_source", "G.program_test_error_axis", "G.program_test_error_phase", "G.program_test_error_target_abs",
 		"G.leftlimit[1]", "G.leftlimit[5]", "G.leftlimit[6]",
 		"G.program_test_target_axis1_abs", "G.program_test_target_axis5_abs", "G.program_test_target_axis6_abs",
 		"G.program_test_target_axis2_deg", "G.program_test_target_axis7_deg", "G.program_test_trigger_target_abs",
@@ -104,7 +107,8 @@ bool ProgrammedDeliveryAds::read_live(ProgrammedDeliveryLiveFrame& frame)
 	};
 	const unsigned long lengths[] = {
 		sizeof(mode), sizeof(phase), sizeof(cycle_index), sizeof(cycle_total),
-		sizeof(setup_busy), sizeof(setup_done), sizeof(selfcheck_done), sizeof(status_error_id),
+		sizeof(setup_busy), sizeof(setup_done), sizeof(selfcheck_done), sizeof(selfcheck_busy), sizeof(status_error_id),
+		sizeof(wait_action), sizeof(error_source), sizeof(error_axis), sizeof(error_phase), sizeof(error_target_abs),
 		sizeof(left1), sizeof(left5), sizeof(left6),
 		sizeof(target1), sizeof(target5), sizeof(target6), sizeof(target2), sizeof(target7), sizeof(trigger),
 		sizeof(return_target), sizeof(final_target),
@@ -115,7 +119,8 @@ bool ProgrammedDeliveryAds::read_live(ProgrammedDeliveryLiveFrame& frame)
 	};
 	void* outputs[] = {
 		&mode, &phase, &cycle_index, &cycle_total,
-		&setup_busy, &setup_done, &selfcheck_done, &status_error_id,
+		&setup_busy, &setup_done, &selfcheck_done, &selfcheck_busy, &status_error_id,
+		&wait_action, &error_source, &error_axis, &error_phase, &error_target_abs,
 		&left1, &left5, &left6,
 		&target1, &target5, &target6, &target2, &target7, &trigger, &return_target, &final_target,
 		&a1p, &a1v, &a1a, &a2p, &a2v, &a2a,
@@ -132,7 +137,17 @@ bool ProgrammedDeliveryAds::read_live(ProgrammedDeliveryLiveFrame& frame)
 	frame.setup_busy = setup_busy;
 	frame.setup_done = setup_done;
 	frame.selfcheck_done = selfcheck_done;
+	frame.selfcheck_busy = selfcheck_busy;
 	frame.status_error_id = status_error_id;
+	frame.wait_action = wait_action;
+	frame.error_source = error_source;
+	frame.error_axis = error_axis;
+	frame.error_phase = error_phase;
+	frame.error_target_abs_mm = error_target_abs;
+	if (error_axis == 1) frame.error_target_from_left_mm = error_target_abs - left1;
+	else if (error_axis == 5) frame.error_target_from_left_mm = error_target_abs - left5;
+	else if (error_axis == 6) frame.error_target_from_left_mm = error_target_abs - left6;
+	else frame.error_target_from_left_mm = 0.0;
 	frame.leftlimit_axis1_abs_mm = left1;
 	frame.leftlimit_axis5_abs_mm = left5;
 	frame.leftlimit_axis6_abs_mm = left6;
@@ -160,22 +175,26 @@ bool ProgrammedDeliveryAds::write_config(const ProgrammedDeliveryConfig& config,
 	const std::uint8_t mode = static_cast<std::uint8_t>(config.mode);
 	const bool setup = setup_request;
 	const char* symbols[] = {
-		"G.program_test_mode", "G.program_test_axis5_from_left_mm", "G.program_test_axis2_angle_deg",
+		"G.program_test_mode", "G.program_test_axis1_prepare_from_left_mm", "G.program_test_axis1_trigger_from_left_mm",
+		"G.program_test_axis5_from_left_mm", "G.program_test_axis2_angle_deg",
 		"G.program_test_axis7_angle_deg", "G.program_test_cycle_count", "G.program_test_final_forward_distance_mm",
+		"G.program_test_release_wait_ms", "G.program_test_reclamp_wait_ms",
 		"G.program_test_forward_velocity", "G.program_test_forward_acceleration", "G.program_test_forward_deceleration",
 		"G.program_test_forward_jerk", "G.program_test_return_velocity", "G.program_test_return_acceleration",
 		"G.program_test_return_deceleration", "G.program_test_return_jerk", "G.program_test_setup_req"
 	};
 	const unsigned long lengths[] = {
-		sizeof(mode), sizeof(config.axis5_from_left_mm), sizeof(config.axis2_angle_deg), sizeof(config.axis7_angle_deg),
-		sizeof(config.cycle_count), sizeof(config.final_forward_distance_mm), sizeof(config.forward_velocity_mm_s),
+		sizeof(mode), sizeof(config.axis1_prepare_from_left_mm), sizeof(config.axis1_trigger_from_left_mm),
+		sizeof(config.axis5_from_left_mm), sizeof(config.axis2_angle_deg), sizeof(config.axis7_angle_deg),
+		sizeof(config.cycle_count), sizeof(config.final_forward_distance_mm), sizeof(config.release_wait_ms), sizeof(config.reclamp_wait_ms), sizeof(config.forward_velocity_mm_s),
 		sizeof(config.forward_acceleration_mm_s2), sizeof(config.forward_deceleration_mm_s2), sizeof(config.forward_jerk_mm_s3),
 		sizeof(config.return_velocity_mm_s), sizeof(config.return_acceleration_mm_s2), sizeof(config.return_deceleration_mm_s2),
 		sizeof(config.return_jerk_mm_s3), sizeof(setup)
 	};
 	const void* inputs[] = {
-		&mode, &config.axis5_from_left_mm, &config.axis2_angle_deg, &config.axis7_angle_deg,
-		&config.cycle_count, &config.final_forward_distance_mm, &config.forward_velocity_mm_s,
+		&mode, &config.axis1_prepare_from_left_mm, &config.axis1_trigger_from_left_mm,
+		&config.axis5_from_left_mm, &config.axis2_angle_deg, &config.axis7_angle_deg,
+		&config.cycle_count, &config.final_forward_distance_mm, &config.release_wait_ms, &config.reclamp_wait_ms, &config.forward_velocity_mm_s,
 		&config.forward_acceleration_mm_s2, &config.forward_deceleration_mm_s2, &config.forward_jerk_mm_s3,
 		&config.return_velocity_mm_s, &config.return_acceleration_mm_s2, &config.return_deceleration_mm_s2,
 		&config.return_jerk_mm_s3, &setup

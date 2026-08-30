@@ -827,8 +827,8 @@ namespace
 
 		const double fn_2_50g_v = -0.38615;
 		const double ft_2_50g_v = 1.53886;
-		const double expected_guidewire_axial_n = 0.489042103289968;
-		const double expected_guidewire_tangential_n = 0.4903529688982;
+		const double expected_guidewire_axial_n = 1.14576622884054;
+		const double expected_guidewire_tangential_n = 0.17843125546337;
 		const CalibratedForce guidewire_loaded_feedback = calibrate_guidewire_force(
 			fn_2_50g_v, ft_2_50g_v, 0.0, direct_cfg, direct_zero);
 		check(nearly_equal(

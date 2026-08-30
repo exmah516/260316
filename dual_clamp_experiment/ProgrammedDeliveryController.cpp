@@ -1,13 +1,15 @@
 #include "ProgrammedDeliveryController.h"
+#include "ForceCalibration.h"
 
 #include <cmath>
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
+#include <sstream>
 
 ProgrammedDeliveryController::ProgrammedDeliveryController()
 {
-	open_ads();
+	// 不在构造阶段同步阻塞ADS连接；先启动后端和UI，再由连接命令执行重试。
 }
 
 bool ProgrammedDeliveryController::open_ads()
@@ -45,6 +47,16 @@ bool ProgrammedDeliveryController::is_ads_open() const
 {
 	std::lock_guard<std::mutex> lock(mutex_);
 	return ads_.is_open();
+}
+
+void ProgrammedDeliveryController::set_shared_selfcheck_state(bool done, bool busy)
+{
+	std::lock_guard<std::mutex> lock(mutex_);
+	shared_selfcheck_done_ = done;
+	shared_selfcheck_busy_ = busy;
+	shared_selfcheck_valid_ = true;
+	live_.selfcheck_done = done;
+	live_.selfcheck_busy = busy;
 }
 
 bool ProgrammedDeliveryController::select_mode(ProgrammedDeliveryMode mode)
@@ -103,12 +115,36 @@ bool ProgrammedDeliveryController::validate_config(const ProgrammedDeliveryConfi
 	}
 	if (config.cycle_count < 1)
 	{
-		error = "周期数必须至少为1";
+		error = "往复夹持次数必须至少为1";
 		return false;
 	}
-	if (!std::isfinite(config.final_forward_distance_mm) || config.final_forward_distance_mm < 0.0 || config.final_forward_distance_mm > 20.0)
+	if (!std::isfinite(config.final_forward_distance_mm) || config.final_forward_distance_mm < 0.0)
 	{
-		error = "最终前向距离必须在0至20 mm之间";
+		error = "最终前向距离必须为不小于0的有限数";
+		return false;
+	}
+	if (config.mode == ProgrammedDeliveryMode::Catheter)
+	{
+		if (!std::isfinite(config.axis1_prepare_from_left_mm) || !std::isfinite(config.axis1_trigger_from_left_mm) ||
+			config.axis1_trigger_from_left_mm < 0.0 || config.axis1_prepare_from_left_mm <= config.axis1_trigger_from_left_mm)
+		{
+			error = "导管模式要求轴1准备位置大于触发位置，且触发位置不小于0";
+			return false;
+		}
+		if (config.final_forward_distance_mm > config.axis1_prepare_from_left_mm - config.axis1_trigger_from_left_mm)
+		{
+			error = "最终前向距离不得超过轴1准备位置与触发位置之差";
+			return false;
+		}
+	}
+	else if (config.final_forward_distance_mm > 20.0)
+	{
+		error = "导丝模式最终前向距离必须在0至20 mm之间";
+		return false;
+	}
+	if (config.release_wait_ms > 60000 || config.reclamp_wait_ms > 60000)
+	{
+		error = "电缸等待时间必须在0至60000 ms之间";
 		return false;
 	}
 	if (!finite_positive(config.forward_velocity_mm_s) || !finite_positive(config.forward_acceleration_mm_s2) ||
@@ -268,11 +304,46 @@ void ProgrammedDeliveryController::tick()
 		}
 		return;
 	}
+	if (shared_selfcheck_valid_)
+	{
+		frame.selfcheck_done = shared_selfcheck_done_;
+		frame.selfcheck_busy = shared_selfcheck_busy_;
+	}
 	live_ = frame;
 	poll_stream_locked();
-	if (live_.status_error_id != 0) last_error_ = "PLC程序递送错误ID：" + std::to_string(live_.status_error_id);
-	else if (last_error_.rfind("PLC程序递送错误ID：", 0) == 0) last_error_.clear();
-	if (live_.phase == ProgrammedDeliveryPhase::Aborted || live_.phase == ProgrammedDeliveryPhase::Error) started_ = false;
+	if (live_.status_error_id != 0)
+	{
+		const char* source = live_.error_source == 1 ? "准备定位" : live_.error_source == 2 ? "前向至触发位置" : live_.error_source == 3 ? "回退" : live_.error_source == 4 ? "最终前向" : "未知动作";
+		std::ostringstream detail;
+		detail << "PLC运动错误：ID " << live_.status_error_id << "；轴" << static_cast<unsigned>(live_.error_axis) << "；" << source;
+		if (live_.error_axis == 1 || live_.error_axis == 5 || live_.error_axis == 6)
+			detail << "；目标距左限位 " << live_.error_target_from_left_mm << " mm";
+		else
+			detail << "；目标值 " << live_.error_target_abs_mm;
+		last_error_ = detail.str();
+	}
+	else if (last_error_.rfind("PLC运动错误：", 0) == 0 ||
+		last_error_.rfind("读取程序递送实时状态失败：", 0) == 0)
+		last_error_.clear();
+	if (live_.phase == ProgrammedDeliveryPhase::Completed || live_.phase == ProgrammedDeliveryPhase::Aborted || live_.phase == ProgrammedDeliveryPhase::Error)
+	{
+		// 实验记录随实验终态自动归档，不再要求上位机额外点击保存按钮。
+		// 只有PLC已经停止采样且最后一个分块已确认后才能关闭文件，避免终态切换与最后1ms采样竞态。
+		if (recorder_.active() && !stream_status_.recording &&
+			!stream_status_.block_ready[0] && !stream_status_.block_ready[1])
+		{
+			const bool completed = live_.phase == ProgrammedDeliveryPhase::Completed;
+			const char* status = completed ? "Completed" :
+				live_.phase == ProgrammedDeliveryPhase::Aborted ? "Aborted" : "Error";
+			const std::string reason = completed ? std::string() : last_error_;
+			std::string finalize_error;
+			if (!recorder_.finalize(status, reason, stream_status_.zero, finalize_error) && !finalize_error.empty())
+			{
+				last_error_ = finalize_error;
+			}
+		}
+		started_ = false;
+	}
 	live_.recording = stream_status_.recording;
 	live_.recording_overflow = stream_status_.overflow;
 	live_.recording_sample_count = stream_status_.total_count;
@@ -286,6 +357,8 @@ void ProgrammedDeliveryController::tick()
 void ProgrammedDeliveryController::poll_stream_locked()
 {
 	if (!stream_ads_.is_open() && !stream_ads_.open()) return;
+	const double saved_zero_axis2 = stream_status_.zero.axis2_angle_deg;
+	const double saved_zero_axis7 = stream_status_.zero.axis7_angle_deg;
 	if (recorder_.failed())
 	{
 		last_error_ = recorder_.last_error().empty() ? "实时记录写盘失败" : recorder_.last_error();
@@ -304,6 +377,19 @@ void ProgrammedDeliveryController::poll_stream_locked()
 		}
 		return;
 	}
+	if (stream_status_.zero.done)
+	{
+		if (zero_file_written_)
+		{
+			stream_status_.zero.axis2_angle_deg = saved_zero_axis2;
+			stream_status_.zero.axis7_angle_deg = saved_zero_axis7;
+		}
+		else
+		{
+			stream_status_.zero.axis2_angle_deg = live_.axis2_pos;
+			stream_status_.zero.axis7_angle_deg = live_.axis7_pos;
+		}
+	}
 	if (stream_status_.zero.done && !zero_file_written_ && recorder_.active())
 	{
 		std::vector<std::array<double, 4>> zero_samples;
@@ -311,7 +397,9 @@ void ProgrammedDeliveryController::poll_stream_locked()
 		if (stream_ads_.read_zero_samples(zero_samples))
 		{
 			bool ok = true;
-			for (std::size_t i = 0; i < zero_samples.size(); ++i) ok = recorder_.append_zero(zero_samples[i], static_cast<std::uint64_t>(i) * 1000, error) && ok;
+			for (std::size_t i = 0; i < zero_samples.size(); ++i)
+				ok = recorder_.append_zero(zero_samples[i], static_cast<std::uint64_t>(i) * 1000,
+					live_.axis2_pos, live_.axis7_pos, error) && ok;
 			ok = recorder_.finish_zero(stream_status_.zero, error) && ok;
 			if (!ok)
 			{
@@ -416,34 +504,47 @@ void ProgrammedDeliveryController::poll_stream_locked()
 
 bool ProgrammedDeliveryController::request_zero()
 {
-	std::lock_guard<std::mutex> lock(mutex_);
-	poll_stream_locked();
-	if (!live_.selfcheck_done || !live_.setup_done || started_ ||
-		(live_.phase != ProgrammedDeliveryPhase::Ready && live_.phase != ProgrammedDeliveryPhase::Idle))
+	try
 	{
-		last_error_ = "取零点要求自检和准备定位完成，且实验未开始";
+		std::lock_guard<std::mutex> lock(mutex_);
+		poll_stream_locked();
+		if (!live_.selfcheck_done || !live_.setup_done || started_ ||
+			(live_.phase != ProgrammedDeliveryPhase::Ready && live_.phase != ProgrammedDeliveryPhase::Idle))
+		{
+			last_error_ = "取零点要求自检和准备定位完成，且实验未开始";
+			return false;
+		}
+		if (!stream_ads_.is_open() && !stream_ads_.open())
+		{
+			last_error_ = "实时记录ADS连接失败：" + stream_ads_.last_error();
+			return false;
+		}
+		if (!recorder_.active())
+		{
+			std::string error;
+			if (!recorder_.begin(config_.mode == ProgrammedDeliveryMode::Catheter ? "catheter" : "guidewire", config_.record_suffix, error)) { last_error_ = error; return false; }
+		}
+		zero_file_written_ = false;
+		{
+			std::string reset_error;
+			if (!recorder_.reset_zero_file(reset_error)) { last_error_ = reset_error; return false; }
+		}
+		{
+			std::string event_error;
+			if (!recorder_.begin_zero(event_error)) { last_error_ = event_error; return false; }
+		}
+		if (!stream_ads_.request_zero())
+		{
+			last_error_ = "下发力感取零请求失败：" + stream_ads_.last_error();
+			return false;
+		}
+		return true;
+	}
+	catch (const std::exception& ex)
+	{
+		last_error_ = std::string("力感取零过程异常：") + ex.what();
 		return false;
 	}
-	if (!stream_ads_.is_open() && !stream_ads_.open())
-	{
-		last_error_ = "实时记录ADS连接失败：" + stream_ads_.last_error();
-		return false;
-	}
-	if (!recorder_.active())
-	{
-		std::string error;
-		if (!recorder_.begin(config_.mode == ProgrammedDeliveryMode::Catheter ? "catheter" : "guidewire", config_.record_suffix, error)) { last_error_ = error; return false; }
-	}
-	zero_file_written_ = false;
-	{
-		std::string reset_error;
-		if (!recorder_.reset_zero_file(reset_error)) { last_error_ = reset_error; return false; }
-	}
-	{
-		std::string event_error;
-		if (!recorder_.begin_zero(event_error)) { last_error_ = event_error; return false; }
-	}
-	return stream_ads_.request_zero();
 }
 
 bool ProgrammedDeliveryController::set_record_suffix(const std::string& suffix)
@@ -489,15 +590,29 @@ bool ProgrammedDeliveryController::write_metadata(const std::string& directory, 
 	if (!out) { error = "无法创建experiment.json"; return false; }
 	out << std::setprecision(12)
 		<< "{\n"
+		<< "  \"calibration_version\": \"two_stage_sensor_0_50g_plus_installed_2026-08-29\",\n"
+		<< "  \"calibration_chain\": \"sensor_0_50g_then_installed_calibration\",\n"
+		<< "  \"sensor_slopes_N_per_count\": {\"fn1\": " << forcecal::kFn1SensorSlopeNPerCount
+		<< ", \"ft1\": " << forcecal::kFt1SensorSlopeNPerCount << ", \"fn2\": " << forcecal::kFn2SensorSlopeNPerCount
+		<< ", \"ft2\": " << forcecal::kFt2SensorSlopeNPerCount << "},\n"
+		<< "  \"installation_axial_gain\": " << forcecal::kInstallationAxialGain << ",\n"
+		<< "  \"installation_axial_bias_N\": " << forcecal::kInstallationAxialBiasN << ",\n"
+		<< "  \"installation_torque_gain_Nmm_per_N\": " << forcecal::kInstallationTorqueGainNmmPerN << ",\n"
+		<< "  \"installation_torque_bias_Nmm\": " << forcecal::kInstallationTorqueBiasNmm << ",\n"
+		<< "  \"units\": {\"realtime_fn\": \"N\", \"realtime_ft\": \"N\", \"csv_torque\": \"N·mm\"},\n"
+		<< "  \"crosstalk_decoupling_applied\": true,\n"
+		<< "  \"gravity_compensation_applied\": false,\n"
 		<< "  \"mode\": \"" << programmed_delivery_mode_name(config_.mode) << "\",\n"
-		<< "  \"axis1_ready_from_left_mm\": 23.0,\n"
-		<< "  \"catheter_trigger_from_left_mm\": 3.0,\n"
+		<< "  \"axis1_prepare_from_left_mm\": " << config_.axis1_prepare_from_left_mm << ",\n"
+		<< "  \"axis1_trigger_from_left_mm\": " << config_.axis1_trigger_from_left_mm << ",\n"
 		<< "  \"axis5_from_left_mm\": " << config_.axis5_from_left_mm << ",\n"
 		<< "  \"axis6_ready_from_left_mm\": " << (config_.axis5_from_left_mm + 21.0) << ",\n"
 		<< "  \"axis2_angle_deg\": " << config_.axis2_angle_deg << ",\n"
 		<< "  \"axis7_angle_deg\": " << config_.axis7_angle_deg << ",\n"
 		<< "  \"cycle_count\": " << config_.cycle_count << ",\n"
 		<< "  \"final_forward_distance_mm\": " << config_.final_forward_distance_mm << ",\n"
+		<< "  \"release_wait_ms\": " << config_.release_wait_ms << ",\n"
+		<< "  \"reclamp_wait_ms\": " << config_.reclamp_wait_ms << ",\n"
 		<< "  \"forward_velocity_mm_s\": " << config_.forward_velocity_mm_s << ",\n"
 		<< "  \"forward_acceleration_mm_s2\": " << config_.forward_acceleration_mm_s2 << ",\n"
 		<< "  \"forward_deceleration_mm_s2\": " << config_.forward_deceleration_mm_s2 << ",\n"
@@ -518,19 +633,37 @@ bool ProgrammedDeliveryController::write_samples_csv(const std::string& director
 	out << std::setprecision(12);
 	if (config_.mode == ProgrammedDeliveryMode::Catheter)
 	{
-		out << "sample_index,plc_time_us,phase,event_sequence,cycle_index,axis1_pos_abs_mm,axis1_velocity_mm_s,axis1_acceleration_mm_s2,axis2_pos_deg,axis2_velocity_deg_s,axis2_acceleration_deg_s2,cylinder1_cmd,cylinder2_cmd,fn_1_raw,ft_1_raw\n";
+		out << "sample_index,plc_time_us,phase,event_sequence,cycle_index,axis1_pos_abs_mm,axis1_velocity_mm_s,axis1_acceleration_mm_s2,axis2_pos_deg,axis2_velocity_deg_s,axis2_acceleration_deg_s2,cylinder1_cmd,cylinder2_cmd,fn_1_raw,ft_1_raw,fn1_sensor_N,ft1_sensor_N,fn1_cal_delta_N,fn1_cal_abs_N,ft1_cal_delta_N,ft1_cal_abs_N,torque1_cal_delta_Nmm,torque1_cal_abs_Nmm,fn1_decoupled_delta_N,torque1_decoupled_delta_Nmm,fn1_decoupled_abs_N,torque1_decoupled_abs_Nmm,axis2_angle_deg\n";
 		for (const auto& s : samples)
+		{
+			const forcecal::Result cal = forcecal::calculate(s.fn1, s.ft1, s.fn2, s.ft2, stream_status_.zero.value, stream_status_.zero.valid);
 			out << s.sample_index << ',' << s.plc_time_us << ',' << static_cast<unsigned>(s.phase) << ',' << s.event_sequence << ',' << s.cycle_index << ','
 				<< s.axis1_pos << ',' << s.axis1_vel << ',' << s.axis1_acc << ',' << s.axis2_pos << ',' << s.axis2_vel << ',' << s.axis2_acc << ','
-				<< s.cylinder1 << ',' << s.cylinder2 << ',' << s.fn1 << ',' << s.ft1 << '\n';
+				<< s.cylinder1 << ',' << s.cylinder2 << ',' << s.fn1 << ',' << s.ft1;
+			if (cal.valid)
+				out << ',' << cal.side1.sensor_force_n << ',' << cal.side1.sensor_tangential_n << ',' << cal.side1.force_cal_delta_n << ',' << cal.side1.force_cal_abs_n
+					<< ',' << cal.side1.ft_cal_delta_n << ',' << cal.side1.ft_cal_abs_n << ',' << cal.side1.torque_cal_delta_nmm << ',' << cal.side1.torque_cal_abs_nmm
+					<< ',' << cal.side1.force_decoupled_delta_n << ',' << cal.side1.torque_decoupled_delta_nmm << ',' << cal.side1.force_decoupled_abs_n << ',' << cal.side1.torque_decoupled_abs_nmm;
+			else out << ",,,,,,,,,,,,";
+			out << ',' << s.axis2_pos << '\n';
+		}
 	}
 	else
 	{
-		out << "sample_index,plc_time_us,phase,event_sequence,cycle_index,axis5_pos_abs_mm,axis5_velocity_mm_s,axis5_acceleration_mm_s2,axis6_pos_abs_mm,axis6_velocity_mm_s,axis6_acceleration_mm_s2,axis7_pos_deg,axis7_velocity_deg_s,axis7_acceleration_deg_s2,cylinder3_cmd,cylinder4_cmd,fn_2_raw,ft_2_raw\n";
+		out << "sample_index,plc_time_us,phase,event_sequence,cycle_index,axis5_pos_abs_mm,axis5_velocity_mm_s,axis5_acceleration_mm_s2,axis6_pos_abs_mm,axis6_velocity_mm_s,axis6_acceleration_mm_s2,axis7_pos_deg,axis7_velocity_deg_s,axis7_acceleration_deg_s2,cylinder3_cmd,cylinder4_cmd,fn_2_raw,ft_2_raw,fn2_sensor_N,ft2_sensor_N,fn2_cal_delta_N,fn2_cal_abs_N,ft2_cal_delta_N,ft2_cal_abs_N,torque2_cal_delta_Nmm,torque2_cal_abs_Nmm,fn2_decoupled_delta_N,torque2_decoupled_delta_Nmm,fn2_decoupled_abs_N,torque2_decoupled_abs_Nmm,axis7_angle_deg\n";
 		for (const auto& s : samples)
+		{
+			const forcecal::Result cal = forcecal::calculate(s.fn1, s.ft1, s.fn2, s.ft2, stream_status_.zero.value, stream_status_.zero.valid);
 			out << s.sample_index << ',' << s.plc_time_us << ',' << static_cast<unsigned>(s.phase) << ',' << s.event_sequence << ',' << s.cycle_index << ','
 				<< s.axis5_pos << ',' << s.axis5_vel << ',' << s.axis5_acc << ',' << s.axis6_pos << ',' << s.axis6_vel << ',' << s.axis6_acc << ','
-				<< s.axis7_pos << ',' << s.axis7_vel << ',' << s.axis7_acc << ',' << s.cylinder3 << ',' << s.cylinder4 << ',' << s.fn2 << ',' << s.ft2 << '\n';
+				<< s.axis7_pos << ',' << s.axis7_vel << ',' << s.axis7_acc << ',' << s.cylinder3 << ',' << s.cylinder4 << ',' << s.fn2 << ',' << s.ft2;
+			if (cal.valid)
+				out << ',' << cal.side2.sensor_force_n << ',' << cal.side2.sensor_tangential_n << ',' << cal.side2.force_cal_delta_n << ',' << cal.side2.force_cal_abs_n
+					<< ',' << cal.side2.ft_cal_delta_n << ',' << cal.side2.ft_cal_abs_n << ',' << cal.side2.torque_cal_delta_nmm << ',' << cal.side2.torque_cal_abs_nmm
+					<< ',' << cal.side2.force_decoupled_delta_n << ',' << cal.side2.torque_decoupled_delta_nmm << ',' << cal.side2.force_decoupled_abs_n << ',' << cal.side2.torque_decoupled_abs_nmm;
+			else out << ",,,,,,,,,,,,";
+			out << ',' << s.axis7_pos << '\n';
+		}
 	}
 	return true;
 }

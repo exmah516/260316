@@ -138,7 +138,7 @@
                                          Click="ModeGuideRev_Click" IsChecked="{Binding ModeGuideRevSelected, Mode=OneWay}"
                                          IsEnabled="{Binding ModeSwitchAllowed}"/>
                         </UniformGrid>
-                        <UniformGrid Columns="2" Margin="2,0,2,2">
+                        <UniformGrid Columns="2" Margin="2,0,2,2" Visibility="Collapsed">
                             <RadioButton Content="协同递送" GroupName="Mode" Style="{StaticResource ModeChipRadio}"
                                          Click="ModeCooperativeDelivery_Click"
                                          IsChecked="{Binding ModeCooperativeDeliverySelected, Mode=OneWay}"

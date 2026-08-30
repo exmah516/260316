@@ -1,4 +1,5 @@
 #include "DualClampController.h"
+#include "ForceCalibration.h"
 
 #include <algorithm>
 #include <cmath>
@@ -9,7 +10,7 @@
 
 DualClampController::DualClampController()
 {
-	open_ads();
+	// 不在构造阶段同步阻塞ADS连接；先启动后端和UI，再由连接命令执行重试。
 }
 
 bool DualClampController::open_ads()
@@ -199,13 +200,29 @@ void DualClampController::tick(double dt_s)
 	poll_stream_locked();
 	phase_ = static_cast<DualClampPhase>(live_.plc_phase);
 	if (live_.selfcheck_done) selfcheck_requested_ = false;
-	if (phase_ == DualClampPhase::Completed || phase_ == DualClampPhase::Aborted || phase_ == DualClampPhase::Error)
-	{
-		started_ = phase_ == DualClampPhase::Completed;
-	}
 	if (live_.selfcheck_error || live_.status_error_id != 0)
 	{
 		last_error_ = "PLC错误ID：" + std::to_string(live_.status_error_id);
+	}
+	if (phase_ == DualClampPhase::Completed || phase_ == DualClampPhase::Aborted || phase_ == DualClampPhase::Error)
+	{
+		// 实验记录随实验终态自动归档，不再要求上位机额外点击保存按钮。
+		// 只有PLC已经停止采样且最后一个分块已确认后才能关闭文件，避免终态切换与最后1ms采样竞态。
+		if (recorder_.active() && !stream_status_.recording &&
+			!stream_status_.block_ready[0] && !stream_status_.block_ready[1])
+		{
+			const bool completed = phase_ == DualClampPhase::Completed;
+			const char* status = completed ? "Completed" :
+				phase_ == DualClampPhase::Aborted ? "Aborted" : "Error";
+			const std::string reason = completed ? std::string() :
+				(abort_reason_.empty() ? last_error_ : abort_reason_);
+			std::string finalize_error;
+			if (!recorder_.finalize(status, reason, stream_status_.zero, finalize_error) && !finalize_error.empty())
+			{
+				last_error_ = finalize_error;
+			}
+		}
+		started_ = false;
 	}
 	live_.recording = stream_status_.recording;
 	live_.recording_overflow = stream_status_.overflow;
@@ -220,6 +237,8 @@ void DualClampController::tick(double dt_s)
 void DualClampController::poll_stream_locked()
 {
 	if (!stream_ads_.is_open() && !stream_ads_.open()) return;
+	const double saved_zero_axis2 = stream_status_.zero.axis2_angle_deg;
+	const double saved_zero_axis7 = stream_status_.zero.axis7_angle_deg;
 	if (recorder_.failed())
 	{
 		last_error_ = recorder_.last_error().empty() ? "实时记录写盘失败" : recorder_.last_error();
@@ -238,6 +257,19 @@ void DualClampController::poll_stream_locked()
 		}
 		return;
 	}
+	if (stream_status_.zero.done)
+	{
+		if (zero_file_written_)
+		{
+			stream_status_.zero.axis2_angle_deg = saved_zero_axis2;
+			stream_status_.zero.axis7_angle_deg = saved_zero_axis7;
+		}
+		else
+		{
+			stream_status_.zero.axis2_angle_deg = live_.axis2_angle_abs_deg;
+			stream_status_.zero.axis7_angle_deg = live_.axis7_angle_abs_deg;
+		}
+	}
 	if (stream_status_.zero.done && !zero_file_written_ && recorder_.active())
 	{
 		std::vector<std::array<double, 4>> zero_samples;
@@ -245,7 +277,9 @@ void DualClampController::poll_stream_locked()
 		if (stream_ads_.read_zero_samples(zero_samples))
 		{
 			bool ok = true;
-			for (std::size_t i = 0; i < zero_samples.size(); ++i) ok = recorder_.append_zero(zero_samples[i], static_cast<std::uint64_t>(i) * 1000, error) && ok;
+			for (std::size_t i = 0; i < zero_samples.size(); ++i)
+				ok = recorder_.append_zero(zero_samples[i], static_cast<std::uint64_t>(i) * 1000,
+					live_.axis2_angle_abs_deg, live_.axis7_angle_abs_deg, error) && ok;
 			ok = recorder_.finish_zero(stream_status_.zero, error) && ok;
 			if (!ok)
 			{
@@ -323,6 +357,7 @@ void DualClampController::poll_stream_locked()
 			s.sample_index = r.index; s.plc_time_us = r.time_us; s.phase = r.phase; s.event_sequence = r.event_sequence;
 			s.axis1_pos_abs_mm = r.axis1_pos; s.axis1_velocity_mm_s = r.axis1_vel; s.axis1_acceleration_mm_s2 = r.axis1_acc;
 			s.axis6_pos_abs_mm = r.axis6_pos; s.axis6_velocity_mm_s = r.axis6_vel; s.axis6_acceleration_mm_s2 = r.axis6_acc;
+			s.axis2_angle_abs_deg = r.axis2_pos; s.axis7_angle_abs_deg = r.axis7_pos;
 			s.ft_1_raw = r.ft1; s.fn_1_raw = r.fn1; s.ft_2_raw = r.ft2; s.fn_2_raw = r.fn2;
 			s.cylinder2_cmd = r.cylinder2; s.cylinder4_cmd = r.cylinder4;
 			converted.push_back(s);
@@ -349,33 +384,46 @@ void DualClampController::poll_stream_locked()
 
 bool DualClampController::request_zero()
 {
-	std::lock_guard<std::mutex> lock(mutex_);
-	poll_stream_locked();
-	if (!live_.selfcheck_done || !live_.setup_done || started_)
+	try
 	{
-		last_error_ = "取零点要求自检和准备定位完成，且实验未开始";
+		std::lock_guard<std::mutex> lock(mutex_);
+		poll_stream_locked();
+		if (!live_.selfcheck_done || !live_.setup_done || started_)
+		{
+			last_error_ = "取零点要求自检和准备定位完成，且实验未开始";
+			return false;
+		}
+		if (!stream_ads_.is_open() && !stream_ads_.open())
+		{
+			last_error_ = "实时记录ADS连接失败：" + stream_ads_.last_error();
+			return false;
+		}
+		if (!recorder_.active())
+		{
+			std::string error;
+			if (!recorder_.begin("legacy", config_.record_suffix, error)) { last_error_ = error; return false; }
+		}
+		zero_file_written_ = false;
+		{
+			std::string reset_error;
+			if (!recorder_.reset_zero_file(reset_error)) { last_error_ = reset_error; return false; }
+		}
+		{
+			std::string event_error;
+			if (!recorder_.begin_zero(event_error)) { last_error_ = event_error; return false; }
+		}
+		if (!stream_ads_.request_zero())
+		{
+			last_error_ = "下发力感取零请求失败：" + stream_ads_.last_error();
+			return false;
+		}
+		return true;
+	}
+	catch (const std::exception& ex)
+	{
+		last_error_ = std::string("力感取零过程异常：") + ex.what();
 		return false;
 	}
-	if (!stream_ads_.is_open() && !stream_ads_.open())
-	{
-		last_error_ = "实时记录ADS连接失败：" + stream_ads_.last_error();
-		return false;
-	}
-	if (!recorder_.active())
-	{
-		std::string error;
-		if (!recorder_.begin("legacy", config_.record_suffix, error)) { last_error_ = error; return false; }
-	}
-	zero_file_written_ = false;
-	{
-		std::string reset_error;
-		if (!recorder_.reset_zero_file(reset_error)) { last_error_ = reset_error; return false; }
-	}
-	{
-		std::string event_error;
-		if (!recorder_.begin_zero(event_error)) { last_error_ = event_error; return false; }
-	}
-	return stream_ads_.request_zero();
 }
 
 bool DualClampController::set_record_suffix(const std::string& suffix)
@@ -424,6 +472,18 @@ bool DualClampController::write_metadata(const std::string& directory, std::stri
 		return false;
 	}
 	out << "{\n"
+		<< "  \"calibration_version\": \"two_stage_sensor_0_50g_plus_installed_2026-08-29\",\n"
+		<< "  \"calibration_chain\": \"sensor_0_50g_then_installed_calibration\",\n"
+		<< "  \"sensor_slopes_N_per_count\": {\"fn1\": " << forcecal::kFn1SensorSlopeNPerCount
+		<< ", \"ft1\": " << forcecal::kFt1SensorSlopeNPerCount << ", \"fn2\": " << forcecal::kFn2SensorSlopeNPerCount
+		<< ", \"ft2\": " << forcecal::kFt2SensorSlopeNPerCount << "},\n"
+		<< "  \"installation_axial_gain\": " << forcecal::kInstallationAxialGain << ",\n"
+		<< "  \"installation_axial_bias_N\": " << forcecal::kInstallationAxialBiasN << ",\n"
+		<< "  \"installation_torque_gain_Nmm_per_N\": " << forcecal::kInstallationTorqueGainNmmPerN << ",\n"
+		<< "  \"installation_torque_bias_Nmm\": " << forcecal::kInstallationTorqueBiasNmm << ",\n"
+		<< "  \"units\": {\"realtime_fn\": \"N\", \"realtime_ft\": \"N\", \"csv_torque\": \"N·mm\"},\n"
+		<< "  \"crosstalk_decoupling_applied\": true,\n"
+		<< "  \"gravity_compensation_applied\": false,\n"
 		<< "  \"moving_axis\": " << config_.moving_axis << ",\n"
 		<< "  \"fixed_axis\": " << (config_.moving_axis == 1 ? 6 : 1) << ",\n"
 		<< "  \"axis1_distance_from_left_mm\": " << config_.axis1_distance_from_left_mm << ",\n"
@@ -452,15 +512,38 @@ bool DualClampController::write_csv(const std::string& directory, const std::vec
 		error = "无法创建samples_1khz.csv";
 		return false;
 	}
-	out << "sample_index,plc_time_us,phase,event_sequence,axis1_pos_abs_mm,axis1_velocity_mm_s,axis1_acceleration_mm_s2,axis6_pos_abs_mm,axis6_velocity_mm_s,axis6_acceleration_mm_s2,ft_1_raw,fn_1_raw,ft_2_raw,fn_2_raw,cylinder2_cmd,cylinder4_cmd\n";
+	out << "sample_index,plc_time_us,phase,event_sequence,axis1_pos_abs_mm,axis1_velocity_mm_s,axis1_acceleration_mm_s2,axis6_pos_abs_mm,axis6_velocity_mm_s,axis6_acceleration_mm_s2,ft_1_raw,fn_1_raw,ft_2_raw,fn_2_raw,cylinder2_cmd,cylinder4_cmd,fn1_sensor_N,ft1_sensor_N,fn1_cal_delta_N,fn1_cal_abs_N,ft1_cal_delta_N,ft1_cal_abs_N,torque1_cal_delta_Nmm,torque1_cal_abs_Nmm,fn1_decoupled_delta_N,torque1_decoupled_delta_Nmm,fn1_decoupled_abs_N,torque1_decoupled_abs_Nmm,axis2_angle_deg,fn2_sensor_N,ft2_sensor_N,fn2_cal_delta_N,fn2_cal_abs_N,ft2_cal_delta_N,ft2_cal_abs_N,torque2_cal_delta_Nmm,torque2_cal_abs_Nmm,fn2_decoupled_delta_N,torque2_decoupled_delta_Nmm,fn2_decoupled_abs_N,torque2_decoupled_abs_Nmm,axis7_angle_deg\n";
 	out << std::setprecision(12);
 	for (const DualClampSample& s : samples)
 	{
+		const forcecal::Result cal = forcecal::calculate(s.fn_1_raw, s.ft_1_raw, s.fn_2_raw, s.ft_2_raw,
+			stream_status_.zero.value, stream_status_.zero.valid);
 		out << s.sample_index << ',' << s.plc_time_us << ',' << static_cast<unsigned int>(s.phase) << ',' << s.event_sequence << ','
 			<< s.axis1_pos_abs_mm << ',' << s.axis1_velocity_mm_s << ',' << s.axis1_acceleration_mm_s2 << ','
 			<< s.axis6_pos_abs_mm << ',' << s.axis6_velocity_mm_s << ',' << s.axis6_acceleration_mm_s2 << ','
 			<< s.ft_1_raw << ',' << s.fn_1_raw << ',' << s.ft_2_raw << ',' << s.fn_2_raw << ','
-			<< s.cylinder2_cmd << ',' << s.cylinder4_cmd << '\n';
+			<< s.cylinder2_cmd << ',' << s.cylinder4_cmd;
+		const auto append_side = [&](const forcecal::SideResult& side)
+		{
+			out << ',' << side.sensor_force_n << ',' << side.sensor_tangential_n
+				<< ',' << side.force_cal_delta_n << ',' << side.force_cal_abs_n
+				<< ',' << side.ft_cal_delta_n << ',' << side.ft_cal_abs_n
+				<< ',' << side.torque_cal_delta_nmm << ',' << side.torque_cal_abs_nmm
+				<< ',' << side.force_decoupled_delta_n << ',' << side.torque_decoupled_delta_nmm
+				<< ',' << side.force_decoupled_abs_n << ',' << side.torque_decoupled_abs_nmm;
+		};
+		if (cal.valid)
+		{
+			append_side(cal.side1);
+			out << ',' << s.axis2_angle_abs_deg;
+			append_side(cal.side2);
+			out << ',' << s.axis7_angle_abs_deg;
+		}
+		else
+		{
+			out << ",,,,,,,,,,,,,,,,,,,,,,,,,,";
+		}
+		out << '\n';
 	}
 	return true;
 }

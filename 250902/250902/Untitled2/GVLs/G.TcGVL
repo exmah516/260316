@@ -109,6 +109,14 @@ VAR_GLOBAL
 	cylinder5_value		AT %Q* : WORD;		// 电缸5控制值 (安装在轴3机构上控制y阀)
 	cylinder5_cmd		: WORD := 2000;		// 历史兼容缓存，当前正式控制不写此变量
 	cylinder5_press_req	: BOOL := FALSE;	// Y阀请求（TRUE=打开，输出0；FALSE=关闭，输出2000）
+
+	// 旧双机构模式下的独立数据记录与手动电缸控制接口。
+	// 独立记录不控制轴；手动电缸控制由PLC在自检完成后接管输出。
+	standalone_record_enable	: BOOL := FALSE;
+	standalone_record_event_seq	: UDINT := 0;
+	manual_cylinder_enable		: BOOL := FALSE;
+	manual_cylinder_cmd			: ARRAY[1..4] OF WORD := [1000,0,400,0];
+	manual_cylinder_error_id		: UDINT := 0;
 	
 	
 	ft_1_value			AT %I* : INT;
@@ -186,11 +194,15 @@ VAR_GLOBAL
 	program_test_setup_req		: BOOL := FALSE;
 	program_test_start_req		: BOOL := FALSE;
 	program_test_abort_req		: BOOL := FALSE;
+	program_test_axis1_prepare_from_left_mm : LREAL := 23.0;
+	program_test_axis1_trigger_from_left_mm : LREAL := 3.0;
 	program_test_axis5_from_left_mm : LREAL := 430.0;
 	program_test_axis2_angle_deg : LREAL := 0.0;
 	program_test_axis7_angle_deg : LREAL := 0.0;
 	program_test_cycle_count		: UINT := 1;
 	program_test_final_forward_distance_mm : LREAL := 10.0;
+	program_test_release_wait_ms : UDINT := 150;
+	program_test_reclamp_wait_ms : UDINT := 150;
 	program_test_forward_velocity : LREAL := 20.0;
 	program_test_forward_acceleration : LREAL := 100.0;
 	program_test_forward_deceleration : LREAL := 100.0;
@@ -207,6 +219,13 @@ VAR_GLOBAL
 	program_test_setup_busy		: BOOL := FALSE;
 	program_test_setup_done		: BOOL := FALSE;
 	program_test_status_error_id : UDINT := 0;
+	// 等待状态：0=无，1=等待释放，2=等待重新夹紧。
+	program_test_wait_action : USINT := 0;
+	// 运动错误上下文：来源1=准备，2=前向，3=回退，4=最终前向。
+	program_test_error_source : USINT := 0;
+	program_test_error_axis : USINT := 0;
+	program_test_error_phase : USINT := 0;
+	program_test_error_target_abs : LREAL := 0.0;
 	program_test_target_axis1_abs : LREAL := 0.0;
 	program_test_target_axis5_abs : LREAL := 0.0;
 	program_test_target_axis6_abs : LREAL := 0.0;
@@ -260,7 +279,7 @@ VAR_GLOBAL
 	experiment_record_overflow	: BOOL := FALSE;
 	experiment_record_total_count : UDINT := 0;
 	experiment_record_error_id	: UDINT := 0;
-	experiment_record_source_mode : USINT := 0; // 0=旧双机构，1=导管，2=导丝
+	experiment_record_source_mode : USINT := 0; // 0=旧双机构，1=导管，2=导丝，3=独立记录
 
 	experiment_record_block0_index : ARRAY[0..511] OF UDINT;
 	experiment_record_block0_time_us : ARRAY[0..511] OF ULINT;

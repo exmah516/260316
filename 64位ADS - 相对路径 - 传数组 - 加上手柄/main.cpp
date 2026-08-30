@@ -40,14 +40,15 @@ int main(int argc, char* argv[])
 
 	constexpr DWORD physical_handle_582_serial = 582;
 	constexpr DWORD physical_handle_587_serial = 587;
-	// TRUE：交换两只物理手柄的角色，用 587 承担导管/axis1/582语义，用 582 承担导丝/axis6/587语义。
+	// TRUE：交换两只物理手柄的角色，用物理 SN 587 承担导管语义，
+	// 用物理 SN 582 承担导丝语义。
 	constexpr bool swap_handle_roles = true;
 	const DWORD serial_axis1_handle = swap_handle_roles ? physical_handle_587_serial : physical_handle_582_serial;
 	const DWORD serial_axis6_handle = swap_handle_roles ? physical_handle_582_serial : physical_handle_587_serial;
 	const char* hardcoded_ads_netid = "169.254.119.135.1.1";
 
-	std::cout << "手柄角色映射：导管/axis1/582语义 -> 物理 SN " << serial_axis1_handle
-		<< "，导丝/axis6/587语义 -> 物理 SN " << serial_axis6_handle
+	std::cout << "手柄角色映射：导管语义/axis1 -> 物理 SN " << serial_axis1_handle
+		<< "，导丝语义/axis6 -> 物理 SN " << serial_axis6_handle
 		<< (swap_handle_roles ? "（已交换）。" : "（未交换）。") << std::endl;
 
 	// 工具模式：不进入运动环前先查看按键位掩码。
@@ -146,21 +147,8 @@ int main(int argc, char* argv[])
 	ControlConfig cfg;
 	const CylinderPreset cyl;
 
-	const unsigned char axis1_pause_button_mask = cfg.btn_b6;
-	const unsigned char physical_mode_toggle_button_mask = cfg.btn_b0;
-	const unsigned char physical_direction_toggle_button_mask = cfg.btn_b6;
-	// 当前角色交换后，物理 SN 582 是导丝/axis6 手柄：
-	// - B0 仅在 0->1 按下沿切换导管/导丝模式；1->0 松开沿不改变模式。
-	// - B6 仅在 0->1 按下沿切换当前普通模式方向；1->0 松开沿不改变方向。
-	// - 协同递送/撤出仍只由 UI 显式选择，期间忽略这两个物理切换键。
-	// Handle 582 上 Axis4 点动目标状态：
-	// 正向  ~= 0x86（b7 开，b5 关，基值 0x06）
-	// 反向  ~= 0x26（b5 开，b7 关，基值 0x06）
-	// 释放  ~= 0x06
-	// b0 可共存（0x87/0x27），不应阻止点动。
-	const unsigned char axis4_buttons_base_mask = 0x06;
-	const unsigned char axis4_buttons_forward_mask = cfg.btn_b7;
-	const unsigned char axis4_buttons_reverse_mask = cfg.btn_b5;
+	// B7 只用于选择手柄语义，B6 只按当前电平决定该语义的递送方向。
+	// 轴4不再使用物理按键，只接受UI点动命令。
 
 	// 长生命周期运行时对象。
 	Handle handle_axis1(serial_axis1_handle);
@@ -533,13 +521,12 @@ int main(int argc, char* argv[])
 	bool axis1_delivery_stop_latched = false;
 	bool axis1_delivery_stop_prompted = false;
 	bool freeze_active = false;
-	bool pause_pressed_prev = false;
 	bool axis1_reverse_pressed_prev = false;
 	bool axis6_effective_reverse_prev = false;
-	bool physical_mode_button_pressed_prev =
-		(axis6_input_handle->buttons2 & physical_mode_toggle_button_mask) != 0;
-	bool physical_direction_button_pressed_prev =
-		(axis6_input_handle->buttons2 & physical_direction_toggle_button_mask) != 0;
+	bool catheter_mode_button_pressed_prev =
+		(axis1_input_handle->buttons2 & cfg.btn_b7) != 0;
+	bool guidewire_mode_button_pressed_prev =
+		(axis6_input_handle->buttons2 & cfg.btn_b7) != 0;
 	bool axis4_manual_error_prev = false;
 	unsigned long axis4_manual_error_id_prev = 0;
 	bool axis4_ui_forward_pressed = false;
@@ -1069,6 +1056,19 @@ int main(int argc, char* argv[])
 	bool vis_reverse_override_active = false;
 	bool vis_reverse_override_value = false;
 	int vis_reverse_override_target = 0;
+	enum class PhysicalModeSource : unsigned char
+	{
+		None,
+		Catheter,
+		Guidewire
+	};
+	PhysicalModeSource physical_mode_source = PhysicalModeSource::None;
+	PhysicalModeSource pending_physical_mode_source = PhysicalModeSource::None;
+	bool physical_mode_request_pending = false;
+	PhysicalModeSource physical_mode_source_before_request = PhysicalModeSource::None;
+	bool vis_reverse_override_active_before_request = false;
+	bool vis_reverse_override_value_before_request = false;
+	int vis_reverse_override_target_before_request = 0;
 	enum class ModeSelection : int
 	{
 		None = 0,
@@ -1083,8 +1083,11 @@ int main(int argc, char* argv[])
 	std::uint32_t physical_button_event_counter = 0;
 	int physical_button_event_code = 0;
 
-	auto apply_mode_selection = [&](ModeSelection selection)
+	auto apply_mode_selection = [&](ModeSelection selection,
+		PhysicalModeSource mode_source = PhysicalModeSource::None)
 	{
+		// UI/键盘模式选择会清除物理模式源；B7选择则保留对应手柄作为模式源。
+		physical_mode_source = mode_source;
 		if (selection == ModeSelection::CooperativeDelivery ||
 			selection == ModeSelection::CooperativeRetraction)
 		{
@@ -1113,11 +1116,19 @@ int main(int argc, char* argv[])
 		vis_reverse_override_value = reverse;
 	};
 
-	auto request_mode_selection = [&](ModeSelection selection, const char* source)
+	auto request_mode_selection = [&](ModeSelection selection,
+		const char* source,
+		PhysicalModeSource mode_source = PhysicalModeSource::None)
 	{
+		if (mode_source == PhysicalModeSource::None)
+		{
+			// UI/键盘的普通模式选择应立即退出物理模式源，即使切换被后续安全门控延后。
+			physical_mode_source = PhysicalModeSource::None;
+		}
 		if (spacing_recovery.active() || spacing_recovery.requested)
 		{
 			pending_mode_selection = selection;
+			pending_physical_mode_source = mode_source;
 			spacing_recovery.requested = false;
 			std::cout << source << "：正在退出屈曲恢复并重同步，随后切换目标模式。" << std::endl;
 			return;
@@ -1130,7 +1141,8 @@ int main(int argc, char* argv[])
 			return;
 		}
 		pending_mode_selection = ModeSelection::None;
-		apply_mode_selection(selection);
+		pending_physical_mode_source = PhysicalModeSource::None;
+		apply_mode_selection(selection, mode_source);
 	};
 
 	struct PendingStartupParams {
@@ -1485,65 +1497,78 @@ int main(int argc, char* argv[])
 
 		const unsigned char axis1_buttons = axis1_input_handle->buttons2;
 		const unsigned char axis6_buttons = axis6_input_handle->buttons2;
-		const bool pause_pressed = (axis1_buttons & axis1_pause_button_mask) != 0;
-		const bool physical_mode_button_pressed =
-			(axis6_buttons & physical_mode_toggle_button_mask) != 0;
-		const bool physical_direction_button_pressed =
-			(axis6_buttons & physical_direction_toggle_button_mask) != 0;
-		const bool physical_mode_button_press_edge =
-			physical_mode_button_pressed && !physical_mode_button_pressed_prev;
-		const bool physical_direction_button_press_edge =
-			physical_direction_button_pressed && !physical_direction_button_pressed_prev;
+		const bool catheter_b6_pressed = (axis1_buttons & cfg.btn_b6) != 0;
+		const bool guidewire_b6_pressed = (axis6_buttons & cfg.btn_b6) != 0;
+		const bool catheter_b7_pressed = (axis1_buttons & cfg.btn_b7) != 0;
+		const bool guidewire_b7_pressed = (axis6_buttons & cfg.btn_b7) != 0;
+		const bool catheter_b7_press_edge =
+			catheter_b7_pressed && !catheter_mode_button_pressed_prev;
+		const bool guidewire_b7_press_edge =
+			guidewire_b7_pressed && !guidewire_mode_button_pressed_prev;
 
 		// 屈曲恢复正常退出并完成重同步后，再落实恢复期间点击的目标模式。
 		if (pending_mode_selection != ModeSelection::None &&
 			!ads_soft_hold_active && !spacing_recovery.active() && !spacing_recovery.requested)
 		{
 			const ModeSelection selection = pending_mode_selection;
+			const PhysicalModeSource mode_source = pending_physical_mode_source;
 			pending_mode_selection = ModeSelection::None;
-			apply_mode_selection(selection);
+			pending_physical_mode_source = PhysicalModeSource::None;
+			apply_mode_selection(selection, mode_source);
 			std::cout << "屈曲恢复退出后的目标模式切换请求已生效。" << std::endl;
 		}
 
 		const bool physical_mode_switch_allowed =
 			!ads_soft_hold_active &&
+			!return_ads_fault_hold &&
 			!single_handle_mode &&
+			!freeze_active &&
+			!estop_hold_active &&
+			startup.completed &&
+			startup.phase == StartupPhase::Done &&
+			control_active &&
+			!spacing_recovery.active() &&
+			!spacing_recovery.requested &&
+			!ft_exp.active() &&
 			guidewire_mode != GuidewireMode::Cooperative &&
 			cooperative_direction_requested == CooperativeDirection::None &&
 			!planned_return.active();
-		if (physical_mode_switch_allowed && physical_mode_button_press_edge)
+		if (physical_mode_switch_allowed && catheter_b7_press_edge && guidewire_b7_press_edge)
 		{
-			const bool guidewire_selected =
-				guidewire_mode == GuidewireMode::Independent ||
-				(vis_reverse_override_active && vis_reverse_override_target == 1);
-			const bool reverse = guidewire_selected
-				? axis6_effective_reverse_prev
-				: axis1_reverse_pressed_prev;
-			const ModeSelection selection = guidewire_selected
-				? (reverse ? ModeSelection::CatheterRetraction : ModeSelection::CatheterDelivery)
-				: (reverse ? ModeSelection::GuidewireRetraction : ModeSelection::GuidewireDelivery);
-			request_mode_selection(selection, "物理 B0 按下沿");
+			std::cout << "物理模式切换冲突：SN 587 与 SN 582 的 B7 同周期按下，本次切换已忽略。"
+				<< std::endl;
+			++physical_button_event_counter;
+			physical_button_event_code = 7;
+		}
+		else if (physical_mode_switch_allowed && catheter_b7_press_edge)
+		{
+			const ModeSelection selection = catheter_b6_pressed
+				? ModeSelection::CatheterDelivery : ModeSelection::CatheterRetraction;
+			physical_mode_source_before_request = physical_mode_source;
+			vis_reverse_override_active_before_request = vis_reverse_override_active;
+			vis_reverse_override_value_before_request = vis_reverse_override_value;
+			vis_reverse_override_target_before_request = vis_reverse_override_target;
+			physical_mode_request_pending = guidewire_mode != GuidewireMode::None;
+			request_mode_selection(selection, "物理 SN 587 B7 按下沿", PhysicalModeSource::Catheter);
 			++physical_button_event_counter;
 			physical_button_event_code = static_cast<int>(selection);
 		}
-		if (physical_mode_switch_allowed && physical_direction_button_press_edge)
+		else if (physical_mode_switch_allowed && guidewire_b7_press_edge)
 		{
-			const bool guidewire_selected =
-				guidewire_mode == GuidewireMode::Independent ||
-				(vis_reverse_override_active && vis_reverse_override_target == 1);
-			const bool reverse = guidewire_selected
-				? axis6_effective_reverse_prev
-				: axis1_reverse_pressed_prev;
-			const ModeSelection selection = guidewire_selected
-				? (!reverse ? ModeSelection::GuidewireRetraction : ModeSelection::GuidewireDelivery)
-				: (!reverse ? ModeSelection::CatheterRetraction : ModeSelection::CatheterDelivery);
-			request_mode_selection(selection, "物理 B6 按下沿");
+			const ModeSelection selection = guidewire_b6_pressed
+				? ModeSelection::GuidewireDelivery : ModeSelection::GuidewireRetraction;
+			physical_mode_source_before_request = physical_mode_source;
+			vis_reverse_override_active_before_request = vis_reverse_override_active;
+			vis_reverse_override_value_before_request = vis_reverse_override_value;
+			vis_reverse_override_target_before_request = vis_reverse_override_target;
+			physical_mode_request_pending = guidewire_mode != GuidewireMode::Independent;
+			request_mode_selection(selection, "物理 SN 582 B7 按下沿", PhysicalModeSource::Guidewire);
 			++physical_button_event_counter;
 			physical_button_event_code = static_cast<int>(selection);
 		}
-		// 松开沿不触发任何模式动作，只刷新下一拍的边沿基线。
-		physical_mode_button_pressed_prev = physical_mode_button_pressed;
-		physical_direction_button_pressed_prev = physical_direction_button_pressed;
+		// B7 松开不触发动作，持续按住也不会重复触发。
+		catheter_mode_button_pressed_prev = catheter_b7_pressed;
+		guidewire_mode_button_pressed_prev = guidewire_b7_pressed;
 
 		// 只有实际进入协同模式后才固定为其选定方向。入口请求尚未通过门控时，
 		// 必须继续沿用当前模式的方向，避免被拒绝的请求造成单拍反向跳变。
@@ -1554,25 +1579,25 @@ int main(int argc, char* argv[])
 			cooperative_mode_active && cooperative_direction == CooperativeDirection::Retraction;
 		bool axis1_reverse_pressed = cooperative_mode_active
 			? cooperative_retraction_active
-			: ((vis_reverse_override_active && vis_reverse_override_target == 0)
-				? vis_reverse_override_value
-				: false);
-		const bool axis4_base_pressed = (axis1_buttons & axis4_buttons_base_mask) == axis4_buttons_base_mask;
-		const bool axis4_forward_pressed =
-			axis4_base_pressed &&
-			((axis1_buttons & axis4_buttons_forward_mask) != 0) &&
-			((axis1_buttons & axis4_buttons_reverse_mask) == 0);
-		const bool axis4_reverse_pressed =
-			axis4_base_pressed &&
-			((axis1_buttons & axis4_buttons_reverse_mask) != 0) &&
-			((axis1_buttons & axis4_buttons_forward_mask) == 0);
-
-		// 普通物理按钮和 UI 都写入同一锁存请求；按钮松开不会让模式回跳。
+			: (physical_mode_source == PhysicalModeSource::Catheter
+				? !catheter_b6_pressed
+				: ((vis_reverse_override_active && vis_reverse_override_target == 0)
+					? vis_reverse_override_value
+					: false));
+		// B7选中的物理手柄作为当前模式源；UI/键盘选择会清除该物理模式源。
 		GuidewireMode requested_guidewire_mode = GuidewireMode::None;
 		if (cooperative_direction_requested != CooperativeDirection::None && dual_handle_ready)
 		{
 			// 协同方向由 UI 显式进入，期间忽略导丝手柄的模式/方向按键。
 			requested_guidewire_mode = GuidewireMode::Cooperative;
+		}
+		else if (physical_mode_source == PhysicalModeSource::Guidewire)
+		{
+			requested_guidewire_mode = GuidewireMode::Independent;
+		}
+		else if (physical_mode_source == PhysicalModeSource::Catheter)
+		{
+			requested_guidewire_mode = GuidewireMode::None;
 		}
 		else if (vis_reverse_override_active)
 		{
@@ -1586,15 +1611,18 @@ int main(int argc, char* argv[])
 		if (spacing_recovery.active())
 		{
 			// 恢复模式接管轴3/5/6期间忽略物理导丝模式按键。
+			physical_mode_source = PhysicalModeSource::None;
 			requested_guidewire_mode = GuidewireMode::None;
 			cancel_cooperative_delivery(true);
 		}
-		// 普通模式方向同样来自锁存值，物理方向按钮松开时保持不变。
+		// 物理模式源下 B6 按当前电平决定方向；没有物理模式源时沿用UI/单手柄方向。
 		bool axis6_effective_reverse_pressed = cooperative_mode_active
 			? cooperative_retraction_active
-			: ((vis_reverse_override_active && vis_reverse_override_target == 1)
-				? vis_reverse_override_value
-				: (single_handle_mode ? axis1_reverse_pressed : false));
+			: (physical_mode_source == PhysicalModeSource::Guidewire
+				? !guidewire_b6_pressed
+				: ((vis_reverse_override_active && vis_reverse_override_target == 1)
+					? vis_reverse_override_value
+					: (single_handle_mode ? axis1_reverse_pressed : false)));
 		const bool startup_sequence_active = startup.is_active();
 		// 统一回退任务不能穿越暂停、急停、通信保持或其它接管状态。
 		if (planned_return.active() && (!control_active || ads_soft_hold_active ||
@@ -1604,7 +1632,6 @@ int main(int argc, char* argv[])
 		{
 			(void)cancel_active_return_motion(true);
 		}
-		// 启动流程完成前，b6 仍沿用原暂停语义；正式控制后不再处理 b6。
 		const bool formal_control_stage = startup.completed && (startup.phase == StartupPhase::Done);
 		if ((axis4_ui_forward_pressed || axis4_ui_reverse_pressed) &&
 			axis4_ui_jog_deadline_ms != 0 &&
@@ -1626,8 +1653,8 @@ int main(int argc, char* argv[])
 		}
 		const bool axis4_jog_allowed = ads_cycle_valid && !freeze_active && !estop_hold_active && !startup_sequence_active &&
 			!spacing_recovery.active() && !spacing_recovery.requested;
-		const bool axis4_forward_semantic = axis4_forward_pressed || axis4_ui_forward_pressed;
-		const bool axis4_reverse_semantic = axis4_reverse_pressed || axis4_ui_reverse_pressed;
+		const bool axis4_forward_semantic = axis4_ui_forward_pressed;
+		const bool axis4_reverse_semantic = axis4_ui_reverse_pressed;
 		const bool axis4_direction_conflict = axis4_forward_semantic && axis4_reverse_semantic;
 		const bool axis4_forward_request = axis4_jog_allowed && axis4_forward_semantic && !axis4_direction_conflict;
 		const bool axis4_reverse_request = axis4_jog_allowed && axis4_reverse_semantic && !axis4_direction_conflict;
@@ -1641,61 +1668,7 @@ int main(int argc, char* argv[])
 				axis4_jog_allowed && injector_ui_direction[injector_index] < 0;
 		}
 
-		if (!formal_control_stage)
-		{
-			if (pause_pressed && !pause_pressed_prev)
-			{
-				freeze_active = true;
-				control_active = false;
-				cancel_cooperative_delivery(true);
-				clear_force_output();
-				std::cout << "582 暂停：开启。" << std::endl;
-			}
-			else if (!pause_pressed && pause_pressed_prev)
-			{
-				freeze_active = false;
-				if (startup_sequence_active)
-				{
-					std::cout << "582 暂停：关闭，启动流程继续。" << std::endl;
-				}
-				else if (!startup.completed)
-				{
-					if (!estop_hold_active && sync_all(20))
-					{
-						control_active = false;
-						if (!startup.prompted && (!has_self_check_flag || self_check_done))
-						{
-							prompt_startup_mode();
-						}
-						std::cout << "582 暂停：关闭，等待选择启动方式。" << std::endl;
-					}
-					else if (estop_hold_active)
-					{
-						std::cout << "582 暂停已释放，等待 PLC 保持解除。" << std::endl;
-					}
-					else
-					{
-						std::cout << "582 暂停已释放，等待重同步完成。" << std::endl;
-					}
-				}
-				else if (!estop_hold_active && sync_all(20))
-				{
-					control_active = true;
-					std::cout << "582 暂停：关闭，控制已恢复。" << std::endl;
-				}
-				else if (estop_hold_active)
-				{
-					std::cout << "582 暂停已释放，等待 PLC 保持解除。" << std::endl;
-				}
-				else
-				{
-					std::cout << "582 暂停已释放，等待重同步完成。" << std::endl;
-				}
-			}
-		}
-		pause_pressed_prev = pause_pressed;
-
-		// 2) 正反键切换：启用一次性触发保护，不再执行线性重同步。
+		// 正反方向变化：启用一次性触发保护，不执行线性重同步。
 		if (!freeze_active && !estop_hold_active && !startup_sequence_active && control_active &&
 			!spacing_recovery.active())
 		{
@@ -1780,6 +1753,7 @@ int main(int argc, char* argv[])
 		{
 			spacing_recovery.reset();
 			pending_mode_selection = ModeSelection::None;
+			pending_physical_mode_source = PhysicalModeSource::None;
 			clear_force_output();
 			std::cout << "屈曲恢复已由暂停、急停或 ADS 故障终止。" << std::endl;
 		}
@@ -1903,8 +1877,8 @@ int main(int argc, char* argv[])
 				else
 				{
 					single_handle_requested_mode = GuidewireMode::None;
-					std::cout << "单手柄模式：已切换到导管(582语义)。" << std::endl;
-					std::cout << "按键说明：b0方向，b6 Y阀，b7/b5 轴4点动，数字2切导丝。" << std::endl;
+						std::cout << "单手柄模式：已切换到导管语义。" << std::endl;
+					std::cout << "按键说明：数字2切导丝；物理B7模式选择仅在双手柄模式有效。" << std::endl;
 				}
 			}
 			else if (single_handle_mode && ch == '2')
@@ -1916,8 +1890,8 @@ int main(int argc, char* argv[])
 				else
 				{
 					single_handle_requested_mode = GuidewireMode::Independent;
-					std::cout << "单手柄模式：已切换到导丝(587语义)。" << std::endl;
-					std::cout << "按键说明：b0方向，b6 Y阀，b7/b5 轴4点动，数字1回导管。" << std::endl;
+						std::cout << "单手柄模式：已切换到导丝语义。" << std::endl;
+					std::cout << "按键说明：数字1回导管；物理B7模式选择仅在双手柄模式有效。" << std::endl;
 				}
 			}
 			else if (ch == 'q' || ch == 'Q')
@@ -1962,8 +1936,9 @@ int main(int argc, char* argv[])
 			}
 		}
 
-		// 5) 导丝模式切换：双手柄时由 587 按键进入独立导丝；协同递送仅由 UI 显式请求。
+		// 5) 导丝模式切换：双手柄时由导丝语义手柄SN 582的B7按下沿进入；协同模式仅由UI请求。
 		bool cooperative_transition_failed = false;
+		bool physical_mode_transition_rejected = false;
 		if (requested_guidewire_mode != requested_guidewire_mode_prev)
 		{
 			if (requested_guidewire_mode == GuidewireMode::None)
@@ -2010,21 +1985,25 @@ int main(int argc, char* argv[])
 			{
 				std::cout << "导丝模式切换已忽略：582 暂停处于开启状态。" << std::endl;
 				cooperative_transition_failed = (requested_guidewire_mode == GuidewireMode::Cooperative);
+				physical_mode_transition_rejected = physical_mode_request_pending;
 			}
 			else if (estop_hold_active)
 			{
 				std::cout << "导丝模式切换已忽略：PLC 保持处于开启状态。" << std::endl;
 				cooperative_transition_failed = (requested_guidewire_mode == GuidewireMode::Cooperative);
+				physical_mode_transition_rejected = physical_mode_request_pending;
 			}
 			else if (!startup.completed || startup.phase != StartupPhase::Done)
 			{
 				std::cout << "导丝模式切换已忽略：启动准备尚未完成。" << std::endl;
 				cooperative_transition_failed = (requested_guidewire_mode == GuidewireMode::Cooperative);
+				physical_mode_transition_rejected = physical_mode_request_pending;
 			}
 			else if (!control_active || return_ads_fault_hold)
 			{
 				std::cout << "导丝模式切换已忽略：控制尚未激活。" << std::endl;
 				cooperative_transition_failed = (requested_guidewire_mode == GuidewireMode::Cooperative);
+				physical_mode_transition_rejected = physical_mode_request_pending;
 			}
 			else
 			{
@@ -2079,7 +2058,7 @@ int main(int argc, char* argv[])
 						{
 							clear_cylinder_manual_overrides("协同模式");
 							guidewire_mode = GuidewireMode::Cooperative;
-							// 本拍在切换前已经采样过 b0；成功进入后立即覆盖为
+							// 本拍在切换前已经采样过物理按键；成功进入后立即覆盖为
 							// 固定协同方向，避免首次控制带入旧模式方向。
 							cooperative_direction = cooperative_direction_requested;
 							cooperative_mode_active = true;
@@ -2101,6 +2080,10 @@ int main(int argc, char* argv[])
 				{
 					std::cout << "导丝模式切换失败。" << std::endl;
 				}
+				if ((!mode_attempted && mode_rejected) || (mode_attempted && !mode_ok))
+				{
+					physical_mode_transition_rejected = physical_mode_request_pending;
+				}
 				if (cooperative_request && !mode_ok)
 				{
 					// 入口失败后取消 UI 请求，下一帧按此前的普通 UI/物理模式恢复，
@@ -2111,7 +2094,29 @@ int main(int argc, char* argv[])
 				}
 			}
 		}
-		requested_guidewire_mode_prev = cooperative_transition_failed
+		if (physical_mode_request_pending)
+		{
+			const bool physical_mode_request_succeeded =
+				(requested_guidewire_mode == GuidewireMode::None && guidewire_mode == GuidewireMode::None) ||
+				(requested_guidewire_mode == GuidewireMode::Independent && guidewire_mode == GuidewireMode::Independent);
+			if (physical_mode_request_succeeded)
+			{
+				physical_mode_request_pending = false;
+			}
+			else if (physical_mode_transition_rejected)
+			{
+				// B7 请求被入口门控或重同步拒绝时，恢复此前的模式/方向来源，
+				// 防止界面仍处于原模式、B6 却被错误地解释为另一只手柄的方向。
+				physical_mode_source = physical_mode_source_before_request;
+				vis_reverse_override_active = vis_reverse_override_active_before_request;
+				vis_reverse_override_value = vis_reverse_override_value_before_request;
+				vis_reverse_override_target = vis_reverse_override_target_before_request;
+				physical_mode_request_pending = false;
+				requested_guidewire_mode_prev = guidewire_mode;
+				std::cout << "物理 B7 模式切换未通过，已保留原模式来源。" << std::endl;
+			}
+		}
+		requested_guidewire_mode_prev = (cooperative_transition_failed || physical_mode_transition_rejected)
 			? guidewire_mode
 			: requested_guidewire_mode;
 
@@ -4754,7 +4759,8 @@ int main(int argc, char* argv[])
 			planned_return.clamp_output_generation == 0 &&
 			ads_output.motion_enabled && ads_output.cylinder_valid)
 		{
-			// 50 ms 从夹爪命令实际经 Sum Write 应用后开始计算，而不是从任务创建时开始。
+			// 回退前的电缸稳定时间从夹爪命令实际经 Sum Write 应用后开始计算，
+			// 而不是从任务创建时开始；当前配置值为 75 ms。
 			planned_return.clamp_output_generation = output_generation;
 		}
 		bool clamp_hold_582_trigger = false;
@@ -5412,6 +5418,7 @@ int main(int argc, char* argv[])
 					{
 						cancel_cooperative_delivery(true);
 						pending_mode_selection = ModeSelection::None;
+						pending_physical_mode_source = PhysicalModeSource::None;
 					}
 					spacing_recovery.requested = (vcmd.param1 != 0);
 					break;
@@ -5458,6 +5465,8 @@ int main(int argc, char* argv[])
 					else
 					{
 						cooperative_direction_requested = CooperativeDirection::None;
+						physical_mode_source = PhysicalModeSource::None;
+						pending_physical_mode_source = PhysicalModeSource::None;
 						// 退出协同后固定回到普通导管递送，避免手柄按键立即切到其他模式。
 						vis_reverse_override_active = true;
 						vis_reverse_override_target = 0;
