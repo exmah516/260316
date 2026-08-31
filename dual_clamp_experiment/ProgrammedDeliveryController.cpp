@@ -173,6 +173,14 @@ bool ProgrammedDeliveryController::validate_config(const ProgrammedDeliveryConfi
 bool ProgrammedDeliveryController::prepare(const ProgrammedDeliveryConfig& config)
 {
 	std::lock_guard<std::mutex> lock(mutex_);
+	// 配置（包括电缸配合开关）只能在空闲、完成、中止或错误后重新准备时修改。
+	// 防止绕过WPF直接发送PROGRAM_PREPARE，在运动或夹爪等待阶段改写PLC参数。
+	if (started_ || live_.setup_busy ||
+		(live_.valid && live_.phase >= ProgrammedDeliveryPhase::Baseline && live_.phase <= ProgrammedDeliveryPhase::FinalForward))
+	{
+		last_error_ = "实验正在运行或准备中，不能修改程序递送配置";
+		return false;
+	}
 	if (recorder_.active())
 	{
 		std::string close_error;
@@ -230,6 +238,7 @@ bool ProgrammedDeliveryController::prepare(const ProgrammedDeliveryConfig& confi
 		return false;
 	}
 	config_ = config;
+	recorder_.set_program_coupling(config_.cylinder1_coupling_enabled, config_.cylinder3_coupling_enabled);
 	started_ = false;
 	last_error_.clear();
 	return true;
@@ -610,6 +619,8 @@ bool ProgrammedDeliveryController::write_metadata(const std::string& directory, 
 		<< "  \"axis2_angle_deg\": " << config_.axis2_angle_deg << ",\n"
 		<< "  \"axis7_angle_deg\": " << config_.axis7_angle_deg << ",\n"
 		<< "  \"cycle_count\": " << config_.cycle_count << ",\n"
+		<< "  \"cylinder1_coupling_enabled\": " << (config_.cylinder1_coupling_enabled ? "true" : "false") << ",\n"
+		<< "  \"cylinder3_coupling_enabled\": " << (config_.cylinder3_coupling_enabled ? "true" : "false") << ",\n"
 		<< "  \"final_forward_distance_mm\": " << config_.final_forward_distance_mm << ",\n"
 		<< "  \"release_wait_ms\": " << config_.release_wait_ms << ",\n"
 		<< "  \"reclamp_wait_ms\": " << config_.reclamp_wait_ms << ",\n"

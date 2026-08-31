@@ -381,7 +381,7 @@ int main(int argc, char* argv[])
 	SpacingRecoveryState spacing_recovery;
 	axis1_crawl.enabled = true;
 	// 最终启动默认姿态与标准启动的中间夹持位置分开设置。
-	// 649/649/650 可保持缩短后的 0 mm、1 mm 相对差，同时让完整
+	// 635/635/650 可保持缩短后的 0 mm、1 mm 相对差，同时让完整
 	// axis6 运行窗口 [axis5+1, axis5+21] 不超过 670 mm 软上限。
 	startup.final_axis1_from_left_mm = cfg.startup_final_axis1_default_from_left_mm;
 	startup.final_axis3_from_left_mm = cfg.startup_final_axis3_default_from_left_mm;

@@ -226,8 +226,11 @@ CASE state OF
                 G.program_test_trigger_target_abs := G.leftlimit[1] + G.program_test_axis1_trigger_from_left_mm;
                 G.program_test_return_target_abs := G.program_test_target_axis1_abs;
                 G.program_test_final_target_abs := G.program_test_target_axis1_abs - G.program_test_final_forward_distance_mm;
-                // 准备移动时运动端释放，定位完成后再切入正常夹持组合。
-                G.cylinder1_value := 0;
+                // 准备移动时运动端释放；固定端电缸1可选是否同步进入配合释放状态。
+                G.cylinder1_value := 400;
+                IF G.program_test_cylinder1_coupling_enable THEN
+                    G.cylinder1_value := 0;
+                END_IF
                 G.cylinder2_value := 0;
             ELSE
                 setup_target[5] := G.program_test_target_axis5_abs;
@@ -236,7 +239,11 @@ CASE state OF
                 G.program_test_trigger_target_abs := G.leftlimit[6] + G.program_test_axis5_from_left_mm + 1.0;
                 G.program_test_return_target_abs := G.program_test_target_axis6_abs;
                 G.program_test_final_target_abs := G.program_test_target_axis6_abs - G.program_test_final_forward_distance_mm;
-                G.cylinder3_value := 50;
+                // 固定端电缸3可选是否同步进入配合释放状态。
+                G.cylinder3_value := 400;
+                IF G.program_test_cylinder3_coupling_enable THEN
+                    G.cylinder3_value := 50;
+                END_IF
                 G.cylinder4_value := 0;
             END_IF
             setup_release_wait_active := TRUE;
@@ -330,10 +337,16 @@ CASE state OF
     IF fb_forward_move.Done THEN
         forward_exec := FALSE;
         IF active_mode = 1 THEN
-            G.cylinder1_value := 0;
+            G.cylinder1_value := 400;
+            IF G.program_test_cylinder1_coupling_enable THEN
+                G.cylinder1_value := 0;
+            END_IF
             G.cylinder2_value := 0;
         ELSE
-            G.cylinder3_value := 50;
+            G.cylinder3_value := 400;
+            IF G.program_test_cylinder3_coupling_enable THEN
+                G.cylinder3_value := 50;
+            END_IF
             G.cylinder4_value := 0;
         END_IF
         G.program_test_wait_action := 1;

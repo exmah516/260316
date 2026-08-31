@@ -201,6 +201,8 @@ VAR_GLOBAL
 	program_test_axis7_angle_deg : LREAL := 0.0;
 	program_test_cycle_count		: UINT := 1;
 	program_test_final_forward_distance_mm : LREAL := 10.0;
+	program_test_cylinder1_coupling_enable : BOOL := TRUE;
+	program_test_cylinder3_coupling_enable : BOOL := TRUE;
 	program_test_release_wait_ms : UDINT := 150;
 	program_test_reclamp_wait_ms : UDINT := 150;
 	program_test_forward_velocity : LREAL := 20.0;

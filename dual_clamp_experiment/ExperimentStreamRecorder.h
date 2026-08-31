@@ -37,6 +37,8 @@ public:
 
 	bool begin(const std::string& mode, const std::string& suffix, std::string& error);
 	bool begin_standalone(const std::string& suffix, std::uint64_t field_mask, std::string& error);
+	// 记录程序递送本次实际使用的配合开关，供最终 experiment.json 追溯。
+	void set_program_coupling(bool cylinder1_enabled, bool cylinder3_enabled);
 	// 取零先于正式记录时，允许在尚未写入样本的情况下更新独立记录字段表头。
 	bool reconfigure_standalone(std::uint64_t field_mask, std::string& error);
 	bool append_dual(const std::vector<DualClampSample>& samples, std::size_t begin_index,
@@ -85,6 +87,8 @@ private:
 	bool program_mode_ = false;
 	bool standalone_mode_ = false;
 	std::uint64_t standalone_field_mask_ = 0;
+	bool program_cylinder1_coupling_enabled_ = true;
+	bool program_cylinder3_coupling_enabled_ = true;
 	ProgrammedDeliveryMode mode_ = ProgrammedDeliveryMode::Catheter;
 	std::string directory_;
 	std::string mode_name_;

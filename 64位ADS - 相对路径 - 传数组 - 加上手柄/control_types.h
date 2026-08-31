@@ -185,8 +185,8 @@ struct ControlConfig
 	double startup_axis5_ready_from_left_mm = 290.0;
 	// 未经 UI 覆盖时采用的最终启动目标。
 	double startup_final_axis1_default_from_left_mm = 20.0;
-	double startup_final_axis3_default_from_left_mm = 649.0;
-	double startup_final_axis5_default_from_left_mm = 649.0;
+	double startup_final_axis3_default_from_left_mm = 635.0;
+	double startup_final_axis5_default_from_left_mm = 635.0;
 	double startup_final_axis6_default_from_left_mm = 650.0;
 	double startup_rot_arrive_tol_deg = 0.2;
 	// PLC 自检完成后的器械装卸等待姿态；旧 PLC 无就绪标志时也用于兼容判定。
@@ -641,8 +641,8 @@ struct StartupState
 	double axis6_move_base_rel = 0.0;
 
 	double final_axis1_from_left_mm = 20.0;
-	double final_axis3_from_left_mm = 649.0;
-	double final_axis5_from_left_mm = 649.0;
+	double final_axis3_from_left_mm = 635.0;
+	double final_axis5_from_left_mm = 635.0;
 	double final_axis6_from_left_mm = 650.0;
 	double final_axis2_deg = 0.0;
 	double final_axis7_deg = 0.0;

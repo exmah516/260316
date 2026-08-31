@@ -274,6 +274,12 @@ bool ExperimentStreamRecorder::begin_standalone(const std::string& suffix, std::
 	return begin("standalone", suffix, error);
 }
 
+void ExperimentStreamRecorder::set_program_coupling(bool cylinder1_enabled, bool cylinder3_enabled)
+{
+	program_cylinder1_coupling_enabled_ = cylinder1_enabled;
+	program_cylinder3_coupling_enabled_ = cylinder3_enabled;
+}
+
 bool ExperimentStreamRecorder::reconfigure_standalone(std::uint64_t field_mask, std::string& error)
 {
 	if (!active_ || !standalone_mode_)
@@ -776,6 +782,11 @@ bool ExperimentStreamRecorder::write_json(const std::string& status, const std::
 	if (standalone_mode_)
 	{
 		out << "  \"selected_field_mask\": \"0x" << std::hex << standalone_field_mask_ << std::dec << "\",\n";
+	}
+	if (program_mode_)
+	{
+		out << "  \"cylinder1_coupling_enabled\": " << (program_cylinder1_coupling_enabled_ ? "true" : "false") << ",\n"
+			<< "  \"cylinder3_coupling_enabled\": " << (program_cylinder3_coupling_enabled_ ? "true" : "false") << ",\n";
 	}
 	out << "  \"directory_name\": \"" << json_escape(directory_name) << "\",\n"
 		<< "  \"local_start_time\": \"" << json_escape(start_time_local_) << "\",\n"

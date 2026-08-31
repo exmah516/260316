@@ -174,10 +174,13 @@ bool ProgrammedDeliveryAds::write_config(const ProgrammedDeliveryConfig& config,
 {
 	const std::uint8_t mode = static_cast<std::uint8_t>(config.mode);
 	const bool setup = setup_request;
+	const bool cylinder1_coupling = config.cylinder1_coupling_enabled;
+	const bool cylinder3_coupling = config.cylinder3_coupling_enabled;
 	const char* symbols[] = {
 		"G.program_test_mode", "G.program_test_axis1_prepare_from_left_mm", "G.program_test_axis1_trigger_from_left_mm",
 		"G.program_test_axis5_from_left_mm", "G.program_test_axis2_angle_deg",
 		"G.program_test_axis7_angle_deg", "G.program_test_cycle_count", "G.program_test_final_forward_distance_mm",
+		"G.program_test_cylinder1_coupling_enable", "G.program_test_cylinder3_coupling_enable",
 		"G.program_test_release_wait_ms", "G.program_test_reclamp_wait_ms",
 		"G.program_test_forward_velocity", "G.program_test_forward_acceleration", "G.program_test_forward_deceleration",
 		"G.program_test_forward_jerk", "G.program_test_return_velocity", "G.program_test_return_acceleration",
@@ -186,7 +189,7 @@ bool ProgrammedDeliveryAds::write_config(const ProgrammedDeliveryConfig& config,
 	const unsigned long lengths[] = {
 		sizeof(mode), sizeof(config.axis1_prepare_from_left_mm), sizeof(config.axis1_trigger_from_left_mm),
 		sizeof(config.axis5_from_left_mm), sizeof(config.axis2_angle_deg), sizeof(config.axis7_angle_deg),
-		sizeof(config.cycle_count), sizeof(config.final_forward_distance_mm), sizeof(config.release_wait_ms), sizeof(config.reclamp_wait_ms), sizeof(config.forward_velocity_mm_s),
+		sizeof(config.cycle_count), sizeof(config.final_forward_distance_mm), sizeof(cylinder1_coupling), sizeof(cylinder3_coupling), sizeof(config.release_wait_ms), sizeof(config.reclamp_wait_ms), sizeof(config.forward_velocity_mm_s),
 		sizeof(config.forward_acceleration_mm_s2), sizeof(config.forward_deceleration_mm_s2), sizeof(config.forward_jerk_mm_s3),
 		sizeof(config.return_velocity_mm_s), sizeof(config.return_acceleration_mm_s2), sizeof(config.return_deceleration_mm_s2),
 		sizeof(config.return_jerk_mm_s3), sizeof(setup)
@@ -194,7 +197,7 @@ bool ProgrammedDeliveryAds::write_config(const ProgrammedDeliveryConfig& config,
 	const void* inputs[] = {
 		&mode, &config.axis1_prepare_from_left_mm, &config.axis1_trigger_from_left_mm,
 		&config.axis5_from_left_mm, &config.axis2_angle_deg, &config.axis7_angle_deg,
-		&config.cycle_count, &config.final_forward_distance_mm, &config.release_wait_ms, &config.reclamp_wait_ms, &config.forward_velocity_mm_s,
+		&config.cycle_count, &config.final_forward_distance_mm, &cylinder1_coupling, &cylinder3_coupling, &config.release_wait_ms, &config.reclamp_wait_ms, &config.forward_velocity_mm_s,
 		&config.forward_acceleration_mm_s2, &config.forward_deceleration_mm_s2, &config.forward_jerk_mm_s3,
 		&config.return_velocity_mm_s, &config.return_acceleration_mm_s2, &config.return_deceleration_mm_s2,
 		&config.return_jerk_mm_s3, &setup

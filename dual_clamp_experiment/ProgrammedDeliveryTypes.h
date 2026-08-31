@@ -38,6 +38,8 @@ struct ProgrammedDeliveryConfig
 	double axis7_angle_deg = 0.0;
 	std::uint16_t cycle_count = 1;
 	double final_forward_distance_mm = 10.0;
+	bool cylinder1_coupling_enabled = true;
+	bool cylinder3_coupling_enabled = true;
 	std::uint32_t release_wait_ms = 150;
 	std::uint32_t reclamp_wait_ms = 150;
 	double forward_velocity_mm_s = 20.0;

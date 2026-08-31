@@ -91,6 +91,9 @@ namespace
 
 	bool apply_program_fields(const std::string& command, ProgrammedDeliveryConfig& config, std::string& error)
 	{
+		// 新字段缺省按参与配合处理，兼容未携带配合参数的旧版 PROGRAM_PREPARE 命令。
+		config.cylinder1_coupling_enabled = true;
+		config.cylinder3_coupling_enabled = true;
 		const std::size_t separator = command.find('|');
 		if (separator == std::string::npos) return true;
 		std::istringstream fields(command.substr(separator + 1));
@@ -112,6 +115,18 @@ namespace
 		if (key == "record_name")
 		{
 			config.record_suffix = text;
+			continue;
+		}
+		if (key == "cylinder1_coupling" || key == "cylinder3_coupling")
+		{
+			if (text != "0" && text != "1")
+			{
+				error = key + "必须是0或1";
+				return false;
+			}
+			const bool enabled = text == "1";
+			if (key == "cylinder1_coupling") config.cylinder1_coupling_enabled = enabled;
+			else config.cylinder3_coupling_enabled = enabled;
 			continue;
 		}
 			double value = 0.0;

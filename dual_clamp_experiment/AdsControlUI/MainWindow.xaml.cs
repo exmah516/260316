@@ -179,6 +179,8 @@ namespace DualClampExperimentUI
             ProgramAxis6CalculatedBorder.Visibility = guidewireVisibility;
             ProgramAxis6Calculated.Text = (ParseOrDefault(ProgramAxis5Pos, 430.0) + 21.0).ToString("F3", CultureInfo.InvariantCulture);
             ProgramAngleLabel.Text = guidewire ? "轴7角度 (deg)" : "轴2角度 (deg)";
+            ProgramCylinder1Coupling.Visibility = guidewire ? Visibility.Collapsed : Visibility.Visible;
+            ProgramCylinder3Coupling.Visibility = guidewire ? Visibility.Visible : Visibility.Collapsed;
 			ForceTitle.Text = guidewire ? "导丝侧轴向力 fn2 (N)" : legacy ? "实时轴向力 (N)" : "导管侧轴向力 fn1 (N)";
 			TorqueTitle.Text = guidewire ? "导丝侧力 ft2 (N)" : legacy ? "实时 ft 力 (N)" : "导管侧力 ft1 (N)";
 			Force1LegendText.Text = guidewire ? "fn2 (N)" : "fn1 (N)";
@@ -217,10 +219,12 @@ namespace DualClampExperimentUI
                     ? "axis5_from_left=" + Number(ProgramAxis5Pos)
                     : "axis1_prepare_from_left=" + Number(ProgramAxis1PreparePos) + "|axis1_trigger_from_left=" + Number(ProgramAxis1TriggerPos);
                 string commandText = string.Format(CultureInfo.InvariantCulture,
-                    "PROGRAM_PREPARE|mode={0}|{1}|{2}={3}|cycle_count={4}|final_forward_distance={5}|release_wait_ms={6}|reclamp_wait_ms={7}|forward_velocity={8}|forward_acceleration={9}|forward_deceleration={10}|forward_jerk={11}|return_velocity={12}|return_acceleration={13}|return_deceleration={14}|return_jerk={15}|record_name={16}",
-                    mode, positionFields, angleKey, Number(ProgramAngle), Int(ProgramCycleCount), Number(ProgramFinalDistance), Int(ProgramReleaseWait), Int(ProgramReclampWait), Number(ProgramForwardVelocity),
-                    Number(ProgramForwardAcceleration), Number(ProgramForwardDeceleration), Number(ProgramForwardJerk), Number(ProgramReturnVelocity),
-                    Number(ProgramReturnAcceleration), Number(ProgramReturnDeceleration), Number(ProgramReturnJerk), RecordSuffix());
+                    "PROGRAM_PREPARE|mode={0}|{1}|{2}={3}|cycle_count={4}|final_forward_distance={5}|cylinder1_coupling={6}|cylinder3_coupling={7}|release_wait_ms={8}|reclamp_wait_ms={9}|forward_velocity={10}|forward_acceleration={11}|forward_deceleration={12}|forward_jerk={13}|return_velocity={14}|return_acceleration={15}|return_deceleration={16}|return_jerk={17}|record_name={18}",
+                    mode, positionFields, angleKey, Number(ProgramAngle), Int(ProgramCycleCount), Number(ProgramFinalDistance),
+                    ProgramCylinder1Coupling.IsChecked == true ? 1 : 0, ProgramCylinder3Coupling.IsChecked == true ? 1 : 0,
+                    Int(ProgramReleaseWait), Int(ProgramReclampWait), Number(ProgramForwardVelocity), Number(ProgramForwardAcceleration),
+                    Number(ProgramForwardDeceleration), Number(ProgramForwardJerk), Number(ProgramReturnVelocity), Number(ProgramReturnAcceleration),
+                    Number(ProgramReturnDeceleration), Number(ProgramReturnJerk), RecordSuffix());
                 await SendAsync(commandText);
             }
             catch (Exception ex) { ErrorText.Text = "准备定位参数无效：" + ex.Message; }
@@ -441,6 +445,9 @@ namespace DualClampExperimentUI
             }
             SetAdsStatus(ads, ads ? "ADS: 正常 (Port 851)" : "ADS: 未连接");
             PrepareButton.IsEnabled = ads && _selfcheckDone && !_selfcheckBusy && !_setupBusy; StartButton.IsEnabled = ads && _setupDone && phase == 2 && p.Length > programZeroDone && p[programZeroDone] == "1" && !_selfcheckBusy && !_setupBusy; ZeroButton.IsEnabled = ads && _selfcheckDone && _setupDone && !_selfcheckBusy && !_setupBusy && phase == 2;
+            bool programCouplingEditable = ads && !_setupBusy && (phase == 0 || phase >= 10);
+            ProgramCylinder1Coupling.IsEnabled = programCouplingEditable;
+            ProgramCylinder3Coupling.IsEnabled = programCouplingEditable;
             Draw(ForceCanvas, Force1Line, _force1, Force2Line, _force2); Draw(TorqueCanvas, Torque1Line, _torque1, Torque2Line, _torque2);
         }
 

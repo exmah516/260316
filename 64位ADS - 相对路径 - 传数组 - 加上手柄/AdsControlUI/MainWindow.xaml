@@ -371,9 +371,9 @@
                                 <TextBlock Grid.Row="0" Grid.Column="0" Text="轴1 (5–95 mm)" Style="{StaticResource FieldLabelText}"/>
                                 <TextBox   Grid.Row="0" Grid.Column="1" x:Name="TbAxis1" Text="20"  Margin="8,3"/>
                                 <TextBlock Grid.Row="1" Grid.Column="0" Text="轴3 (10–650 mm)" Style="{StaticResource FieldLabelText}"/>
-                                <TextBox   Grid.Row="1" Grid.Column="1" x:Name="TbAxis3" Text="649" Margin="8,3"/>
+                                <TextBox   Grid.Row="1" Grid.Column="1" x:Name="TbAxis3" Text="635" Margin="8,3"/>
                                 <TextBlock Grid.Row="2" Grid.Column="0" Text="轴5 (10–670 mm)" Style="{StaticResource FieldLabelText}"/>
-                                <TextBox   Grid.Row="2" Grid.Column="1" x:Name="TbAxis5" Text="649" Margin="8,3"/>
+                                <TextBox   Grid.Row="2" Grid.Column="1" x:Name="TbAxis5" Text="635" Margin="8,3"/>
                                 <TextBlock Grid.Row="3" Grid.Column="0" Text="轴6 (10–670 mm)" Style="{StaticResource FieldLabelText}"/>
                                 <TextBox   Grid.Row="3" Grid.Column="1" x:Name="TbAxis6" Text="650" Margin="8,3"/>
                                 <TextBlock Grid.Row="4" Grid.Column="0" Text="轴2 (−360~360°)" Style="{StaticResource FieldLabelText}"/>
