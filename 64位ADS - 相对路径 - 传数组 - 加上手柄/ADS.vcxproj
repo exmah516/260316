@@ -152,9 +152,9 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="control_types.cpp" />
+    <ClCompile Include="tcp_force_daq.cpp" />
     <ClCompile Include="action4_camera.cpp" />
     <ClCompile Include="experiment_recorder.cpp" />
-    <ClCompile Include="tcp_force_daq.cpp" />
     <ClCompile Include="vis_server.cpp" />
     <ClCompile Include="ads_communication.cpp" />
     <ClCompile Include="plc_io.cpp" />
@@ -208,8 +208,6 @@
   <ImportGroup Label="ExtensionTargets">
   </ImportGroup>
   <Target Name="CopyRuntimeDependencies" AfterTargets="Build" Condition="'$(Platform)'=='x64'">
-    <Copy SourceFiles="$(ProjectDir)FLCatheter.dll;$(ProjectDir)ADS\x64\TcAdsDll.dll"
-          DestinationFolder="$(OutDir)"
-          SkipUnchangedFiles="true" />
+    <Copy SourceFiles="$(ProjectDir)FLCatheter.dll;$(ProjectDir)ADS\x64\TcAdsDll.dll" DestinationFolder="$(OutDir)" SkipUnchangedFiles="true" />
   </Target>
 </Project>

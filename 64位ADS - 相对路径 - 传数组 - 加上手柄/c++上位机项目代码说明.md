@@ -123,8 +123,8 @@ G.estop_hold_req / G.host_comm_timeout
 `calculate_clean_force` 只做装机零点扣除和本次 `F_direct` 映射：
 
 ```text
-F = 0.614437208097 * (Fn_V - Fn0_V)
-T = 0.703683250522 * (Ft_V - Ft0_V) * 3.0 * 0.001
+F = 0.701461986 * (Fn_V - Fn0_V)
+T = 0.620117055 * (Ft_V - Ft0_V) * 3.0 * 0.001
 ```
 
 其中 `Fn_V/Ft_V = raw/1000.0`，因此分别等价于传感器2、传感器1的 `p × (raw-raw_zero)`；`F_direct` 固定截距在动态调零中抵消。输出单位分别为 N 和 N·m。

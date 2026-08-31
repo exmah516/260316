@@ -287,7 +287,7 @@ bool ForceTransitionExperiment::tick(
             enter_phase(FtExpPhase::ReachTriggerPos, now_tick_ms);
         }
         break;
-    }
+    } 
 
     case FtExpPhase::ReachTriggerPos:
     {
