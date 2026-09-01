@@ -239,6 +239,8 @@ PlannedReturnCoordinator
   -> PublishHandoff / AwaitHandoffApplied
        // AdsOutputCommand持续携带各腿Req=false掩码
        // 同一Sum Write确认清Req + 实际位置保持 + 快退关闭 + 夹爪恢复
+  -> PostHandoffClampSettle
+       // 恢复夹爪写入确认后保持实际位置并稳定 50 ms，再重新同步基准
   -> OptionalLead only for normal catheter delivery
 
 cancel / fault

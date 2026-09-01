@@ -706,7 +706,8 @@ int main(int argc, char* argv[])
 
 		const PlannedReturnPhase interrupted_phase = planned_return.phase;
 		const bool handoff_clear_already_applied =
-			interrupted_phase == PlannedReturnPhase::AwaitHandoffApplied &&
+			(interrupted_phase == PlannedReturnPhase::AwaitHandoffApplied ||
+				interrupted_phase == PlannedReturnPhase::PostHandoffClampSettle) &&
 			planned_return.handoff_generation != 0 &&
 			ads_communication.applied_output_generation() >=
 			planned_return.handoff_generation;
@@ -718,6 +719,7 @@ int main(int argc, char* argv[])
 		}
 		const bool plc_request_can_be_active = clear_plc_requests &&
 			interrupted_phase != PlannedReturnPhase::ClampSettle &&
+			interrupted_phase != PlannedReturnPhase::PostHandoffClampSettle &&
 			interrupted_phase != PlannedReturnPhase::OptionalLead &&
 			!planned_return.completion_clear_confirmed;
 		const AdsEventState cancel_events = ads_communication.event_state();
@@ -2719,6 +2721,20 @@ int main(int argc, char* argv[])
 				return true;
 			};
 
+			auto planned_return_clamp_settle_ms = [&]() -> DWORD
+			{
+				DWORD clamp_wait_ms = 0;
+				if (planned_return.contains_axis(0))
+				{
+					clamp_wait_ms = cfg.axis1_pre_move_cylinder_wait_ms;
+				}
+				if (planned_return.contains_axis(5))
+				{
+					clamp_wait_ms = (std::max)(clamp_wait_ms, cfg.axis6_pre_move_cylinder_wait_ms);
+				}
+				return clamp_wait_ms;
+			};
+
 			auto apply_planned_return_outputs = [&]()
 			{
 				const bool axis1_leg_active = planned_return.contains_axis(0);
@@ -2728,6 +2744,7 @@ int main(int argc, char* argv[])
 					planned_return.phase == PlannedReturnPhase::AwaitFreshSnapshot ||
 					planned_return.phase == PlannedReturnPhase::PublishHandoff ||
 					planned_return.phase == PlannedReturnPhase::AwaitHandoffApplied ||
+					planned_return.phase == PlannedReturnPhase::PostHandoffClampSettle ||
 					planned_return.phase == PlannedReturnPhase::OptionalLead;
 				const bool request_may_start =
 					planned_return.phase == PlannedReturnPhase::AwaitAccepted ||
@@ -2852,15 +2869,7 @@ int main(int argc, char* argv[])
 
 				if (planned_return.phase == PlannedReturnPhase::ClampSettle)
 				{
-					DWORD clamp_wait_ms = 0;
-					if (planned_return.contains_axis(0))
-					{
-						clamp_wait_ms = cfg.axis1_pre_move_cylinder_wait_ms;
-					}
-					if (planned_return.contains_axis(5))
-					{
-						clamp_wait_ms = (std::max)(clamp_wait_ms, cfg.axis6_pre_move_cylinder_wait_ms);
-					}
+					const DWORD clamp_wait_ms = planned_return_clamp_settle_ms();
 					if (planned_return.clamp_output_generation != 0 &&
 						!planned_return.clamp_output_applied &&
 						ads_communication.applied_output_generation() >=
@@ -3193,7 +3202,22 @@ int main(int argc, char* argv[])
 						// handoff generation对应的同一Sum Write同时携带各腿Req=FALSE，
 						// 因而该代次成功即可同时确认清Req、实际位置保持和夹爪恢复。
 						planned_return.completion_clear_confirmed = true;
-						if (planned_return.post_action == PlannedReturnPostAction::Axis1DeliveryLead)
+						planned_return.phase_t0_ms = now_ms;
+						planned_return.phase = PlannedReturnPhase::PostHandoffClampSettle;
+						std::cout << "计划回退交接已确认，恢复夹爪稳定 "
+							<< planned_return_clamp_settle_ms() << " ms。" << std::endl;
+					}
+				}
+				else if (planned_return.phase == PlannedReturnPhase::PostHandoffClampSettle)
+				{
+					if ((now_ms - planned_return.phase_t0_ms) >= planned_return_clamp_settle_ms() &&
+						ads_cycle_valid)
+					{
+						if (!rebase_planned_return())
+						{
+							fail_planned_return("回退后夹爪稳定完成后的基准重建失败", nullptr, true);
+						}
+						else if (planned_return.post_action == PlannedReturnPostAction::Axis1DeliveryLead)
 						{
 							const double configured_lead_mm = cfg.axis1_post_return_lead_mm;
 							const double lead_target_abs = clamp_double(
@@ -3208,7 +3232,7 @@ int main(int argc, char* argv[])
 							if (lead_blocked)
 							{
 								reset_planned_return();
-								std::cout << "轴1回退后自动先行已跳过，已恢复手柄跟随。"
+								std::cout << "轴1回退后自动先行已跳过，夹爪稳定后恢复手柄跟随。"
 									<< std::endl;
 							}
 							else
@@ -3218,14 +3242,15 @@ int main(int argc, char* argv[])
 								planned_return.lead_arrive_samples = 0;
 								planned_return.lead_t0_ms = now_ms;
 								planned_return.phase = PlannedReturnPhase::OptionalLead;
-								std::cout << "轴1回退后自动先行已开始："
+								std::cout << "恢复夹爪稳定完成，轴1回退后自动先行已开始："
 									<< configured_lead_mm << " mm。" << std::endl;
 							}
 						}
 						else
 						{
 							reset_planned_return();
-							std::cout << "计划回退交接完成，已恢复手柄跟随。" << std::endl;
+							std::cout << "计划回退交接与夹爪稳定完成，已恢复手柄跟随。"
+								<< std::endl;
 						}
 					}
 				}

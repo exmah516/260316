@@ -148,7 +148,7 @@ struct ControlConfig
 	double axis1_return_acc_mm_s2 = 4800.0; // 原值 2400 mm/s^2
 	double axis1_return_dec_mm_s2 = 4800.0; // 原值 2400 mm/s^2
 	double axis1_return_jerk_mm_s3 = 70000.0; // 原值 35000 mm/s^3
-	// 自动换手先同时下发电缸目标并稳定 50 ms，再启动电机轴；到位后不增加等待。
+	// 自动换手在回退前切缸、回退后恢复夹爪时，均从输出成功写入 PLC 后稳定 50 ms。
 	DWORD axis1_pre_move_cylinder_wait_ms = 50;
 	double axis6_return_velocity_mm_s = 400.0; // 原值 200 mm/s
 	double axis6_return_acc_mm_s2 = 4800.0; // 原值 2400 mm/s^2
@@ -261,6 +261,7 @@ enum class PlannedReturnPhase : unsigned char
 	AwaitFreshSnapshot,
 	PublishHandoff,
 	AwaitHandoffApplied,
+	PostHandoffClampSettle,
 	OptionalLead
 };
 
@@ -402,7 +403,7 @@ struct PlannedReturnCoordinator
 		return CooperativeReturnOwner::None;
 	}
 
-	// 保持既有WPF数值契约：0=Follow，1=夹爪稳定，2=请求/运动，3=交接/先行。
+	// 保持既有WPF数值契约：0=Follow，1=夹爪稳定，2=请求/运动，3=交接/恢复夹爪稳定/先行。
 	int compatibility_phase_for_axis(int axis_index) const
 	{
 		if (!active() || !contains_axis(axis_index)) return 0;

@@ -36,7 +36,7 @@ fb_gear(
 	Master:=G.axis[2],
 	Slave:=G.axis2_sync_axis,
 	Execute:=gear_execute,
-	RatioNumerator:=1.0,
+	RatioNumerator:=-1.0,
 	RatioDenominator:=1,
 	Acceleration:=100.0,
 	Deceleration:=100.0,
