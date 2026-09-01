@@ -39,6 +39,12 @@ public:
 	bool begin_standalone(const std::string& suffix, std::uint64_t field_mask, std::string& error);
 	// 记录程序递送本次实际使用的配合开关，供最终 experiment.json 追溯。
 	void set_program_coupling(bool cylinder1_enabled, bool cylinder3_enabled);
+	// 保存程序递送运动端电缸本次使用的开闭量，便于复现实验参数。
+	void set_program_cylinder_words(std::uint16_t cylinder2_open, std::uint16_t cylinder2_close,
+		std::uint16_t cylinder4_open, std::uint16_t cylinder4_close);
+	// 导丝模式的三个直线位置需要写入实时记录元数据，便于复现实验条件。
+	void set_program_guidewire_positions(double axis5_from_left_mm, double axis6_prepare_from_left_mm,
+		double axis6_trigger_from_left_mm);
 	// 取零先于正式记录时，允许在尚未写入样本的情况下更新独立记录字段表头。
 	bool reconfigure_standalone(std::uint64_t field_mask, std::string& error);
 	bool append_dual(const std::vector<DualClampSample>& samples, std::size_t begin_index,
@@ -89,6 +95,13 @@ private:
 	std::uint64_t standalone_field_mask_ = 0;
 	bool program_cylinder1_coupling_enabled_ = true;
 	bool program_cylinder3_coupling_enabled_ = true;
+	std::uint16_t program_cylinder2_open_word_ = 0;
+	std::uint16_t program_cylinder2_close_word_ = 600;
+	std::uint16_t program_cylinder4_open_word_ = 0;
+	std::uint16_t program_cylinder4_close_word_ = 500;
+	double program_axis5_from_left_mm_ = 430.0;
+	double program_axis6_prepare_from_left_mm_ = 451.0;
+	double program_axis6_trigger_from_left_mm_ = 431.0;
 	ProgrammedDeliveryMode mode_ = ProgrammedDeliveryMode::Catheter;
 	std::string directory_;
 	std::string mode_name_;

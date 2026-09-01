@@ -137,10 +137,25 @@ bool ProgrammedDeliveryController::validate_config(const ProgrammedDeliveryConfi
 			return false;
 		}
 	}
-	else if (config.final_forward_distance_mm > 20.0)
+	else
 	{
-		error = "导丝模式最终前向距离必须在0至20 mm之间";
-		return false;
+		if (!std::isfinite(config.axis5_from_left_mm) || config.axis5_from_left_mm < 0.0 || config.axis5_from_left_mm > 670.0)
+		{
+			error = "导丝模式轴5初始位置必须在0至670 mm之间";
+			return false;
+		}
+		if (!std::isfinite(config.axis6_prepare_from_left_mm) || !std::isfinite(config.axis6_trigger_from_left_mm) ||
+			config.axis6_trigger_from_left_mm < 0.0 || config.axis6_prepare_from_left_mm > 670.0 ||
+			config.axis6_prepare_from_left_mm <= config.axis6_trigger_from_left_mm)
+		{
+			error = "导丝模式要求轴6初始位置大于触发位置，且两者均不得超过670 mm";
+			return false;
+		}
+		if (config.final_forward_distance_mm > config.axis6_prepare_from_left_mm - config.axis6_trigger_from_left_mm)
+		{
+			error = "导丝模式最终前向距离不得超过轴6初始位置与触发位置之差";
+			return false;
+		}
 	}
 	if (config.release_wait_ms > 60000 || config.reclamp_wait_ms > 60000)
 	{
@@ -159,12 +174,6 @@ bool ProgrammedDeliveryController::validate_config(const ProgrammedDeliveryConfi
 	if (!std::isfinite(angle) || angle < -360.0 || angle > 360.0)
 	{
 		error = "周向角度必须在-360至360度之间";
-		return false;
-	}
-	if (config.mode == ProgrammedDeliveryMode::Guidewire &&
-		(!std::isfinite(config.axis5_from_left_mm) || config.axis5_from_left_mm < 0.0 || config.axis5_from_left_mm + 21.0 > 670.0))
-	{
-		error = "导丝模式轴5距左限位位置必须在0至649 mm之间";
 		return false;
 	}
 	return true;
@@ -239,6 +248,10 @@ bool ProgrammedDeliveryController::prepare(const ProgrammedDeliveryConfig& confi
 	}
 	config_ = config;
 	recorder_.set_program_coupling(config_.cylinder1_coupling_enabled, config_.cylinder3_coupling_enabled);
+	recorder_.set_program_cylinder_words(config_.cylinder2_open_word, config_.cylinder2_close_word,
+		config_.cylinder4_open_word, config_.cylinder4_close_word);
+	recorder_.set_program_guidewire_positions(config_.axis5_from_left_mm, config_.axis6_prepare_from_left_mm,
+		config_.axis6_trigger_from_left_mm);
 	started_ = false;
 	last_error_.clear();
 	return true;
@@ -338,6 +351,8 @@ void ProgrammedDeliveryController::tick()
 	{
 		// 实验记录随实验终态自动归档，不再要求上位机额外点击保存按钮。
 		// 只有PLC已经停止采样且最后一个分块已确认后才能关闭文件，避免终态切换与最后1ms采样竞态。
+		// 先明确写入停止请求，避免PLC记录使能因终态切换延后一周期而让界面长时间显示“继续记录”。
+		if (recorder_.active()) stream_ads_.stop_recording();
 		if (recorder_.active() && !stream_status_.recording &&
 			!stream_status_.block_ready[0] && !stream_status_.block_ready[1])
 		{
@@ -353,7 +368,8 @@ void ProgrammedDeliveryController::tick()
 		}
 		started_ = false;
 	}
-	live_.recording = stream_status_.recording;
+	// 记录器已经完成归档后，立即向UI反映非活动状态，不沿用PLC上一周期的使能值。
+	live_.recording = recorder_.active() && stream_status_.recording;
 	live_.recording_overflow = stream_status_.overflow;
 	live_.recording_sample_count = stream_status_.total_count;
 	live_.recording_error_id = stream_status_.error_id;
@@ -615,12 +631,17 @@ bool ProgrammedDeliveryController::write_metadata(const std::string& directory, 
 		<< "  \"axis1_prepare_from_left_mm\": " << config_.axis1_prepare_from_left_mm << ",\n"
 		<< "  \"axis1_trigger_from_left_mm\": " << config_.axis1_trigger_from_left_mm << ",\n"
 		<< "  \"axis5_from_left_mm\": " << config_.axis5_from_left_mm << ",\n"
-		<< "  \"axis6_ready_from_left_mm\": " << (config_.axis5_from_left_mm + 21.0) << ",\n"
+		<< "  \"axis6_prepare_from_left_mm\": " << config_.axis6_prepare_from_left_mm << ",\n"
+		<< "  \"axis6_trigger_from_left_mm\": " << config_.axis6_trigger_from_left_mm << ",\n"
 		<< "  \"axis2_angle_deg\": " << config_.axis2_angle_deg << ",\n"
 		<< "  \"axis7_angle_deg\": " << config_.axis7_angle_deg << ",\n"
 		<< "  \"cycle_count\": " << config_.cycle_count << ",\n"
 		<< "  \"cylinder1_coupling_enabled\": " << (config_.cylinder1_coupling_enabled ? "true" : "false") << ",\n"
 		<< "  \"cylinder3_coupling_enabled\": " << (config_.cylinder3_coupling_enabled ? "true" : "false") << ",\n"
+		<< "  \"cylinder2_open_word\": " << config_.cylinder2_open_word << ",\n"
+		<< "  \"cylinder2_close_word\": " << config_.cylinder2_close_word << ",\n"
+		<< "  \"cylinder4_open_word\": " << config_.cylinder4_open_word << ",\n"
+		<< "  \"cylinder4_close_word\": " << config_.cylinder4_close_word << ",\n"
 		<< "  \"final_forward_distance_mm\": " << config_.final_forward_distance_mm << ",\n"
 		<< "  \"release_wait_ms\": " << config_.release_wait_ms << ",\n"
 		<< "  \"reclamp_wait_ms\": " << config_.reclamp_wait_ms << ",\n"

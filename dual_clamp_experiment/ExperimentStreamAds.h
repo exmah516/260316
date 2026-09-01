@@ -48,6 +48,8 @@ public:
 	bool is_open() const;
 	std::string last_error() const;
 	bool reset_recording();
+	// 请求PLC停止当前实时记录；用于实验状态机已进入终态但等待最后一块数据交付的收尾阶段。
+	bool stop_recording();
 	bool request_zero();
 	bool invalidate_zero();
 	bool read_status(ExperimentStreamStatus& status);

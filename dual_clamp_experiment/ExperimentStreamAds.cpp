@@ -75,6 +75,12 @@ bool ExperimentStreamAds::reset_recording()
 	return comm_.ADSWrite("G.experiment_record_clear", sizeof(value), const_cast<bool*>(&value));
 }
 
+bool ExperimentStreamAds::stop_recording()
+{
+	const bool value = false;
+	return comm_.ADSWrite("G.experiment_record_enable", sizeof(value), const_cast<bool*>(&value));
+}
+
 bool ExperimentStreamAds::request_zero()
 {
 	const bool value = true;

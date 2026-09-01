@@ -197,12 +197,19 @@ VAR_GLOBAL
 	program_test_axis1_prepare_from_left_mm : LREAL := 23.0;
 	program_test_axis1_trigger_from_left_mm : LREAL := 3.0;
 	program_test_axis5_from_left_mm : LREAL := 430.0;
+	program_test_axis6_prepare_from_left_mm : LREAL := 451.0;
+	program_test_axis6_trigger_from_left_mm : LREAL := 431.0;
 	program_test_axis2_angle_deg : LREAL := 0.0;
 	program_test_axis7_angle_deg : LREAL := 0.0;
 	program_test_cycle_count		: UINT := 1;
 	program_test_final_forward_distance_mm : LREAL := 10.0;
 	program_test_cylinder1_coupling_enable : BOOL := TRUE;
 	program_test_cylinder3_coupling_enable : BOOL := TRUE;
+	// 程序递送模式的运动端电缸开闭量。开值用于释放，闭值用于夹紧。
+	program_test_cylinder2_open_word : WORD := 0;
+	program_test_cylinder2_close_word : WORD := 600;
+	program_test_cylinder4_open_word : WORD := 0;
+	program_test_cylinder4_close_word : WORD := 500;
 	program_test_release_wait_ms : UDINT := 150;
 	program_test_reclamp_wait_ms : UDINT := 150;
 	program_test_forward_velocity : LREAL := 20.0;

@@ -129,12 +129,40 @@ namespace
 			else config.cylinder3_coupling_enabled = enabled;
 			continue;
 		}
+		if (key == "cylinder2_open" || key == "cylinder2_close" || key == "cylinder4_open" || key == "cylinder4_close")
+		{
+			std::uint64_t word = 0;
+			try
+			{
+				std::size_t used = 0;
+				word = std::stoull(text, &used, 0);
+				if (used != text.size() || word > 65535) throw std::invalid_argument("range");
+			}
+			catch (const std::exception&)
+			{
+				error = key + "必须是0至65535之间的整数";
+				return false;
+			}
+			if (key == "cylinder2_open") config.cylinder2_open_word = static_cast<std::uint16_t>(word);
+			else if (key == "cylinder2_close") config.cylinder2_close_word = static_cast<std::uint16_t>(word);
+			else if (key == "cylinder4_open") config.cylinder4_open_word = static_cast<std::uint16_t>(word);
+			else config.cylinder4_close_word = static_cast<std::uint16_t>(word);
+			continue;
+		}
 			double value = 0.0;
 			try { value = std::stod(text); }
 			catch (const std::exception&) { error = "参数不是有效数字：" + key; return false; }
 			if (key == "axis1_prepare_from_left") config.axis1_prepare_from_left_mm = value;
 			else if (key == "axis1_trigger_from_left") config.axis1_trigger_from_left_mm = value;
-			else if (key == "axis5_from_left") config.axis5_from_left_mm = value;
+			else if (key == "axis5_from_left")
+			{
+				config.axis5_from_left_mm = value;
+				// 兼容旧版导丝命令：未传轴6字段时，继续使用原来的轴5相对窗口。
+				config.axis6_prepare_from_left_mm = value + 21.0;
+				config.axis6_trigger_from_left_mm = value + 1.0;
+			}
+			else if (key == "axis6_prepare_from_left") config.axis6_prepare_from_left_mm = value;
+			else if (key == "axis6_trigger_from_left") config.axis6_trigger_from_left_mm = value;
 			else if (key == "axis2_angle") config.axis2_angle_deg = value;
 			else if (key == "axis7_angle") config.axis7_angle_deg = value;
 			else if (key == "cycle_count")

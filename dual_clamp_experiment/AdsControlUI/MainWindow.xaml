@@ -77,7 +77,7 @@
                 </StackPanel>
 
                 <TextBlock Text="保存后缀" FontWeight="SemiBold" VerticalAlignment="Center" Margin="0,0,6,0" Foreground="{StaticResource Ink}"/>
-                <TextBox x:Name="RecordSuffixText" Width="130" Text="experiment" Margin="0,0,14,0"/>
+                <TextBox x:Name="RecordSuffixText" Width="300" Text="experiment" Margin="0,0,14,0" ToolTip="可输入较长的实验名称；不能包含 Windows 文件名禁用字符"/>
 
                 <!-- 操作按钮组 -->
                 <Button Content="连接/重连" Click="Connect_Click" Padding="14,6" Margin="0,0,6,0"/>
@@ -320,48 +320,58 @@
                                         <RowDefinition Height="Auto"/>
                                         <RowDefinition Height="Auto"/>
                                         <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="Auto"/>
                                     </Grid.RowDefinitions>
                                     <TextBlock x:Name="CatheterAxis1PrepareLabel" Grid.Row="0" Text="轴1准备位置 (mm)" VerticalAlignment="Center" Foreground="#475569" FontSize="12.5" Margin="0,3"/>
                                     <TextBox x:Name="ProgramAxis1PreparePos" Grid.Row="0" Grid.Column="1" Text="23" Margin="0,3" Height="28"/>
                                     <TextBlock x:Name="CatheterAxis1TriggerLabel" Grid.Row="1" Text="轴1触发位置 (mm)" VerticalAlignment="Center" Foreground="#475569" FontSize="12.5" Margin="0,3"/>
                                     <TextBox x:Name="ProgramAxis1TriggerPos" Grid.Row="1" Grid.Column="1" Text="3" Margin="0,3" Height="28"/>
-                                    <TextBlock x:Name="Axis5PositionLabel" Grid.Row="0" Text="轴5距左限位 (mm)" Visibility="Collapsed" VerticalAlignment="Center" Foreground="#475569" FontSize="12.5" Margin="0,3"/>
-                                    <TextBox x:Name="ProgramAxis5Pos" Grid.Row="0" Grid.Column="1" Text="430" Visibility="Collapsed" Margin="0,3" Height="28" TextChanged="ProgramAxis5Pos_Changed"/>
-                                    <TextBlock x:Name="Axis6CalculatedLabel" Grid.Row="1" Text="轴6自动位置 (mm)" Visibility="Collapsed" VerticalAlignment="Center" Foreground="#475569" FontSize="12.5" Margin="0,3"/>
-                                    <Border x:Name="ProgramAxis6CalculatedBorder" Grid.Row="1" Grid.Column="1" Visibility="Collapsed" Background="#F8FAFC" BorderBrush="{StaticResource BorderBrushColor}" BorderThickness="1" CornerRadius="5" Margin="0,3" Height="28" Padding="8,0">
-                                        <TextBlock x:Name="ProgramAxis6Calculated" Text="451.000" VerticalAlignment="Center" FontWeight="SemiBold" Foreground="{StaticResource Accent}"/>
-                                    </Border>
-                                    <TextBlock x:Name="ProgramAngleLabel" Grid.Row="2" Text="轴2角度 (deg)" VerticalAlignment="Center" Foreground="#475569" FontSize="12.5" Margin="0,3"/>
-                                    <TextBox x:Name="ProgramAngle" Grid.Row="2" Grid.Column="1" Text="0" Margin="0,3" Height="28"/>
-                                    <TextBlock Grid.Row="3" Text="往复夹持次数" VerticalAlignment="Center" Foreground="#475569" FontSize="12.5" Margin="0,3"/>
-                                    <TextBox x:Name="ProgramCycleCount" Grid.Row="3" Grid.Column="1" Text="1" Margin="0,3" Height="28"/>
-                                    <TextBlock Grid.Row="4" Text="最终前向距离 (mm)" VerticalAlignment="Center" Foreground="#475569" FontSize="12.5" Margin="0,3"/>
-                                    <TextBox x:Name="ProgramFinalDistance" Grid.Row="4" Grid.Column="1" Text="10" Margin="0,3" Height="28"/>
-                                    <TextBlock Grid.Row="5" Text="电缸配合" VerticalAlignment="Center" Foreground="#475569" FontSize="12.5" Margin="0,3"/>
-                                    <StackPanel Grid.Row="5" Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                                    <TextBlock x:Name="Axis5PositionLabel" Grid.Row="0" Text="轴5初始位置 (mm)" Visibility="Collapsed" VerticalAlignment="Center" Foreground="#475569" FontSize="12.5" Margin="0,3"/>
+                                    <TextBox x:Name="ProgramAxis5Pos" Grid.Row="0" Grid.Column="1" Text="430" Visibility="Collapsed" Margin="0,3" Height="28"/>
+                                    <TextBlock x:Name="Axis6PrepareLabel" Grid.Row="1" Text="轴6初始位置 (mm)" Visibility="Collapsed" VerticalAlignment="Center" Foreground="#475569" FontSize="12.5" Margin="0,3"/>
+                                    <TextBox x:Name="ProgramAxis6PreparePos" Grid.Row="1" Grid.Column="1" Text="451" Visibility="Collapsed" Margin="0,3" Height="28"/>
+                                    <TextBlock x:Name="Axis6TriggerLabel" Grid.Row="2" Text="轴6触发位置 (mm)" Visibility="Collapsed" VerticalAlignment="Center" Foreground="#475569" FontSize="12.5" Margin="0,3"/>
+                                    <TextBox x:Name="ProgramAxis6TriggerPos" Grid.Row="2" Grid.Column="1" Text="431" Visibility="Collapsed" Margin="0,3" Height="28"/>
+                                    <TextBlock x:Name="ProgramAngleLabel" Grid.Row="3" Text="轴2角度 (deg)" VerticalAlignment="Center" Foreground="#475569" FontSize="12.5" Margin="0,3"/>
+                                    <TextBox x:Name="ProgramAngle" Grid.Row="3" Grid.Column="1" Text="0" Margin="0,3" Height="28"/>
+                                    <TextBlock Grid.Row="4" Text="往复夹持次数" VerticalAlignment="Center" Foreground="#475569" FontSize="12.5" Margin="0,3"/>
+                                    <TextBox x:Name="ProgramCycleCount" Grid.Row="4" Grid.Column="1" Text="1" Margin="0,3" Height="28"/>
+                                    <TextBlock Grid.Row="5" Text="最终前向距离 (mm)" VerticalAlignment="Center" Foreground="#475569" FontSize="12.5" Margin="0,3"/>
+                                    <TextBox x:Name="ProgramFinalDistance" Grid.Row="5" Grid.Column="1" Text="10" Margin="0,3" Height="28"/>
+                                    <TextBlock Grid.Row="6" Text="电缸配合" VerticalAlignment="Center" Foreground="#475569" FontSize="12.5" Margin="0,3"/>
+                                    <StackPanel Grid.Row="6" Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
                                         <CheckBox x:Name="ProgramCylinder1Coupling" Content="电缸1参与配合" IsChecked="True" Margin="0,3,12,3"/>
                                         <CheckBox x:Name="ProgramCylinder3Coupling" Content="电缸3参与配合" IsChecked="True" Margin="0,3" Visibility="Collapsed"/>
                                     </StackPanel>
-                                    <TextBlock Grid.Row="6" Text="前向速度 (mm/s)" VerticalAlignment="Center" Foreground="#475569" FontSize="12.5" Margin="0,3"/>
-                                    <TextBox x:Name="ProgramForwardVelocity" Grid.Row="6" Grid.Column="1" Text="20" Margin="0,3" Height="28"/>
-                                    <TextBlock Grid.Row="7" Text="前向加速度 (mm/s²)" VerticalAlignment="Center" Foreground="#475569" FontSize="12.5" Margin="0,3"/>
-                                    <TextBox x:Name="ProgramForwardAcceleration" Grid.Row="7" Grid.Column="1" Text="100" Margin="0,3" Height="28"/>
-                                    <TextBlock Grid.Row="8" Text="前向减速度 (mm/s²)" VerticalAlignment="Center" Foreground="#475569" FontSize="12.5" Margin="0,3"/>
-                                    <TextBox x:Name="ProgramForwardDeceleration" Grid.Row="8" Grid.Column="1" Text="100" Margin="0,3" Height="28"/>
-                                    <TextBlock Grid.Row="9" Text="前向Jerk (mm/s³)" VerticalAlignment="Center" Foreground="#475569" FontSize="12.5" Margin="0,3"/>
-                                    <TextBox x:Name="ProgramForwardJerk" Grid.Row="9" Grid.Column="1" Text="1000" Margin="0,3" Height="28"/>
-                                    <TextBlock Grid.Row="10" Text="回退速度 (mm/s)" VerticalAlignment="Center" Foreground="#475569" FontSize="12.5" Margin="0,3"/>
-                                    <TextBox x:Name="ProgramReturnVelocity" Grid.Row="10" Grid.Column="1" Text="20" Margin="0,3" Height="28"/>
-                                    <TextBlock Grid.Row="11" Text="回退加速度 (mm/s²)" VerticalAlignment="Center" Foreground="#475569" FontSize="12.5" Margin="0,3"/>
-                                    <TextBox x:Name="ProgramReturnAcceleration" Grid.Row="11" Grid.Column="1" Text="100" Margin="0,3" Height="28"/>
-                                    <TextBlock Grid.Row="12" Text="回退减速度 (mm/s²)" VerticalAlignment="Center" Foreground="#475569" FontSize="12.5" Margin="0,3"/>
-                                    <TextBox x:Name="ProgramReturnDeceleration" Grid.Row="12" Grid.Column="1" Text="100" Margin="0,3" Height="28"/>
-                                    <TextBlock Grid.Row="13" Text="回退Jerk (mm/s³)" VerticalAlignment="Center" Foreground="#475569" FontSize="12.5" Margin="0,3"/>
-                                    <TextBox x:Name="ProgramReturnJerk" Grid.Row="13" Grid.Column="1" Text="1000" Margin="0,3" Height="28"/>
-                                    <TextBlock Grid.Row="14" Text="释放后等待 (ms)" VerticalAlignment="Center" Foreground="#475569" FontSize="12.5" Margin="0,3"/>
-                                    <TextBox x:Name="ProgramReleaseWait" Grid.Row="14" Grid.Column="1" Text="150" Margin="0,3" Height="28"/>
-                                    <TextBlock Grid.Row="15" Text="重新夹紧后等待 (ms)" VerticalAlignment="Center" Foreground="#475569" FontSize="12.5" Margin="0,3"/>
-                                    <TextBox x:Name="ProgramReclampWait" Grid.Row="15" Grid.Column="1" Text="150" Margin="0,3" Height="28"/>
+                                    <TextBlock x:Name="ProgramCylinder2OpenLabel" Grid.Row="7" Text="电缸2开值 (WORD)" VerticalAlignment="Center" Foreground="#475569" FontSize="12.5" Margin="0,3"/>
+                                    <TextBox x:Name="ProgramCylinder2OpenValue" Grid.Row="7" Grid.Column="1" Text="0" Margin="0,3" Height="28"/>
+                                    <TextBlock x:Name="ProgramCylinder2CloseLabel" Grid.Row="8" Text="电缸2闭值 (WORD)" VerticalAlignment="Center" Foreground="#475569" FontSize="12.5" Margin="0,3"/>
+                                    <TextBox x:Name="ProgramCylinder2CloseValue" Grid.Row="8" Grid.Column="1" Text="600" Margin="0,3" Height="28"/>
+                                    <TextBlock x:Name="ProgramCylinder4OpenLabel" Grid.Row="7" Text="电缸4开值 (WORD)" Visibility="Collapsed" VerticalAlignment="Center" Foreground="#475569" FontSize="12.5" Margin="0,3"/>
+                                    <TextBox x:Name="ProgramCylinder4OpenValue" Grid.Row="7" Grid.Column="1" Text="0" Visibility="Collapsed" Margin="0,3" Height="28"/>
+                                    <TextBlock x:Name="ProgramCylinder4CloseLabel" Grid.Row="8" Text="电缸4闭值 (WORD)" Visibility="Collapsed" VerticalAlignment="Center" Foreground="#475569" FontSize="12.5" Margin="0,3"/>
+                                    <TextBox x:Name="ProgramCylinder4CloseValue" Grid.Row="8" Grid.Column="1" Text="500" Visibility="Collapsed" Margin="0,3" Height="28"/>
+                                    <TextBlock Grid.Row="9" Text="前向速度 (mm/s)" VerticalAlignment="Center" Foreground="#475569" FontSize="12.5" Margin="0,3"/>
+                                    <TextBox x:Name="ProgramForwardVelocity" Grid.Row="9" Grid.Column="1" Text="20" Margin="0,3" Height="28"/>
+                                    <TextBlock Grid.Row="10" Text="前向加速度 (mm/s²)" VerticalAlignment="Center" Foreground="#475569" FontSize="12.5" Margin="0,3"/>
+                                    <TextBox x:Name="ProgramForwardAcceleration" Grid.Row="10" Grid.Column="1" Text="100" Margin="0,3" Height="28"/>
+                                    <TextBlock Grid.Row="11" Text="前向减速度 (mm/s²)" VerticalAlignment="Center" Foreground="#475569" FontSize="12.5" Margin="0,3"/>
+                                    <TextBox x:Name="ProgramForwardDeceleration" Grid.Row="11" Grid.Column="1" Text="100" Margin="0,3" Height="28"/>
+                                    <TextBlock Grid.Row="12" Text="前向Jerk (mm/s³)" VerticalAlignment="Center" Foreground="#475569" FontSize="12.5" Margin="0,3"/>
+                                    <TextBox x:Name="ProgramForwardJerk" Grid.Row="12" Grid.Column="1" Text="1000" Margin="0,3" Height="28"/>
+                                    <TextBlock Grid.Row="13" Text="回退速度 (mm/s)" VerticalAlignment="Center" Foreground="#475569" FontSize="12.5" Margin="0,3"/>
+                                    <TextBox x:Name="ProgramReturnVelocity" Grid.Row="13" Grid.Column="1" Text="20" Margin="0,3" Height="28"/>
+                                    <TextBlock Grid.Row="14" Text="回退加速度 (mm/s²)" VerticalAlignment="Center" Foreground="#475569" FontSize="12.5" Margin="0,3"/>
+                                    <TextBox x:Name="ProgramReturnAcceleration" Grid.Row="14" Grid.Column="1" Text="100" Margin="0,3" Height="28"/>
+                                    <TextBlock Grid.Row="15" Text="回退减速度 (mm/s²)" VerticalAlignment="Center" Foreground="#475569" FontSize="12.5" Margin="0,3"/>
+                                    <TextBox x:Name="ProgramReturnDeceleration" Grid.Row="15" Grid.Column="1" Text="100" Margin="0,3" Height="28"/>
+                                    <TextBlock Grid.Row="16" Text="回退Jerk (mm/s³)" VerticalAlignment="Center" Foreground="#475569" FontSize="12.5" Margin="0,3"/>
+                                    <TextBox x:Name="ProgramReturnJerk" Grid.Row="16" Grid.Column="1" Text="1000" Margin="0,3" Height="28"/>
+                                    <TextBlock Grid.Row="17" Text="释放后等待 (ms)" VerticalAlignment="Center" Foreground="#475569" FontSize="12.5" Margin="0,3"/>
+                                    <TextBox x:Name="ProgramReleaseWait" Grid.Row="17" Grid.Column="1" Text="150" Margin="0,3" Height="28"/>
+                                    <TextBlock Grid.Row="18" Text="重新夹紧后等待 (ms)" VerticalAlignment="Center" Foreground="#475569" FontSize="12.5" Margin="0,3"/>
+                                    <TextBox x:Name="ProgramReclampWait" Grid.Row="18" Grid.Column="1" Text="150" Margin="0,3" Height="28"/>
                                 </Grid>
                                 <Border Background="#F0FDF4" BorderBrush="#BBF7D0" BorderThickness="1" CornerRadius="6" Padding="10,8" Margin="0,10,0,0">
                                     <TextBlock Text="PLC上电后自动自检；界面只等待自检完成，不发送自检请求。未勾选配合时，对应电缸1或电缸3保持正常输送值400。" TextWrapping="Wrap" Foreground="#166534" FontSize="12" LineHeight="16"/>

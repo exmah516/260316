@@ -116,20 +116,25 @@ std::string ExperimentStreamRecorder::sanitize_suffix(const std::string& value)
 	while (!out.empty() && out.front() == ' ') out.erase(out.begin());
 	while (!out.empty() && out.back() == ' ') out.pop_back();
 	if (out.empty()) out = "experiment";
-	if (out.size() > 64)
+	// 名称限制按UTF-8字符数而不是字节数计算。旧实现限制64字节，中文名称只能保留约21个字。
+	// 这里放宽为128个字符，并在截断时保持UTF-8边界完整。
+	constexpr std::size_t kMaxSuffixCodePoints = 128;
+	std::size_t code_points = 0;
+	std::size_t cut = out.size();
+	for (std::size_t i = 0; i < out.size();)
 	{
-		out.resize(64);
-		// 按UTF-8代码点截断，避免最后留下不完整的多字节序列导致u8path抛出异常。
-		while (!out.empty())
-		{
-			std::size_t start = out.size() - 1;
-			while (start > 0 && (static_cast<unsigned char>(out[start]) & 0xC0) == 0x80) --start;
-			const unsigned char lead = static_cast<unsigned char>(out[start]);
-			const std::size_t expected = lead < 0x80 ? 1 : lead < 0xE0 ? 2 : lead < 0xF0 ? 3 : lead < 0xF8 ? 4 : 1;
-			if (out.size() - start < expected) out.resize(start);
-			else break;
-		}
+		if (code_points == kMaxSuffixCodePoints) { cut = i; break; }
+		const unsigned char lead = static_cast<unsigned char>(out[i]);
+		std::size_t width = 1;
+		if ((lead & 0x80) == 0x00) width = 1;
+		else if ((lead & 0xE0) == 0xC0) width = 2;
+		else if ((lead & 0xF0) == 0xE0) width = 3;
+		else if ((lead & 0xF8) == 0xF0) width = 4;
+		if (i + width > out.size()) { cut = i; break; }
+		i += width;
+		++code_points;
 	}
+	if (cut < out.size()) out.resize(cut);
 	return out;
 }
 
@@ -278,6 +283,23 @@ void ExperimentStreamRecorder::set_program_coupling(bool cylinder1_enabled, bool
 {
 	program_cylinder1_coupling_enabled_ = cylinder1_enabled;
 	program_cylinder3_coupling_enabled_ = cylinder3_enabled;
+}
+
+void ExperimentStreamRecorder::set_program_cylinder_words(std::uint16_t cylinder2_open,
+	std::uint16_t cylinder2_close, std::uint16_t cylinder4_open, std::uint16_t cylinder4_close)
+{
+	program_cylinder2_open_word_ = cylinder2_open;
+	program_cylinder2_close_word_ = cylinder2_close;
+	program_cylinder4_open_word_ = cylinder4_open;
+	program_cylinder4_close_word_ = cylinder4_close;
+}
+
+void ExperimentStreamRecorder::set_program_guidewire_positions(double axis5_from_left_mm,
+	double axis6_prepare_from_left_mm, double axis6_trigger_from_left_mm)
+{
+	program_axis5_from_left_mm_ = axis5_from_left_mm;
+	program_axis6_prepare_from_left_mm_ = axis6_prepare_from_left_mm;
+	program_axis6_trigger_from_left_mm_ = axis6_trigger_from_left_mm;
 }
 
 bool ExperimentStreamRecorder::reconfigure_standalone(std::uint64_t field_mask, std::string& error)
@@ -586,7 +608,7 @@ bool ExperimentStreamRecorder::append_program(const std::vector<ProgrammedDelive
 			rows << s.sample_index << ',' << s.plc_time_us << ',' << static_cast<unsigned>(s.phase) << ',' << s.event_sequence << ',' << s.cycle_index << ','
 				<< s.axis1_pos << ',' << s.axis1_vel << ',' << s.axis1_acc << ',' << s.axis2_pos << ',' << s.axis2_vel << ',' << s.axis2_acc << ','
 				<< s.cylinder1 << ',' << s.cylinder2 << ','
-				<< s.fn2 << ',' << s.ft2 << ',' << zeroed(s.fn2, zero.value[2]) << ',' << zeroed(s.ft2, zero.value[3]); // <-- 改这里
+				<< s.fn2 << ',' << s.ft2 << ',' << zeroed(s.fn1, zero.value[0]) << ',' << zeroed(s.ft1, zero.value[1]);
 			if (cal.valid) append_side_columns(rows, cal.side1);
 			else rows << ",,,,,,,,,,,,";
 			rows << ',' << s.axis2_pos;
@@ -786,7 +808,17 @@ bool ExperimentStreamRecorder::write_json(const std::string& status, const std::
 	if (program_mode_)
 	{
 		out << "  \"cylinder1_coupling_enabled\": " << (program_cylinder1_coupling_enabled_ ? "true" : "false") << ",\n"
-			<< "  \"cylinder3_coupling_enabled\": " << (program_cylinder3_coupling_enabled_ ? "true" : "false") << ",\n";
+			<< "  \"cylinder3_coupling_enabled\": " << (program_cylinder3_coupling_enabled_ ? "true" : "false") << ",\n"
+			<< "  \"cylinder2_open_word\": " << program_cylinder2_open_word_ << ",\n"
+			<< "  \"cylinder2_close_word\": " << program_cylinder2_close_word_ << ",\n"
+			<< "  \"cylinder4_open_word\": " << program_cylinder4_open_word_ << ",\n"
+			<< "  \"cylinder4_close_word\": " << program_cylinder4_close_word_ << ",\n";
+		if (mode_name_ == "guidewire")
+		{
+			out << "  \"axis5_from_left_mm\": " << program_axis5_from_left_mm_ << ",\n"
+				<< "  \"axis6_prepare_from_left_mm\": " << program_axis6_prepare_from_left_mm_ << ",\n"
+				<< "  \"axis6_trigger_from_left_mm\": " << program_axis6_trigger_from_left_mm_ << ",\n";
+		}
 	}
 	out << "  \"directory_name\": \"" << json_escape(directory_name) << "\",\n"
 		<< "  \"local_start_time\": \"" << json_escape(start_time_local_) << "\",\n"

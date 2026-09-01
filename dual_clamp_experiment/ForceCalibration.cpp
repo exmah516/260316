@@ -29,8 +29,7 @@ Result calculate(short fn1, short ft1, short fn2, short ft2,
 	Result result;
 	if (!zero_valid) return result;
 	result.valid = true;
-	// 将 side1 的输入源直接重定向为 2 号传感器的读数、零点以及 2 号传感器原有的标定斜率
-	result.side1 = calculate_side(fn2, ft2, zero[2], zero[3], kFn2SensorSlopeNPerCount, kFt2SensorSlopeNPerCount);
+	result.side1 = calculate_side(fn1, ft1, zero[0], zero[1], kFn1SensorSlopeNPerCount, kFt1SensorSlopeNPerCount);
 	result.side2 = calculate_side(fn2, ft2, zero[2], zero[3], kFn2SensorSlopeNPerCount, kFt2SensorSlopeNPerCount);
 	return result;
 }

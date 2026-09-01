@@ -208,6 +208,7 @@ void DualClampController::tick(double dt_s)
 	{
 		// 实验记录随实验终态自动归档，不再要求上位机额外点击保存按钮。
 		// 只有PLC已经停止采样且最后一个分块已确认后才能关闭文件，避免终态切换与最后1ms采样竞态。
+		if (recorder_.active()) stream_ads_.stop_recording();
 		if (recorder_.active() && !stream_status_.recording &&
 			!stream_status_.block_ready[0] && !stream_status_.block_ready[1])
 		{
@@ -224,7 +225,8 @@ void DualClampController::tick(double dt_s)
 		}
 		started_ = false;
 	}
-	live_.recording = stream_status_.recording;
+	// 记录器已经完成归档后，立即向UI反映非活动状态，不沿用PLC上一周期的使能值。
+	live_.recording = recorder_.active() && stream_status_.recording;
 	live_.recording_overflow = stream_status_.overflow;
 	live_.recording_sample_count = stream_status_.total_count;
 	live_.recording_error_id = stream_status_.error_id;

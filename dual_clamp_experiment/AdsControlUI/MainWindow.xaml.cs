@@ -175,12 +175,21 @@ namespace DualClampExperimentUI
             ProgramAxis1TriggerPos.Visibility = catheterVisibility;
             Axis5PositionLabel.Visibility = guidewireVisibility;
             ProgramAxis5Pos.Visibility = guidewireVisibility;
-            Axis6CalculatedLabel.Visibility = guidewireVisibility;
-            ProgramAxis6CalculatedBorder.Visibility = guidewireVisibility;
-            ProgramAxis6Calculated.Text = (ParseOrDefault(ProgramAxis5Pos, 430.0) + 21.0).ToString("F3", CultureInfo.InvariantCulture);
+            Axis6PrepareLabel.Visibility = guidewireVisibility;
+            ProgramAxis6PreparePos.Visibility = guidewireVisibility;
+            Axis6TriggerLabel.Visibility = guidewireVisibility;
+            ProgramAxis6TriggerPos.Visibility = guidewireVisibility;
             ProgramAngleLabel.Text = guidewire ? "轴7角度 (deg)" : "轴2角度 (deg)";
             ProgramCylinder1Coupling.Visibility = guidewire ? Visibility.Collapsed : Visibility.Visible;
             ProgramCylinder3Coupling.Visibility = guidewire ? Visibility.Visible : Visibility.Collapsed;
+            ProgramCylinder2OpenLabel.Visibility = guidewire ? Visibility.Collapsed : Visibility.Visible;
+            ProgramCylinder2OpenValue.Visibility = guidewire ? Visibility.Collapsed : Visibility.Visible;
+            ProgramCylinder2CloseLabel.Visibility = guidewire ? Visibility.Collapsed : Visibility.Visible;
+            ProgramCylinder2CloseValue.Visibility = guidewire ? Visibility.Collapsed : Visibility.Visible;
+            ProgramCylinder4OpenLabel.Visibility = guidewire ? Visibility.Visible : Visibility.Collapsed;
+            ProgramCylinder4OpenValue.Visibility = guidewire ? Visibility.Visible : Visibility.Collapsed;
+            ProgramCylinder4CloseLabel.Visibility = guidewire ? Visibility.Visible : Visibility.Collapsed;
+            ProgramCylinder4CloseValue.Visibility = guidewire ? Visibility.Visible : Visibility.Collapsed;
 			ForceTitle.Text = guidewire ? "导丝侧轴向力 fn2 (N)" : legacy ? "实时轴向力 (N)" : "导管侧轴向力 fn1 (N)";
 			TorqueTitle.Text = guidewire ? "导丝侧力 ft2 (N)" : legacy ? "实时 ft 力 (N)" : "导管侧力 ft1 (N)";
 			Force1LegendText.Text = guidewire ? "fn2 (N)" : "fn1 (N)";
@@ -192,12 +201,6 @@ namespace DualClampExperimentUI
             Force2Legend.Visibility = legacy ? Visibility.Visible : Visibility.Collapsed;
             Torque2Legend.Visibility = legacy ? Visibility.Visible : Visibility.Collapsed;
             _force1.Clear(); _force2.Clear(); _torque1.Clear(); _torque2.Clear();
-        }
-
-        private void ProgramAxis5Pos_Changed(object sender, TextChangedEventArgs e)
-        {
-            if (_loaded && CurrentMode == "guidewire")
-                ProgramAxis6Calculated.Text = (ParseOrDefault(ProgramAxis5Pos, 430.0) + 21.0).ToString("F3", CultureInfo.InvariantCulture);
         }
 
         private async void Prepare_Click(object sender, RoutedEventArgs e)
@@ -216,12 +219,13 @@ namespace DualClampExperimentUI
                 string mode = CurrentMode;
                 string angleKey = mode == "guidewire" ? "axis7_angle" : "axis2_angle";
                 string positionFields = mode == "guidewire"
-                    ? "axis5_from_left=" + Number(ProgramAxis5Pos)
+                    ? "axis5_from_left=" + Number(ProgramAxis5Pos) + "|axis6_prepare_from_left=" + Number(ProgramAxis6PreparePos) + "|axis6_trigger_from_left=" + Number(ProgramAxis6TriggerPos)
                     : "axis1_prepare_from_left=" + Number(ProgramAxis1PreparePos) + "|axis1_trigger_from_left=" + Number(ProgramAxis1TriggerPos);
                 string commandText = string.Format(CultureInfo.InvariantCulture,
-                    "PROGRAM_PREPARE|mode={0}|{1}|{2}={3}|cycle_count={4}|final_forward_distance={5}|cylinder1_coupling={6}|cylinder3_coupling={7}|release_wait_ms={8}|reclamp_wait_ms={9}|forward_velocity={10}|forward_acceleration={11}|forward_deceleration={12}|forward_jerk={13}|return_velocity={14}|return_acceleration={15}|return_deceleration={16}|return_jerk={17}|record_name={18}",
+                    "PROGRAM_PREPARE|mode={0}|{1}|{2}={3}|cycle_count={4}|final_forward_distance={5}|cylinder1_coupling={6}|cylinder3_coupling={7}|cylinder2_open={8}|cylinder2_close={9}|cylinder4_open={10}|cylinder4_close={11}|release_wait_ms={12}|reclamp_wait_ms={13}|forward_velocity={14}|forward_acceleration={15}|forward_deceleration={16}|forward_jerk={17}|return_velocity={18}|return_acceleration={19}|return_deceleration={20}|return_jerk={21}|record_name={22}",
                     mode, positionFields, angleKey, Number(ProgramAngle), Int(ProgramCycleCount), Number(ProgramFinalDistance),
                     ProgramCylinder1Coupling.IsChecked == true ? 1 : 0, ProgramCylinder3Coupling.IsChecked == true ? 1 : 0,
+                    Word(ProgramCylinder2OpenValue), Word(ProgramCylinder2CloseValue), Word(ProgramCylinder4OpenValue), Word(ProgramCylinder4CloseValue),
                     Int(ProgramReleaseWait), Int(ProgramReclampWait), Number(ProgramForwardVelocity), Number(ProgramForwardAcceleration),
                     Number(ProgramForwardDeceleration), Number(ProgramForwardJerk), Number(ProgramReturnVelocity), Number(ProgramReturnAcceleration),
                     Number(ProgramReturnDeceleration), Number(ProgramReturnJerk), RecordSuffix());
@@ -448,6 +452,10 @@ namespace DualClampExperimentUI
             bool programCouplingEditable = ads && !_setupBusy && (phase == 0 || phase >= 10);
             ProgramCylinder1Coupling.IsEnabled = programCouplingEditable;
             ProgramCylinder3Coupling.IsEnabled = programCouplingEditable;
+            ProgramCylinder2OpenValue.IsEnabled = programCouplingEditable;
+            ProgramCylinder2CloseValue.IsEnabled = programCouplingEditable;
+            ProgramCylinder4OpenValue.IsEnabled = programCouplingEditable;
+            ProgramCylinder4CloseValue.IsEnabled = programCouplingEditable;
             Draw(ForceCanvas, Force1Line, _force1, Force2Line, _force2); Draw(TorqueCanvas, Torque1Line, _torque1, Torque2Line, _torque2);
         }
 
@@ -539,6 +547,12 @@ namespace DualClampExperimentUI
         private static double D(string value) => double.Parse(value, CultureInfo.InvariantCulture);
         private static string Number(TextBox box) => double.Parse(box.Text, CultureInfo.InvariantCulture).ToString(CultureInfo.InvariantCulture);
         private static string Int(TextBox box) => uint.Parse(box.Text, CultureInfo.InvariantCulture).ToString(CultureInfo.InvariantCulture);
+        private static string Word(TextBox box)
+        {
+            uint value = uint.Parse(box.Text, CultureInfo.InvariantCulture);
+            if (value > 65535) throw new ArgumentOutOfRangeException(box.Name, "电缸开闭值必须在0至65535之间");
+            return value.ToString(CultureInfo.InvariantCulture);
+        }
         private string RecordSuffix() => (RecordSuffixText.Text ?? "experiment").Replace("|", " ").Replace("\r", " ").Replace("\n", " ").Trim();
         private static bool phase_legacy_recording(string[] parts) => parts.Length > 1 && int.TryParse(parts[1], NumberStyles.Integer, CultureInfo.InvariantCulture, out int phase) && phase >= 3 && phase <= 9;
         private static double ParseOrDefault(TextBox box, double fallback) { double value; return double.TryParse(box.Text, NumberStyles.Float, CultureInfo.InvariantCulture, out value) ? value : fallback; }

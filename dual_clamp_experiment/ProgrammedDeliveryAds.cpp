@@ -176,11 +176,17 @@ bool ProgrammedDeliveryAds::write_config(const ProgrammedDeliveryConfig& config,
 	const bool setup = setup_request;
 	const bool cylinder1_coupling = config.cylinder1_coupling_enabled;
 	const bool cylinder3_coupling = config.cylinder3_coupling_enabled;
+	const std::uint16_t cylinder2_open = config.cylinder2_open_word;
+	const std::uint16_t cylinder2_close = config.cylinder2_close_word;
+	const std::uint16_t cylinder4_open = config.cylinder4_open_word;
+	const std::uint16_t cylinder4_close = config.cylinder4_close_word;
 	const char* symbols[] = {
 		"G.program_test_mode", "G.program_test_axis1_prepare_from_left_mm", "G.program_test_axis1_trigger_from_left_mm",
-		"G.program_test_axis5_from_left_mm", "G.program_test_axis2_angle_deg",
+		"G.program_test_axis5_from_left_mm", "G.program_test_axis6_prepare_from_left_mm", "G.program_test_axis6_trigger_from_left_mm", "G.program_test_axis2_angle_deg",
 		"G.program_test_axis7_angle_deg", "G.program_test_cycle_count", "G.program_test_final_forward_distance_mm",
 		"G.program_test_cylinder1_coupling_enable", "G.program_test_cylinder3_coupling_enable",
+		"G.program_test_cylinder2_open_word", "G.program_test_cylinder2_close_word",
+		"G.program_test_cylinder4_open_word", "G.program_test_cylinder4_close_word",
 		"G.program_test_release_wait_ms", "G.program_test_reclamp_wait_ms",
 		"G.program_test_forward_velocity", "G.program_test_forward_acceleration", "G.program_test_forward_deceleration",
 		"G.program_test_forward_jerk", "G.program_test_return_velocity", "G.program_test_return_acceleration",
@@ -188,16 +194,16 @@ bool ProgrammedDeliveryAds::write_config(const ProgrammedDeliveryConfig& config,
 	};
 	const unsigned long lengths[] = {
 		sizeof(mode), sizeof(config.axis1_prepare_from_left_mm), sizeof(config.axis1_trigger_from_left_mm),
-		sizeof(config.axis5_from_left_mm), sizeof(config.axis2_angle_deg), sizeof(config.axis7_angle_deg),
-		sizeof(config.cycle_count), sizeof(config.final_forward_distance_mm), sizeof(cylinder1_coupling), sizeof(cylinder3_coupling), sizeof(config.release_wait_ms), sizeof(config.reclamp_wait_ms), sizeof(config.forward_velocity_mm_s),
+		sizeof(config.axis5_from_left_mm), sizeof(config.axis6_prepare_from_left_mm), sizeof(config.axis6_trigger_from_left_mm), sizeof(config.axis2_angle_deg), sizeof(config.axis7_angle_deg),
+		sizeof(config.cycle_count), sizeof(config.final_forward_distance_mm), sizeof(cylinder1_coupling), sizeof(cylinder3_coupling), sizeof(cylinder2_open), sizeof(cylinder2_close), sizeof(cylinder4_open), sizeof(cylinder4_close), sizeof(config.release_wait_ms), sizeof(config.reclamp_wait_ms), sizeof(config.forward_velocity_mm_s),
 		sizeof(config.forward_acceleration_mm_s2), sizeof(config.forward_deceleration_mm_s2), sizeof(config.forward_jerk_mm_s3),
 		sizeof(config.return_velocity_mm_s), sizeof(config.return_acceleration_mm_s2), sizeof(config.return_deceleration_mm_s2),
 		sizeof(config.return_jerk_mm_s3), sizeof(setup)
 	};
 	const void* inputs[] = {
 		&mode, &config.axis1_prepare_from_left_mm, &config.axis1_trigger_from_left_mm,
-		&config.axis5_from_left_mm, &config.axis2_angle_deg, &config.axis7_angle_deg,
-		&config.cycle_count, &config.final_forward_distance_mm, &cylinder1_coupling, &cylinder3_coupling, &config.release_wait_ms, &config.reclamp_wait_ms, &config.forward_velocity_mm_s,
+		&config.axis5_from_left_mm, &config.axis6_prepare_from_left_mm, &config.axis6_trigger_from_left_mm, &config.axis2_angle_deg, &config.axis7_angle_deg,
+		&config.cycle_count, &config.final_forward_distance_mm, &cylinder1_coupling, &cylinder3_coupling, &cylinder2_open, &cylinder2_close, &cylinder4_open, &cylinder4_close, &config.release_wait_ms, &config.reclamp_wait_ms, &config.forward_velocity_mm_s,
 		&config.forward_acceleration_mm_s2, &config.forward_deceleration_mm_s2, &config.forward_jerk_mm_s3,
 		&config.return_velocity_mm_s, &config.return_acceleration_mm_s2, &config.return_deceleration_mm_s2,
 		&config.return_jerk_mm_s3, &setup

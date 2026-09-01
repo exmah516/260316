@@ -115,13 +115,17 @@ IF G.experiment_zero_busy THEN
     END_IF
 END_IF
 
-record_active := G.dual_clamp_sample_arm OR G.program_test_sample_arm OR G.standalone_record_enable;
-IF G.program_test_sample_arm THEN
+// 只允许当前PLC实验入口驱动记录。旧模式残留的sample_arm不能把程序递送记录延长到终态之后。
+// program_test_mode=0时使用旧双机构采样，1/2时只使用对应程序递送采样，3由独立记录控制。
+record_active := ((G.program_test_mode = 0) AND G.dual_clamp_sample_arm)
+    OR ((G.program_test_mode = 1 OR G.program_test_mode = 2) AND G.program_test_sample_arm)
+    OR G.standalone_record_enable;
+IF (G.program_test_mode = 1 OR G.program_test_mode = 2) AND G.program_test_sample_arm THEN
     source_mode := G.program_test_mode;
     phase_value := G.program_test_phase;
     cycle_value := G.program_test_cycle_index;
     event_value := G.program_test_event_sequence;
-ELSIF G.dual_clamp_sample_arm THEN
+ELSIF (G.program_test_mode = 0) AND G.dual_clamp_sample_arm THEN
     source_mode := 0;
     phase_value := UINT_TO_USINT(G.dual_clamp_phase);
     cycle_value := 0;

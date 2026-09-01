@@ -208,10 +208,10 @@ struct CylinderPreset
 	unsigned short cyl1_clamp = 00;
 	unsigned short cyl1_preclamp = 320;
 	unsigned short cyl2_open = 0;
-	unsigned short cyl2_clamp = 600;
+	unsigned short cyl2_clamp = 500;
 	unsigned short cyl2_preopen = 150;
 	unsigned short cyl2_preclamp = 400;
-	unsigned short cyl3_open = 250;
+	unsigned short cyl3_open = 400;
 	unsigned short cyl3_clamp = 50;
 	unsigned short cyl3_preclamp = 200;
 	unsigned short cyl4_open = 0;

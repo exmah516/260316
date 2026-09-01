@@ -34,12 +34,19 @@ struct ProgrammedDeliveryConfig
 	double axis1_prepare_from_left_mm = 23.0;
 	double axis1_trigger_from_left_mm = 3.0;
 	double axis5_from_left_mm = 430.0;
+	double axis6_prepare_from_left_mm = 451.0;
+	double axis6_trigger_from_left_mm = 431.0;
 	double axis2_angle_deg = 0.0;
 	double axis7_angle_deg = 0.0;
 	std::uint16_t cycle_count = 1;
 	double final_forward_distance_mm = 10.0;
 	bool cylinder1_coupling_enabled = true;
 	bool cylinder3_coupling_enabled = true;
+	// 运动端电缸的释放值和夹紧值：导管使用电缸2，导丝使用电缸4。
+	std::uint16_t cylinder2_open_word = 0;
+	std::uint16_t cylinder2_close_word = 600;
+	std::uint16_t cylinder4_open_word = 0;
+	std::uint16_t cylinder4_close_word = 500;
 	std::uint32_t release_wait_ms = 150;
 	std::uint32_t reclamp_wait_ms = 150;
 	double forward_velocity_mm_s = 20.0;
