@@ -111,7 +111,7 @@ namespace motion_sync
 		ctx.pos[1] = preserved_axis2_hold_rel;
 		ctx.pos[6] = *ctx.axis7_hold_rel;
 
-		get_average_handle_pose(*ctx.axis1_input_handle, samples, ctx.axis1_crawl->handle_ref, ctx.axis1_crawl->rot_ref);
+		if (!get_average_handle_pose(*ctx.axis1_input_handle, samples, ctx.axis1_crawl->handle_ref, ctx.axis1_crawl->rot_ref)) return false;
 		ctx.axis1_handle_filter->reset(ctx.axis1_crawl->handle_ref, ctx.axis1_crawl->rot_ref);
 		*ctx.axis1_prev_linear_filtered = ctx.axis1_handle_filter->axis0_filtered;
 		*ctx.axis1_prev_rot_filtered = ctx.axis1_handle_filter->axis1_filtered;
@@ -364,7 +364,7 @@ namespace motion_sync
 		ctx.pos[1] = *ctx.axis2_hold_rel;
 		ctx.pos[6] = preserved_axis7_hold_rel;
 
-		get_average_handle_pose(*ctx.axis6_input_handle, samples, ctx.axis6_crawl->handle_ref, ctx.axis6_crawl->rot_ref);
+		if (!get_average_handle_pose(*ctx.axis6_input_handle, samples, ctx.axis6_crawl->handle_ref, ctx.axis6_crawl->rot_ref)) return false;
 		ctx.axis6_handle_filter->reset(ctx.axis6_crawl->handle_ref, ctx.axis6_crawl->rot_ref);
 		*ctx.axis6_prev_linear_filtered = ctx.axis6_handle_filter->axis0_filtered;
 		*ctx.axis6_prev_rot_filtered = ctx.axis6_handle_filter->axis1_filtered;
@@ -443,14 +443,17 @@ namespace motion_sync
 			return false;
 		}
 
-		get_average_dual_pos(
+		if (!get_average_dual_pos(
 			*ctx.axis1_input_handle,
 			*ctx.axis6_input_handle,
 			samples,
 			ctx.axis1_crawl->handle_ref,
 			ctx.axis1_crawl->rot_ref,
 			ctx.axis6_crawl->handle_ref,
-			ctx.axis6_crawl->rot_ref);
+			ctx.axis6_crawl->rot_ref))
+		{
+			return false;
+		}
 		ctx.axis1_handle_filter->reset(ctx.axis1_crawl->handle_ref, ctx.axis1_crawl->rot_ref);
 		ctx.axis6_handle_filter->reset(ctx.axis6_crawl->handle_ref, ctx.axis6_crawl->rot_ref);
 		*ctx.axis1_prev_linear_filtered = ctx.axis1_handle_filter->axis0_filtered;

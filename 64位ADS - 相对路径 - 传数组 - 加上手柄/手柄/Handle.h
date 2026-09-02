@@ -31,6 +31,7 @@ public:
 	bool init(DWORD serial);
 	bool poll();
 
+	void clear_cache();
 	void close();
 
 	void setforce(double F, double N);

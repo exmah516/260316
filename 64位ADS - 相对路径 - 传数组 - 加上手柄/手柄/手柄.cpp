@@ -88,17 +88,33 @@ bool Handle::poll()
 	return true;
 }
 
+void Handle::clear_cache()
+{
+	objData.buttons2 = 0;
+	objData.encoders2[0] = 0;
+	objData.encoders2[1] = 0;
+	fVels2[0] = 0.0;
+	fVels2[1] = 0.0;
+	fJoints2[0] = 0.0;
+	fJoints2[1] = 0.0;
+	buttons2 = 0;
+	encoders2[0] = 0;
+	encoders2[1] = 0;
+}
+
 void Handle::close()
 {
 	// 幂等保护：重复关闭直接返回。
 	if (iID1 < 0)
 	{
+		clear_cache();
 		return;
 	}
 
-	// 先关闭当前设备力输出，再注销设备 ID。
+	// 先关闭当前设备力输出，再注销设备 ID 并清空状态缓存。
 	enableForces(false, iID1);
 	iID1 = -1;
+	clear_cache();
 
 	if (s_open_devices > 0)
 	{

@@ -18,7 +18,7 @@ namespace
 	constexpr std::uint32_t kMaxAcceptedPlcCycleSpan = 5;
 	constexpr std::uint32_t kMaxStalledPlcSnapshots = 3;
 	constexpr std::size_t kSnapshotQueueCapacity = 2048;
-	constexpr std::uint64_t kReconnectBackoffMs[] = { 250, 500, 1000, 2000 };
+	constexpr std::uint64_t kReconnectIntervalMs = 1000;
 	constexpr std::uint32_t kMaxRegistrationIdAttempts = 65536;
 
 	constexpr std::uint32_t kNotifySelfCheckDone = 1;
@@ -55,8 +55,11 @@ namespace
 		kWriteCylinder5Press,
 		kWriteAxis4Forward,
 		kWriteAxis4Reverse,
+		kWriteInjectorPush,
+		kWriteInjectorPull,
 		kWriteSmoothingBypass,
-		kWriteHostRecover
+		kWriteHostRecover,
+		kFastWriteHandleCount
 	};
 
 	struct NotificationTarget
@@ -130,6 +133,8 @@ namespace
 			lhs.cylinder5_press_req == rhs.cylinder5_press_req &&
 			lhs.axis4_forward_req == rhs.axis4_forward_req &&
 			lhs.axis4_reverse_req == rhs.axis4_reverse_req &&
+			std::equal(lhs.inject_push_req, lhs.inject_push_req + 2, rhs.inject_push_req) &&
+			std::equal(lhs.inject_pull_req, lhs.inject_pull_req + 2, rhs.inject_pull_req) &&
 			lhs.startup_smoothing_bypass == rhs.startup_smoothing_bypass;
 	}
 
@@ -198,6 +203,11 @@ bool AdsCommunicationService::start(const double* initial_init_pos, const double
 		std::copy(initial_init_pos, initial_init_pos + 7, init_pos_);
 		std::copy(initial_leftlimit, initial_leftlimit + 7, leftlimit_);
 		coordinate_cache_valid_ = true;
+	}
+	else
+	{
+		std::lock_guard<std::mutex> lock(coordinate_mutex_);
+		coordinate_cache_valid_ = false;
 	}
 	try
 	{
@@ -866,14 +876,9 @@ void AdsCommunicationService::run()
 				else
 				{
 					QueryPerformanceCounter(&now);
-					const std::size_t delay_index = (std::min)(
-						reconnect_backoff_index, _countof(kReconnectBackoffMs) - 1);
 					const std::int64_t delay_ticks = qpc_frequency_ *
-						static_cast<std::int64_t>(kReconnectBackoffMs[delay_index]) / 1000;
+						static_cast<std::int64_t>(kReconnectIntervalMs) / 1000;
 					next_reconnect_attempt_qpc = now.QuadPart + (std::max<std::int64_t>)(1, delay_ticks);
-					reconnect_backoff_index = (std::min)(
-						reconnect_backoff_index + 1,
-						_countof(kReconnectBackoffMs) - 1);
 				}
 			}
 			if (!connection_initialized)
@@ -1057,13 +1062,9 @@ void AdsCommunicationService::run()
 bool AdsCommunicationService::ensure_connection(bool reconnecting)
 {
 	// 服务只被动建立路由，禁止在后台把人工 STOP/故障 STOP 自动切回 RUN。
+	// 握手连接阶段使用 1000 ms 宽容超时
+	ads_.SetTimeout(1000);
 	if (!ads_.IsCommOpen() && !ads_.OpenCommInsideReadOnly() && !ads_.OpenCommReadOnly()) return false;
-	if (!ads_.SetTimeout(20))
-	{
-		clear_runtime_connection_state();
-		ads_.CloseComm();
-		return false;
-	}
 	unsigned short ads_state = ADSSTATE_INVALID;
 	unsigned short device_state = 0;
 	if (!ads_.ReadDeviceState(ads_state, device_state))
@@ -1080,6 +1081,13 @@ bool AdsCommunicationService::ensure_connection(bool reconnecting)
 		return false;
 	}
 	if (!initialize_connection())
+	{
+		clear_runtime_connection_state();
+		ads_.CloseComm();
+		return false;
+	}
+	// 握手成功后立即恢复 20 ms 运行期实时超时
+	if (!ads_.SetTimeout(20))
 	{
 		clear_runtime_connection_state();
 		ads_.CloseComm();
@@ -1319,9 +1327,17 @@ bool AdsCommunicationService::resolve_fast_handles()
 		AdsSymbol::cylinder5_press_req,
 		AdsSymbol::axis4_fwd_req,
 		AdsSymbol::axis4_rev_req,
+		AdsSymbol::inject_push_req,
+		AdsSymbol::inject_pull_req,
 		AdsSymbol::startup_smoothing_bypass,
 		AdsSymbol::host_recover_req
 	};
+	static_assert(
+		_countof(write_symbols) == kFastWriteHandleCount,
+		"快速写句柄符号表与索引枚举数量不一致");
+	static_assert(
+		_countof(write_symbols) == std::tuple_size<decltype(fast_write_handles_)>::value,
+		"快速写句柄符号表与句柄数组数量不一致");
 	for (std::size_t i = 0; i < fast_write_handles_.size(); ++i)
 	{
 		if (!required_handle(write_symbols[i], fast_write_handles_[i]))
@@ -1565,7 +1581,7 @@ bool AdsCommunicationService::write_output_cycle(bool& planned_return_processed)
 	}
 
 	++heartbeat_sequence_;
-	// 常规输出最多14项，双腿Prepare最多再增加12项。
+	// 常规输出最多16项，双腿Prepare最多再增加12项。
 	std::array<unsigned long, 32> handles{};
 	std::array<unsigned long, 32> lengths{};
 	std::array<const void*, 32> values{};
@@ -1608,6 +1624,8 @@ bool AdsCommunicationService::write_output_cycle(bool& planned_return_processed)
 		append(fast_write_handles_[kWriteCylinder5Press], sizeof(output.cylinder5_press_req), &output.cylinder5_press_req);
 		append(fast_write_handles_[kWriteAxis4Forward], sizeof(output.axis4_forward_req), &output.axis4_forward_req);
 		append(fast_write_handles_[kWriteAxis4Reverse], sizeof(output.axis4_reverse_req), &output.axis4_reverse_req);
+		append(fast_write_handles_[kWriteInjectorPush], sizeof(output.inject_push_req), output.inject_push_req);
+		append(fast_write_handles_[kWriteInjectorPull], sizeof(output.inject_pull_req), output.inject_pull_req);
 		append(fast_write_handles_[kWriteSmoothingBypass], sizeof(output.startup_smoothing_bypass), &output.startup_smoothing_bypass);
 	}
 

@@ -1,6 +1,7 @@
 #include <ADSComm1.h>
 
 #include <algorithm>
+#include <cstdint>
 #include <limits>
 #include <new>
 
@@ -9,6 +10,87 @@ namespace
 	constexpr unsigned long kDefaultAdsTimeoutMs = 20UL;
 	constexpr size_t kInitialSumItemCapacity = 32U;
 	constexpr size_t kInitialSumByteCapacity = 4096U;
+	constexpr size_t kMaxAdsSymbolNameLength = 1024U;
+
+	bool is_readable_address(const void* address, size_t bytes)
+	{
+		if (address == nullptr || bytes == 0) return false;
+		const std::uintptr_t begin = reinterpret_cast<std::uintptr_t>(address);
+		if (begin > (std::numeric_limits<std::uintptr_t>::max)() - (bytes - 1U))
+		{
+			return false;
+		}
+
+		const std::uintptr_t end = begin + bytes;
+		std::uintptr_t cursor = begin;
+		while (cursor < end)
+		{
+			MEMORY_BASIC_INFORMATION memory_info{};
+			if (VirtualQuery(
+				reinterpret_cast<const void*>(cursor),
+				&memory_info,
+				sizeof(memory_info)) != sizeof(memory_info))
+			{
+				return false;
+			}
+			const DWORD protection = memory_info.Protect & 0xFFU;
+			if (memory_info.State != MEM_COMMIT ||
+				protection == PAGE_NOACCESS ||
+				(memory_info.Protect & PAGE_GUARD) != 0 ||
+				(protection != PAGE_READONLY &&
+					protection != PAGE_READWRITE &&
+					protection != PAGE_WRITECOPY &&
+					protection != PAGE_EXECUTE_READ &&
+					protection != PAGE_EXECUTE_READWRITE &&
+					protection != PAGE_EXECUTE_WRITECOPY))
+			{
+				return false;
+			}
+
+			const std::uintptr_t region_begin =
+				reinterpret_cast<std::uintptr_t>(memory_info.BaseAddress);
+			if (memory_info.RegionSize == 0 ||
+				region_begin > (std::numeric_limits<std::uintptr_t>::max)() - memory_info.RegionSize)
+			{
+				return false;
+			}
+			const std::uintptr_t region_end = region_begin + memory_info.RegionSize;
+			if (region_end <= cursor) return false;
+			cursor = (std::min)(region_end, end);
+		}
+		return true;
+	}
+
+	bool copy_ads_symbol_name(const char* paraName, std::string& key)
+	{
+		key.clear();
+		if (paraName == nullptr) return false;
+		const std::uintptr_t base = reinterpret_cast<std::uintptr_t>(paraName);
+		for (size_t length = 0; length < kMaxAdsSymbolNameLength; ++length)
+		{
+			if (base > (std::numeric_limits<std::uintptr_t>::max)() - length)
+			{
+				return false;
+			}
+			const auto address = reinterpret_cast<const char*>(base + length);
+			if (!is_readable_address(address, 1U)) return false;
+			if (*address == '\0')
+			{
+				if (length == 0) return false;
+				key.assign(paraName, length);
+				return true;
+			}
+		}
+		return false;
+	}
+
+	bool is_valid_ads_symbol_pointer(const char* paraName)
+	{
+		// 允许旧调用传入字面量/静态字符串，同时拒绝明显的悬空小地址和全1哨兵值。
+		const std::uintptr_t address = reinterpret_cast<std::uintptr_t>(paraName);
+		return address >= 0x10000U &&
+			address != (std::numeric_limits<std::uintptr_t>::max)();
+	}
 }
 
 // ADS 通讯封装说明：
@@ -513,13 +595,18 @@ unsigned long CADSComm::ADSGetAddr(const char* paraName)
 	{
 		return 0;
 	}
-	if (paraName == nullptr || paraName[0] == '\0')
+
+	std::string key;
+	if (!is_valid_ads_symbol_pointer(paraName) || !copy_ads_symbol_name(paraName, key))
 	{
-		sprintf_s(m_lastError, sizeof(m_lastError), "Error: Empty symbol name\n");
+		sprintf_s(
+			m_lastError,
+			sizeof(m_lastError),
+			"Error: Invalid ADS symbol pointer (%p)\n",
+			static_cast<const void*>(paraName));
 		return 0;
 	}
 
-	const std::string key(paraName);
 	const auto existing = m_symbolHandles.find(key);
 	if (existing != m_symbolHandles.end())
 	{
@@ -547,7 +634,7 @@ unsigned long CADSComm::ADSGetAddr(const char* paraName)
 	}
 	if (cbReturn != sizeof(handle) || handle == 0)
 	{
-		sprintf_s(m_lastError, sizeof(m_lastError), "Error: ADSGetAddr invalid handle response for %s\n", paraName);
+		sprintf_s(m_lastError, sizeof(m_lastError), "Error: ADSGetAddr invalid handle response for %s\n", key.c_str());
 		return 0;
 	}
 
@@ -585,7 +672,7 @@ bool CADSComm::ADSAddNotification(
 	{
 		return false;
 	}
-	if (paraName == nullptr || paraName[0] == '\0' || length == 0 || callback == nullptr || notificationHandle == nullptr)
+	if (paraName == nullptr || length == 0 || callback == nullptr || notificationHandle == nullptr)
 	{
 		sprintf_s(m_lastError, sizeof(m_lastError), "Error: ADSAddNotification invalid arguments\n");
 		return false;

@@ -82,7 +82,7 @@ namespace guidewire_mode_ctrl
 
 		*ctx.axis7_hold_rel = preserved_axis7_hold_rel;
 
-		get_average_handle_pose(*ctx.axis6_input_handle, 20, ctx.axis6_crawl->handle_ref, ctx.axis6_crawl->rot_ref);
+		if (!get_average_handle_pose(*ctx.axis6_input_handle, 20, ctx.axis6_crawl->handle_ref, ctx.axis6_crawl->rot_ref)) return false;
 		ctx.axis6_handle_filter->reset(ctx.axis6_crawl->handle_ref, ctx.axis6_crawl->rot_ref);
 		*ctx.axis6_prev_linear_filtered = ctx.axis6_handle_filter->axis0_filtered;
 		*ctx.axis6_prev_rot_filtered = ctx.axis6_handle_filter->axis1_filtered;
@@ -138,10 +138,6 @@ namespace guidewire_mode_ctrl
 
 	bool exit_guidewire_mode_to_normal(AppContext& ctx)
 	{
-		*ctx.guidewire_mode = GuidewireMode::None;
-		*ctx.axis6_window_locked = false;
-		*ctx.axis6_coop_ff_inited = false;
-		*ctx.axis6_coop_prev_axis1_cmd_abs = 0.0;
 		// 退出导丝时用当前实际值刷新旋转保持位，避免沿用陈旧 hold 导致 axis2 偶发回零。
 		if (!plc_io::read_plc_state(ctx))
 		{
@@ -151,7 +147,16 @@ namespace guidewire_mode_ctrl
 		*ctx.axis7_hold_rel = ctx.plc_act_pos[6];
 		*ctx.axis1_reverse_switch_guard_active = false;
 		*ctx.axis6_reverse_switch_guard_active = false;
-		return motion_sync::sync_axis1(ctx, 20);
+		if (!motion_sync::sync_axis1(ctx, 20))
+		{
+			// 重同步失败时保留原导丝模式和窗口状态，由调用方决定是否回滚物理请求。
+			return false;
+		}
+		*ctx.guidewire_mode = GuidewireMode::None;
+		*ctx.axis6_window_locked = false;
+		*ctx.axis6_coop_ff_inited = false;
+		*ctx.axis6_coop_prev_axis1_cmd_abs = 0.0;
+		return true;
 	}
 }
 

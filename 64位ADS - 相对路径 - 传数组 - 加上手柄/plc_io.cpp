@@ -40,6 +40,8 @@ namespace AdsSymbol
 	const char* startup_smoothing_bypass = "G.startup_smoothing_bypass";
 	const char* axis4_fwd_req = "G.axis4_fwd_req";
 	const char* axis4_rev_req = "G.axis4_rev_req";
+	const char* inject_push_req = "G.inject_push_req";
+	const char* inject_pull_req = "G.inject_pull_req";
 	const char* axis4_manual_busy = "G.axis4_manual_busy";
 	const char* axis4_manual_done = "G.axis4_manual_done";
 	const char* axis4_manual_error = "G.axis4_manual_error";

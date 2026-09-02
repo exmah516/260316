@@ -167,7 +167,15 @@ namespace AdsControlUI
                 OnPropertyChanged(nameof(EstopHold));
                 OnPropertyChanged(nameof(CooperativeModeEnabled));
             }
-            if (prev.ff_enabled != state.ff_enabled) OnPropertyChanged(nameof(FfEnabled));
+			if (prev.ff_enabled != state.ff_enabled) OnPropertyChanged(nameof(FfEnabled));
+			if (prev.force_feedback_hold_enabled != state.force_feedback_hold_enabled ||
+				prev.force_feedback_hold_active != state.force_feedback_hold_active ||
+				prev.force_feedback_hold_owner != state.force_feedback_hold_owner)
+			{
+				OnPropertyChanged(nameof(ForceFeedbackHoldEnabled));
+				OnPropertyChanged(nameof(ForceFeedbackHoldActive));
+				OnPropertyChanged(nameof(ForceFeedbackHoldStatusText));
+			}
             if (prev.cal_zeroed != state.cal_zeroed) OnPropertyChanged(nameof(CalZeroed));
             if (prev.gravity_comp_enabled != state.gravity_comp_enabled) OnPropertyChanged(nameof(GravityCompEnabled));
             if (prev.startup_waiting != state.startup_waiting) OnPropertyChanged(nameof(StartupWaiting));
@@ -323,6 +331,10 @@ namespace AdsControlUI
             OnPropertyChanged(nameof(FreezeActive));
             OnPropertyChanged(nameof(EstopHold));
             OnPropertyChanged(nameof(FfEnabled));
+			OnPropertyChanged(nameof(PhysicalButtonNoticeText));
+			OnPropertyChanged(nameof(ForceFeedbackHoldEnabled));
+			OnPropertyChanged(nameof(ForceFeedbackHoldActive));
+			OnPropertyChanged(nameof(ForceFeedbackHoldStatusText));
             OnPropertyChanged(nameof(CalZeroed));
             OnPropertyChanged(nameof(Force582F));
             OnPropertyChanged(nameof(Force582N));
@@ -628,12 +640,13 @@ namespace AdsControlUI
 		{
 			switch (eventCode)
 			{
-				case 1: return "物理按钮触发：导管递送";
-				case 2: return "物理按钮触发：导管撤出";
-				case 3: return "物理按钮触发：导丝递送";
-				case 4: return "物理按钮触发：导丝撤出";
+				case 1: return "SN 587 B7：已选择导管递送";
+				case 2: return "SN 587 B7：已选择导管撤出";
+				case 3: return "SN 582 B7：已选择导丝递送";
+				case 4: return "SN 582 B7：已选择导丝撤出";
 				case 5: return "物理按钮触发：协同递送";
 				case 6: return "物理按钮触发：协同撤出";
+				case 7: return "物理按钮冲突：两只手柄同时按下 B7，本次模式切换已忽略";
 				default: return "物理按钮触发";
 			}
 		}
@@ -711,6 +724,23 @@ namespace AdsControlUI
         public bool FreezeActive => _state.freeze_active;
         public bool EstopHold => _state.estop_hold;
         public bool FfEnabled => _state.ff_enabled;
+        public bool ForceFeedbackHoldEnabled => _state.force_feedback_hold_enabled;
+        public bool ForceFeedbackHoldActive => _state.force_feedback_hold_active;
+        public string ForceFeedbackHoldStatusText
+        {
+            get
+            {
+                if (!ForceFeedbackHoldEnabled) return "力反馈-保持：关闭（自动换手闭爪后保持 200 ms）";
+                if (!ForceFeedbackHoldActive) return "力反馈-保持：已启用";
+                switch (_state.force_feedback_hold_owner)
+                {
+                    case 1: return "力反馈-保持：导管保持中（200 ms）";
+                    case 2: return "力反馈-保持：导丝保持中（200 ms）";
+                    case 3: return "力反馈-保持：双侧保持中（200 ms）";
+                    default: return "力反馈-保持：保持中";
+                }
+            }
+        }
         public bool CalZeroed => _state.cal_zeroed;
         public double Force582F => _state.force_582_f;
         public double Force582N => _state.force_582_n;
@@ -955,6 +985,9 @@ namespace AdsControlUI
         public void ToggleForceFeedback() =>
             _client.SendCommand(VisCommandType.ToggleForceFeedback);
 
+        public void SetForceFeedbackHold(bool enabled) =>
+            _client.SendCommand(VisCommandType.SetForceFeedbackHold, enabled ? 1 : 0);
+
         public void SetGravityCompensation(bool enabled) =>
             _client.SendCommand(VisCommandType.SetGravityCompensation, enabled ? 1 : 0);
 
@@ -1105,9 +1138,20 @@ namespace AdsControlUI
 			_client.SendCommand(VisCommandType.SetAxis4ManualJog, direction);
 		}
 
+		public void SetYValveOpen(bool open) =>
+			_client.SendCommand(VisCommandType.SetYValveOpen, open ? 1 : 0);
+
+		public void SetInjectorManualJog(int injectorNumber, int direction)
+		{
+			if (injectorNumber < 1 || injectorNumber > 2 || direction < -1 || direction > 1) return;
+			_client.SendCommand(VisCommandType.SetInjectorManualJog, injectorNumber, direction);
+		}
+
 		public void StopManualJogs()
 		{
 			SetAxis4ManualJog(0);
+			SetInjectorManualJog(1, 0);
+			SetInjectorManualJog(2, 0);
 			for (int axis = 1; axis <= 5; ++axis)
 				SetArmAxisJog(axis, 0);
 		}

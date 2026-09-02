@@ -17,6 +17,8 @@ namespace AdsControlUI
 		private int _activeArmJogAxis;
 		private int _activeArmJogDirection;
 		private int _activeAxis4JogDirection;
+		private int _activeInjectorJogAxis;
+		private int _activeInjectorJogDirection;
 
         public MainWindow()
         {
@@ -164,6 +166,52 @@ namespace AdsControlUI
 			StopAxis4Jog(sender);
 		}
 
+		private void InjectorJogButton_PreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+		{
+			if (!(sender is Button button) ||
+				!TryGetAxisNumber(button.Tag, out int injectorNumber) ||
+				injectorNumber > 2 ||
+				!TryGetJogDirection(button.CommandParameter, out int direction))
+			{
+				return;
+			}
+
+			if (_activeInjectorJogAxis != 0 && _activeInjectorJogAxis != injectorNumber)
+				_vm.SetInjectorManualJog(_activeInjectorJogAxis, 0);
+			_activeInjectorJogAxis = injectorNumber;
+			_activeInjectorJogDirection = direction;
+			_vm.SetInjectorManualJog(injectorNumber, direction);
+			button.CaptureMouse();
+		}
+
+		private void InjectorJogButton_PreviewMouseLeftButtonUp(object sender, MouseButtonEventArgs e)
+		{
+			StopInjectorJog(sender);
+		}
+
+		private void InjectorJogButton_LostMouseCapture(object sender, MouseEventArgs e)
+		{
+			StopInjectorJog(sender);
+		}
+
+		private void StopInjectorJog(object sender)
+		{
+			if (!(sender is Button button) ||
+				!TryGetAxisNumber(button.Tag, out int injectorNumber) || injectorNumber > 2)
+				return;
+			if (_activeInjectorJogAxis == injectorNumber)
+			{
+				_activeInjectorJogAxis = 0;
+				_activeInjectorJogDirection = 0;
+			}
+			_vm.SetInjectorManualJog(injectorNumber, 0);
+			if (button.IsMouseCaptured)
+				button.ReleaseMouseCapture();
+		}
+
+		private void YValveOpen_Click(object sender, RoutedEventArgs e) => _vm.SetYValveOpen(true);
+		private void YValveClose_Click(object sender, RoutedEventArgs e) => _vm.SetYValveOpen(false);
+
 		private void StopAxis4Jog(object sender)
 		{
 			if (!(sender is Button button)) return;
@@ -188,6 +236,8 @@ namespace AdsControlUI
 			_activeArmJogAxis = 0;
 			_activeArmJogDirection = 0;
 			_activeAxis4JogDirection = 0;
+			_activeInjectorJogAxis = 0;
+			_activeInjectorJogDirection = 0;
 			_vm.StopManualJogs();
 		}
 
@@ -197,6 +247,8 @@ namespace AdsControlUI
 				_vm.SetArmAxisJog(_activeArmJogAxis, _activeArmJogDirection);
 			if (_activeAxis4JogDirection != 0)
 				_vm.SetAxis4ManualJog(_activeAxis4JogDirection);
+			if (_activeInjectorJogAxis != 0 && _activeInjectorJogDirection != 0)
+				_vm.SetInjectorManualJog(_activeInjectorJogAxis, _activeInjectorJogDirection);
 		}
 
 		private void ApplyArmJogParameters_Click(object sender, RoutedEventArgs e)
@@ -242,6 +294,8 @@ namespace AdsControlUI
 
         private void Zero_Click(object sender, RoutedEventArgs e) => _vm.ZeroForceSensor();
         private void FfToggle_Click(object sender, RoutedEventArgs e) => _vm.ToggleForceFeedback();
+        private void ForceFeedbackHold_Click(object sender, RoutedEventArgs e) =>
+            _vm.SetForceFeedbackHold(ForceFeedbackHoldCheckBox.IsChecked == true);
         private void GravityComp_Click(object sender, RoutedEventArgs e) => _vm.SetGravityCompensation(GravityCompCheckBox.IsChecked == true);
         private void TrackingCompensation_Click(object sender, RoutedEventArgs e)
         {

@@ -58,6 +58,8 @@ struct AdsOutputCommand
 	bool cylinder5_press_req = false;
 	bool axis4_forward_req = false;
 	bool axis4_reverse_req = false;
+	bool inject_push_req[2] = {};
+	bool inject_pull_req[2] = {};
 	bool startup_smoothing_bypass = false;
 	// 仅供C++内部统一交接：bit0清axis1 Req，bit1清axis6 Req。
 	std::uint8_t planned_return_clear_mask = 0;
@@ -333,7 +335,7 @@ private:
 	bool use_direct_nc_position_ = true;
 	std::array<unsigned long, 17> fast_direct_read_handles_{};
 	std::array<unsigned long, 11> fast_fallback_read_handles_{};
-	std::array<unsigned long, 14> fast_write_handles_{};
+	std::array<unsigned long, 16> fast_write_handles_{};
 	// 每行依次为 Req、TargetAbs、Velocity、Acc、Dec、Jerk；第0/1行为axis1/axis6。
 	std::array<std::array<unsigned long, kPlannedReturnFieldsPerAxis>, 2>
 		planned_return_write_handles_{};
