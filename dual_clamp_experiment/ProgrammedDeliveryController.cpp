@@ -157,9 +157,10 @@ bool ProgrammedDeliveryController::validate_config(const ProgrammedDeliveryConfi
 			return false;
 		}
 	}
-	if (config.release_wait_ms > 60000 || config.reclamp_wait_ms > 60000)
+	if (config.release_wait_ms > 60000 || config.reclamp_wait_ms > 60000 ||
+		config.release_lead_ms > 60000 || config.reclamp_lead_ms > 60000)
 	{
-		error = "电缸等待时间必须在0至60000 ms之间";
+		error = "电缸等待和错开时间必须在0至60000 ms之间";
 		return false;
 	}
 	if (!finite_positive(config.forward_velocity_mm_s) || !finite_positive(config.forward_acceleration_mm_s2) ||
@@ -645,6 +646,8 @@ bool ProgrammedDeliveryController::write_metadata(const std::string& directory, 
 		<< "  \"final_forward_distance_mm\": " << config_.final_forward_distance_mm << ",\n"
 		<< "  \"release_wait_ms\": " << config_.release_wait_ms << ",\n"
 		<< "  \"reclamp_wait_ms\": " << config_.reclamp_wait_ms << ",\n"
+		<< "  \"release_lead_ms\": " << config_.release_lead_ms << ",\n"
+		<< "  \"reclamp_lead_ms\": " << config_.reclamp_lead_ms << ",\n"
 		<< "  \"forward_velocity_mm_s\": " << config_.forward_velocity_mm_s << ",\n"
 		<< "  \"forward_acceleration_mm_s2\": " << config_.forward_acceleration_mm_s2 << ",\n"
 		<< "  \"forward_deceleration_mm_s2\": " << config_.forward_deceleration_mm_s2 << ",\n"

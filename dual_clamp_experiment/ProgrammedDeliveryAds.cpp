@@ -188,6 +188,7 @@ bool ProgrammedDeliveryAds::write_config(const ProgrammedDeliveryConfig& config,
 		"G.program_test_cylinder2_open_word", "G.program_test_cylinder2_close_word",
 		"G.program_test_cylinder4_open_word", "G.program_test_cylinder4_close_word",
 		"G.program_test_release_wait_ms", "G.program_test_reclamp_wait_ms",
+		"G.program_test_release_lead_ms", "G.program_test_reclamp_lead_ms",
 		"G.program_test_forward_velocity", "G.program_test_forward_acceleration", "G.program_test_forward_deceleration",
 		"G.program_test_forward_jerk", "G.program_test_return_velocity", "G.program_test_return_acceleration",
 		"G.program_test_return_deceleration", "G.program_test_return_jerk", "G.program_test_setup_req"
@@ -195,7 +196,7 @@ bool ProgrammedDeliveryAds::write_config(const ProgrammedDeliveryConfig& config,
 	const unsigned long lengths[] = {
 		sizeof(mode), sizeof(config.axis1_prepare_from_left_mm), sizeof(config.axis1_trigger_from_left_mm),
 		sizeof(config.axis5_from_left_mm), sizeof(config.axis6_prepare_from_left_mm), sizeof(config.axis6_trigger_from_left_mm), sizeof(config.axis2_angle_deg), sizeof(config.axis7_angle_deg),
-		sizeof(config.cycle_count), sizeof(config.final_forward_distance_mm), sizeof(cylinder1_coupling), sizeof(cylinder3_coupling), sizeof(cylinder2_open), sizeof(cylinder2_close), sizeof(cylinder4_open), sizeof(cylinder4_close), sizeof(config.release_wait_ms), sizeof(config.reclamp_wait_ms), sizeof(config.forward_velocity_mm_s),
+		sizeof(config.cycle_count), sizeof(config.final_forward_distance_mm), sizeof(cylinder1_coupling), sizeof(cylinder3_coupling), sizeof(cylinder2_open), sizeof(cylinder2_close), sizeof(cylinder4_open), sizeof(cylinder4_close), sizeof(config.release_wait_ms), sizeof(config.reclamp_wait_ms), sizeof(config.release_lead_ms), sizeof(config.reclamp_lead_ms), sizeof(config.forward_velocity_mm_s),
 		sizeof(config.forward_acceleration_mm_s2), sizeof(config.forward_deceleration_mm_s2), sizeof(config.forward_jerk_mm_s3),
 		sizeof(config.return_velocity_mm_s), sizeof(config.return_acceleration_mm_s2), sizeof(config.return_deceleration_mm_s2),
 		sizeof(config.return_jerk_mm_s3), sizeof(setup)
@@ -203,7 +204,7 @@ bool ProgrammedDeliveryAds::write_config(const ProgrammedDeliveryConfig& config,
 	const void* inputs[] = {
 		&mode, &config.axis1_prepare_from_left_mm, &config.axis1_trigger_from_left_mm,
 		&config.axis5_from_left_mm, &config.axis6_prepare_from_left_mm, &config.axis6_trigger_from_left_mm, &config.axis2_angle_deg, &config.axis7_angle_deg,
-		&config.cycle_count, &config.final_forward_distance_mm, &cylinder1_coupling, &cylinder3_coupling, &cylinder2_open, &cylinder2_close, &cylinder4_open, &cylinder4_close, &config.release_wait_ms, &config.reclamp_wait_ms, &config.forward_velocity_mm_s,
+		&config.cycle_count, &config.final_forward_distance_mm, &cylinder1_coupling, &cylinder3_coupling, &cylinder2_open, &cylinder2_close, &cylinder4_open, &cylinder4_close, &config.release_wait_ms, &config.reclamp_wait_ms, &config.release_lead_ms, &config.reclamp_lead_ms, &config.forward_velocity_mm_s,
 		&config.forward_acceleration_mm_s2, &config.forward_deceleration_mm_s2, &config.forward_jerk_mm_s3,
 		&config.return_velocity_mm_s, &config.return_acceleration_mm_s2, &config.return_deceleration_mm_s2,
 		&config.return_jerk_mm_s3, &setup

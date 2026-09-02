@@ -20,8 +20,14 @@ VAR
     baseline_timer : TON;
     release_timer : TON;
     reclamp_timer : TON;
+    release_lead_timer : TON;
+    reclamp_lead_timer : TON;
     setup_release_wait_active : BOOL := FALSE;
     initial_reclamp_wait_active : BOOL := FALSE;
+    release_lead_active : BOOL := FALSE;
+    release_wait_active : BOOL := FALSE;
+    reclamp_lead_active : BOOL := FALSE;
+    reclamp_wait_active : BOOL := FALSE;
     forward_exec : BOOL := FALSE;
     return_exec : BOOL := FALSE;
     final_exec : BOOL := FALSE;
@@ -51,6 +57,12 @@ IF NOT initialized THEN
     G.program_test_sample_arm := FALSE;
     G.program_test_event_sequence := 0;
     last_phase := 0;
+    setup_release_wait_active := FALSE;
+    initial_reclamp_wait_active := FALSE;
+    release_lead_active := FALSE;
+    release_wait_active := FALSE;
+    reclamp_lead_active := FALSE;
+    reclamp_wait_active := FALSE;
     forward_exec := FALSE;
     return_exec := FALSE;
     final_exec := FALSE;
@@ -80,6 +92,12 @@ IF G.program_test_mode <> active_mode THEN
         G.program_test_error_phase := 0;
         G.program_test_error_target_abs := 0.0;
         G.program_test_sample_arm := FALSE;
+        setup_release_wait_active := FALSE;
+        initial_reclamp_wait_active := FALSE;
+        release_lead_active := FALSE;
+        release_wait_active := FALSE;
+        reclamp_lead_active := FALSE;
+        reclamp_wait_active := FALSE;
         forward_exec := FALSE;
         return_exec := FALSE;
         final_exec := FALSE;
@@ -128,9 +146,13 @@ END_FOR
 
 G.estop_hold_req := FALSE;
 baseline_timer(IN := state = 3, PT := T#1S);
-release_timer(IN := ((state = 1) AND setup_release_wait_active) OR (state = 5),
+release_lead_timer(IN := (state = 5) AND release_lead_active,
+    PT := UDINT_TO_TIME(G.program_test_release_lead_ms));
+release_timer(IN := ((state = 1) AND setup_release_wait_active) OR ((state = 5) AND release_wait_active),
     PT := UDINT_TO_TIME(G.program_test_release_wait_ms));
-reclamp_timer(IN := ((state = 2) AND initial_reclamp_wait_active) OR (state = 7),
+reclamp_lead_timer(IN := (state = 7) AND reclamp_lead_active,
+    PT := UDINT_TO_TIME(G.program_test_reclamp_lead_ms));
+reclamp_timer(IN := ((state = 2) AND initial_reclamp_wait_active) OR ((state = 7) AND reclamp_wait_active),
     PT := UDINT_TO_TIME(G.program_test_reclamp_wait_ms));
 
 IF G.program_test_abort_req THEN
@@ -152,6 +174,10 @@ IF ((state = 10) OR (state = 11) OR (state = 12)) AND G.program_test_setup_req T
     G.program_test_error_target_abs := 0.0;
     setup_release_wait_active := FALSE;
     initial_reclamp_wait_active := FALSE;
+    release_lead_active := FALSE;
+    release_wait_active := FALSE;
+    reclamp_lead_active := FALSE;
+    reclamp_wait_active := FALSE;
     G.program_test_sample_arm := FALSE;
     forward_exec := FALSE;
     return_exec := FALSE;
@@ -176,6 +202,12 @@ CASE state OF
         G.program_test_error_axis := 0;
         G.program_test_error_phase := 0;
         G.program_test_error_target_abs := 0.0;
+        setup_release_wait_active := FALSE;
+        initial_reclamp_wait_active := FALSE;
+        release_lead_active := FALSE;
+        release_wait_active := FALSE;
+        reclamp_lead_active := FALSE;
+        reclamp_wait_active := FALSE;
         IF NOT G.self_check_done THEN
             G.program_test_status_error_id := 16#7201;
             state := 12;
@@ -210,7 +242,8 @@ CASE state OF
               (G.program_test_return_deceleration <= 0.0) OR (G.program_test_return_jerk <= 0.0) THEN
             G.program_test_status_error_id := 16#7205;
             state := 12;
-        ELSIF (G.program_test_release_wait_ms > 60000) OR (G.program_test_reclamp_wait_ms > 60000) THEN
+        ELSIF (G.program_test_release_wait_ms > 60000) OR (G.program_test_reclamp_wait_ms > 60000) OR
+              (G.program_test_release_lead_ms > 60000) OR (G.program_test_reclamp_lead_ms > 60000) THEN
             G.program_test_status_error_id := 16#7207;
             state := 12;
         ELSE
@@ -229,7 +262,7 @@ CASE state OF
                 G.program_test_trigger_target_abs := G.leftlimit[1] + G.program_test_axis1_trigger_from_left_mm;
                 G.program_test_return_target_abs := G.program_test_target_axis1_abs;
                 G.program_test_final_target_abs := G.program_test_target_axis1_abs - G.program_test_final_forward_distance_mm;
-                // 准备移动时运动端释放；固定端电缸1可选是否同步进入配合释放状态。
+                // 准备移动时沿用原流程进入释放状态；触发后的释放错开在状态5处理。
                 G.cylinder1_value := 400;
                 IF G.program_test_cylinder1_coupling_enable THEN
                     G.cylinder1_value := 0;
@@ -242,7 +275,7 @@ CASE state OF
                 G.program_test_trigger_target_abs := G.leftlimit[6] + G.program_test_axis6_trigger_from_left_mm;
                 G.program_test_return_target_abs := G.program_test_target_axis6_abs;
                 G.program_test_final_target_abs := G.program_test_target_axis6_abs - G.program_test_final_forward_distance_mm;
-                // 固定端电缸3可选是否同步进入配合释放状态。
+                // 准备移动时沿用原流程进入释放状态；触发后的释放错开在状态5处理。
                 G.cylinder3_value := 400;
                 IF G.program_test_cylinder3_coupling_enable THEN
                     G.cylinder3_value := 50;
@@ -339,18 +372,33 @@ CASE state OF
     G.program_test_sample_arm := TRUE;
     IF fb_forward_move.Done THEN
         forward_exec := FALSE;
+        // 每次到达触发位置时都重新初始化释放阶段，避免上一周期的TON完成状态残留。
+        release_lead_active := FALSE;
+        release_wait_active := FALSE;
         IF active_mode = 1 THEN
             G.cylinder1_value := 400;
             IF G.program_test_cylinder1_coupling_enable THEN
                 G.cylinder1_value := 0;
+                release_lead_active := G.program_test_release_lead_ms > 0;
+            ELSE
+                release_lead_active := FALSE;
             END_IF
-            G.cylinder2_value := G.program_test_cylinder2_open_word;
+            release_wait_active := NOT release_lead_active;
+            IF release_wait_active THEN
+                G.cylinder2_value := G.program_test_cylinder2_open_word;
+            END_IF
         ELSE
             G.cylinder3_value := 400;
             IF G.program_test_cylinder3_coupling_enable THEN
                 G.cylinder3_value := 50;
+                release_lead_active := G.program_test_release_lead_ms > 0;
+            ELSE
+                release_lead_active := FALSE;
             END_IF
-            G.cylinder4_value := G.program_test_cylinder4_open_word;
+            release_wait_active := NOT release_lead_active;
+            IF release_wait_active THEN
+                G.cylinder4_value := G.program_test_cylinder4_open_word;
+            END_IF
         END_IF
         G.program_test_wait_action := 1;
         state := 5;
@@ -370,7 +418,19 @@ CASE state OF
     G.program_test_phase := 5;
     G.program_test_sample_arm := TRUE;
     G.program_test_wait_action := 1;
-    IF release_timer.Q THEN
+    IF release_lead_active THEN
+        // 先释放配合电缸，等待设定时间后再释放运动端电缸。
+        IF (G.program_test_release_lead_ms = 0) OR release_lead_timer.Q THEN
+            release_lead_active := FALSE;
+            release_wait_active := TRUE;
+            IF active_mode = 1 THEN
+                G.cylinder2_value := G.program_test_cylinder2_open_word;
+            ELSE
+                G.cylinder4_value := G.program_test_cylinder4_open_word;
+            END_IF
+        END_IF
+    ELSIF release_wait_active AND release_timer.Q THEN
+        release_wait_active := FALSE;
         G.program_test_wait_action := 0;
         return_exec := TRUE;
         state := 6;
@@ -382,12 +442,31 @@ CASE state OF
     G.program_test_sample_arm := TRUE;
     IF fb_return_move.Done THEN
         return_exec := FALSE;
+        // 每次回退到位时都重新初始化重新夹紧阶段，避免上一周期的TON完成状态残留。
+        reclamp_lead_active := FALSE;
+        reclamp_wait_active := FALSE;
         IF active_mode = 1 THEN
-            G.cylinder1_value := 400;
             G.cylinder2_value := G.program_test_cylinder2_close_word;
+            IF G.program_test_cylinder1_coupling_enable THEN
+                reclamp_lead_active := G.program_test_reclamp_lead_ms > 0;
+            ELSE
+                reclamp_lead_active := FALSE;
+            END_IF
+            reclamp_wait_active := NOT reclamp_lead_active;
+            IF reclamp_wait_active THEN
+                G.cylinder1_value := 400;
+            END_IF
         ELSE
-            G.cylinder3_value := 400;
             G.cylinder4_value := G.program_test_cylinder4_close_word;
+            IF G.program_test_cylinder3_coupling_enable THEN
+                reclamp_lead_active := G.program_test_reclamp_lead_ms > 0;
+            ELSE
+                reclamp_lead_active := FALSE;
+            END_IF
+            reclamp_wait_active := NOT reclamp_lead_active;
+            IF reclamp_wait_active THEN
+                G.cylinder3_value := 400;
+            END_IF
         END_IF
         state := 7;
     ELSIF fb_return_move.Error OR fb_return_move.CommandAborted THEN
@@ -406,7 +485,19 @@ CASE state OF
     G.program_test_phase := 7;
     G.program_test_sample_arm := TRUE;
     G.program_test_wait_action := 2;
-    IF reclamp_timer.Q THEN
+    IF reclamp_lead_active THEN
+        // 先夹紧运动端电缸，等待设定时间后再夹紧配合电缸。
+        IF (G.program_test_reclamp_lead_ms = 0) OR reclamp_lead_timer.Q THEN
+            reclamp_lead_active := FALSE;
+            reclamp_wait_active := TRUE;
+            IF active_mode = 1 THEN
+                G.cylinder1_value := 400;
+            ELSE
+                G.cylinder3_value := 400;
+            END_IF
+        END_IF
+    ELSIF reclamp_wait_active AND reclamp_timer.Q THEN
+        reclamp_wait_active := FALSE;
         G.program_test_wait_action := 0;
         state := 8;
     END_IF
@@ -459,6 +550,10 @@ CASE state OF
     G.program_test_wait_action := 0;
     setup_release_wait_active := FALSE;
     initial_reclamp_wait_active := FALSE;
+    release_lead_active := FALSE;
+    release_wait_active := FALSE;
+    reclamp_lead_active := FALSE;
+    reclamp_wait_active := FALSE;
     G.program_test_setup_busy := FALSE;
     forward_exec := FALSE;
     return_exec := FALSE;
@@ -482,6 +577,10 @@ CASE state OF
     G.program_test_wait_action := 0;
     setup_release_wait_active := FALSE;
     initial_reclamp_wait_active := FALSE;
+    release_lead_active := FALSE;
+    release_wait_active := FALSE;
+    reclamp_lead_active := FALSE;
+    reclamp_wait_active := FALSE;
     G.program_test_setup_busy := FALSE;
     forward_exec := FALSE;
     return_exec := FALSE;
@@ -490,6 +589,13 @@ CASE state OF
         setup_exec[i] := FALSE;
         stop_exec[i] := active_axis[i];
     END_FOR
+    IF active_mode = 1 THEN
+        G.cylinder1_value := 400;
+        G.cylinder2_value := G.program_test_cylinder2_close_word;
+    ELSIF active_mode = 2 THEN
+        G.cylinder3_value := 400;
+        G.cylinder4_value := G.program_test_cylinder4_close_word;
+    END_IF
 END_CASE
 
 // 阶段变化先更新事件号，再写入本周期样本。

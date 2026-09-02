@@ -2181,7 +2181,9 @@ External Setpoint Generation:
 						<OtherSettings AllowMotionCmdToSlave="true"/>
 					</AxisPara>
 					<Encoder Name="Enc" EncType="19">
-						<EncPara ScaleFactorNumerator="65.94" ScaleFactorDenominator="425164.8" MaxCount="#xffffffff"/>
+						<EncPara ScaleFactorNumerator="65.94" ScaleFactorDenominator="425164.8" EncMode="3" MaxCount="#xffffffff">
+							<ParameterChanged>10</ParameterChanged>
+						</EncPara>
 						<Vars VarGrpType="1">
 							<Name>Inputs</Name>
 							<Var>
@@ -2322,7 +2324,7 @@ External Setpoint Generation:
 						<OtherSettings AllowMotionCmdToSlave="true"/>
 					</AxisPara>
 					<Encoder Name="Enc" EncType="19">
-						<EncPara ScaleFactorNumerator="360" ScaleFactorDenominator="563609" MaxCount="#xffffffff"/>
+						<EncPara ScaleFactorNumerator="360" ScaleFactorDenominator="792985.6" MaxCount="#xffffffff"/>
 						<Vars VarGrpType="1">
 							<Name>Inputs</Name>
 							<Var>
@@ -2887,7 +2889,9 @@ External Setpoint Generation:
 						<OtherSettings AllowMotionCmdToSlave="true"/>
 					</AxisPara>
 					<Encoder Name="Enc" EncType="19">
-						<EncPara ScaleFactorNumerator="65.94" ScaleFactorDenominator="425164.8" Inverse="true" MaxCount="#xffffffff"/>
+						<EncPara ScaleFactorNumerator="65.94" ScaleFactorDenominator="425164.8" Inverse="true" EncMode="3" MaxCount="#xffffffff">
+							<ParameterChanged>10</ParameterChanged>
+						</EncPara>
 						<Vars VarGrpType="1">
 							<Name>Inputs</Name>
 							<Var>
@@ -3592,7 +3596,7 @@ External Setpoint Generation:
 		</Motion>
 		<Plc>
 			<Project GUID="{DD2ED881-765C-44ED-90B1-8AE0D6051941}" Name="Untitled2" PrjFilePath="Untitled2\Untitled2.plcproj" TmcFilePath="Untitled2\Untitled2.tmc" ReloadTmc="true" AmsPort="851" FileArchiveSettings="#x000e" SymbolicMapping="true">
-				<Instance Id="#x08502000" TcSmClass="TComPlcObjDef" KeepUnrestoredLinks="2" TmcPath="Untitled2\Untitled2.tmc" TmcHash="{8D736AF8-446D-D8F1-8B14-1A36E54BC134}">
+				<Instance Id="#x08502000" TcSmClass="TComPlcObjDef" KeepUnrestoredLinks="2" TmcPath="Untitled2\Untitled2.tmc" TmcHash="{77925C93-4856-7425-7572-A7C8DB085DB4}">
 					<Name>Untitled2 Instance</Name>
 					<CLSID ClassFactory="TcPlc30">{08500001-0000-0000-F000-000000000064}</CLSID>
 					<Vars VarGrpType="1">
@@ -3646,15 +3650,15 @@ External Setpoint Generation:
 							<Type GUID="{25521FAA-EA5F-4C7F-8864-BBCCDACD2E98}" Namespace="MC">NCTOPLC_AXIS_REF</Type>
 						</Var>
 						<Var>
+							<Name>G.axis2_sync_axis.NcToPlc</Name>
+							<Type GUID="{25521FAA-EA5F-4C7F-8864-BBCCDACD2E98}" Namespace="MC">NCTOPLC_AXIS_REF</Type>
+						</Var>
+						<Var>
 							<Name>G.inject_axis[1].NcToPlc</Name>
 							<Type GUID="{25521FAA-EA5F-4C7F-8864-BBCCDACD2E98}" Namespace="MC">NCTOPLC_AXIS_REF</Type>
 						</Var>
 						<Var>
 							<Name>G.inject_axis[2].NcToPlc</Name>
-							<Type GUID="{25521FAA-EA5F-4C7F-8864-BBCCDACD2E98}" Namespace="MC">NCTOPLC_AXIS_REF</Type>
-						</Var>
-						<Var>
-							<Name>G.axis2_sync_axis.NcToPlc</Name>
 							<Type GUID="{25521FAA-EA5F-4C7F-8864-BBCCDACD2E98}" Namespace="MC">NCTOPLC_AXIS_REF</Type>
 						</Var>
 						<Var>
@@ -3725,14 +3729,8 @@ External Setpoint Generation:
 							<Type GUID="{96B75FEB-2D84-43BE-A3EC-D9A681F27D52}" Namespace="MC">PLCTONC_AXIS_REF</Type>
 						</Var>
 						<Var>
-							<Name>G.cylinder1_value</Name>
-							<Comment><![CDATA[ 电缸1控制值 (安装在夹持机构上)]]></Comment>
-							<Type>WORD</Type>
-						</Var>
-						<Var>
-							<Name>G.cylinder2_value</Name>
-							<Comment><![CDATA[ 电缸2控制值 (安装在轴1机构上)]]></Comment>
-							<Type>WORD</Type>
+							<Name>G.axis2_sync_axis.PlcToNc</Name>
+							<Type GUID="{96B75FEB-2D84-43BE-A3EC-D9A681F27D52}" Namespace="MC">PLCTONC_AXIS_REF</Type>
 						</Var>
 						<Var>
 							<Name>G.inject_axis[1].PlcToNc</Name>
@@ -3743,8 +3741,14 @@ External Setpoint Generation:
 							<Type GUID="{96B75FEB-2D84-43BE-A3EC-D9A681F27D52}" Namespace="MC">PLCTONC_AXIS_REF</Type>
 						</Var>
 						<Var>
-							<Name>G.axis2_sync_axis.PlcToNc</Name>
-							<Type GUID="{96B75FEB-2D84-43BE-A3EC-D9A681F27D52}" Namespace="MC">PLCTONC_AXIS_REF</Type>
+							<Name>G.cylinder1_value</Name>
+							<Comment><![CDATA[ 电缸1控制值 (安装在夹持机构上)]]></Comment>
+							<Type>WORD</Type>
+						</Var>
+						<Var>
+							<Name>G.cylinder2_value</Name>
+							<Comment><![CDATA[ 电缸2控制值 (安装在轴1机构上)]]></Comment>
+							<Type>WORD</Type>
 						</Var>
 						<Var>
 							<Name>G.cylinder3_value</Name>
@@ -3960,7 +3964,7 @@ External Setpoint Generation:
 					<EtherCAT SlaveType="2" PdiType="#x0480" MboxDataLinkLayer="true" StateMBoxPolling="true" CycleMBoxPollingTime="0" CoeType="15" EoeType="1" FoeType="1" VendorId="#x000001a3" ProductCode="#x01313932" RevisionNo="#x4130324b" InfoDataAddr="true" InfoDataSoeDS401="true" InfoDataDcTimes="true" PortPhys="17" MaxSlotCount="256" MaxSlotGroupCount="1" SlotPdoIncrement="1" SlotIndexIncrement="16" Type="Micro 4804 MZ-CAT-STO" Desc="Micro 4804 MZ-CAT-STO " PortABoxInfo="#x01000001">
 						<SyncMan>001080002600010001000000000000008000001026010000</SyncMan>
 						<SyncMan>001480002200010002000000000000008000001422010000</SyncMan>
-						<SyncMan>001806006400010003000000000000000600001864010000</SyncMan>
+						<SyncMan>001819006400010003000000000000000600001864010000</SyncMan>
 						<SyncMan>001c10002000010004000000000000001000001c20010000</SyncMan>
 						<Fmmu>0000000000000000001800020100000001000000000000000000000000000000</Fmmu>
 						<Fmmu>0000000000000000001c00010100000002000000000000000000000000000000</Fmmu>
@@ -4007,7 +4011,7 @@ External Setpoint Generation:
 								<Type>DINT</Type>
 							</Entry>
 						</Pdo>
-						<Pdo Name="Receive PDO 2 mapping parameters" Index="#x1601" InOut="1" Flags="#x0000">
+						<Pdo Name="Receive PDO 2 mapping parameters" Index="#x1601" InOut="1" Flags="#x0000" SyncMan="2">
 							<Entry Name="Digital outputs - Physical outputs" Index="#x60fe" Sub="#x01">
 								<Type>UDINT</Type>
 							</Entry>
@@ -4015,7 +4019,7 @@ External Setpoint Generation:
 								<Type>UDINT</Type>
 							</Entry>
 						</Pdo>
-						<Pdo Name="Receive PDO 3 mapping parameters" Index="#x1602" InOut="1" Flags="#x0000">
+						<Pdo Name="Receive PDO 3 mapping parameters" Index="#x1602" InOut="1" Flags="#x0000" SyncMan="2">
 							<Entry Name="Modes of operation" Index="#x6060">
 								<Type>SINT</Type>
 							</Entry>
@@ -4023,7 +4027,7 @@ External Setpoint Generation:
 								<Type>INT</Type>
 							</Entry>
 						</Pdo>
-						<Pdo Name="Receive PDO 4 mapping parameters" Index="#x1603" InOut="1" Flags="#x0000">
+						<Pdo Name="Receive PDO 4 mapping parameters" Index="#x1603" InOut="1" Flags="#x0000" SyncMan="2">
 							<Entry Name="Profile velocity" Index="#x6081">
 								<Type>DINT</Type>
 							</Entry>
@@ -7339,6 +7343,7 @@ External Setpoint Generation:
 				<Link VarA="Drive^Outputs^Out^nCtrl1" VarB="Receive PDO 1 mapping parameters^Controlword"/>
 				<Link VarA="Drive^Outputs^Out^nCtrl2" VarB="Receive PDO 1 mapping parameters^Controlword" Size="8" OffsB="8"/>
 				<Link VarA="Drive^Outputs^Out^nDataOut1" VarB="Receive PDO 1 mapping parameters^Target position"/>
+				<Link VarA="Drive^Outputs^Out^nDataOut4[0]" VarB="Receive PDO 3 mapping parameters^Target torque"/>
 				<Link VarA="Enc^Inputs^In^nDataIn1" VarB="Transmit PDO 1 mapping parameters^Position actual value"/>
 				<Link VarA="Enc^Inputs^In^nDcInputTime" VarB="InfoData^DcInputShift"/>
 				<Link VarA="Enc^Inputs^In^nState4" VarB="WcState^InputToggle" Size="1" OffsA="1"/>

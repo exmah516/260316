@@ -222,13 +222,13 @@ namespace DualClampExperimentUI
                     ? "axis5_from_left=" + Number(ProgramAxis5Pos) + "|axis6_prepare_from_left=" + Number(ProgramAxis6PreparePos) + "|axis6_trigger_from_left=" + Number(ProgramAxis6TriggerPos)
                     : "axis1_prepare_from_left=" + Number(ProgramAxis1PreparePos) + "|axis1_trigger_from_left=" + Number(ProgramAxis1TriggerPos);
                 string commandText = string.Format(CultureInfo.InvariantCulture,
-                    "PROGRAM_PREPARE|mode={0}|{1}|{2}={3}|cycle_count={4}|final_forward_distance={5}|cylinder1_coupling={6}|cylinder3_coupling={7}|cylinder2_open={8}|cylinder2_close={9}|cylinder4_open={10}|cylinder4_close={11}|release_wait_ms={12}|reclamp_wait_ms={13}|forward_velocity={14}|forward_acceleration={15}|forward_deceleration={16}|forward_jerk={17}|return_velocity={18}|return_acceleration={19}|return_deceleration={20}|return_jerk={21}|record_name={22}",
+                    "PROGRAM_PREPARE|mode={0}|{1}|{2}={3}|cycle_count={4}|final_forward_distance={5}|cylinder1_coupling={6}|cylinder3_coupling={7}|cylinder2_open={8}|cylinder2_close={9}|cylinder4_open={10}|cylinder4_close={11}|release_wait_ms={12}|reclamp_wait_ms={13}|forward_velocity={14}|forward_acceleration={15}|forward_deceleration={16}|forward_jerk={17}|return_velocity={18}|return_acceleration={19}|return_deceleration={20}|return_jerk={21}|release_lead_ms={22}|reclamp_lead_ms={23}|record_name={24}",
                     mode, positionFields, angleKey, Number(ProgramAngle), Int(ProgramCycleCount), Number(ProgramFinalDistance),
                     ProgramCylinder1Coupling.IsChecked == true ? 1 : 0, ProgramCylinder3Coupling.IsChecked == true ? 1 : 0,
                     Word(ProgramCylinder2OpenValue), Word(ProgramCylinder2CloseValue), Word(ProgramCylinder4OpenValue), Word(ProgramCylinder4CloseValue),
                     Int(ProgramReleaseWait), Int(ProgramReclampWait), Number(ProgramForwardVelocity), Number(ProgramForwardAcceleration),
                     Number(ProgramForwardDeceleration), Number(ProgramForwardJerk), Number(ProgramReturnVelocity), Number(ProgramReturnAcceleration),
-                    Number(ProgramReturnDeceleration), Number(ProgramReturnJerk), RecordSuffix());
+                    Number(ProgramReturnDeceleration), Number(ProgramReturnJerk), Int(ProgramReleaseLead), Int(ProgramReclampLead), RecordSuffix());
                 await SendAsync(commandText);
             }
             catch (Exception ex) { ErrorText.Text = "准备定位参数无效：" + ex.Message; }
@@ -456,6 +456,10 @@ namespace DualClampExperimentUI
             ProgramCylinder2CloseValue.IsEnabled = programCouplingEditable;
             ProgramCylinder4OpenValue.IsEnabled = programCouplingEditable;
             ProgramCylinder4CloseValue.IsEnabled = programCouplingEditable;
+            ProgramReleaseLead.IsEnabled = programCouplingEditable;
+            ProgramReclampLead.IsEnabled = programCouplingEditable;
+            ProgramReleaseWait.IsEnabled = programCouplingEditable;
+            ProgramReclampWait.IsEnabled = programCouplingEditable;
             Draw(ForceCanvas, Force1Line, _force1, Force2Line, _force2); Draw(TorqueCanvas, Torque1Line, _torque1, Torque2Line, _torque2);
         }
 

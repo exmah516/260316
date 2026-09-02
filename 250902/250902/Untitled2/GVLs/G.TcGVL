@@ -212,6 +212,9 @@ VAR_GLOBAL
 	program_test_cylinder4_close_word : WORD := 500;
 	program_test_release_wait_ms : UDINT := 150;
 	program_test_reclamp_wait_ms : UDINT := 150;
+	// 触发回退和回退到位时，配合电缸相对于运动端电缸的错开时间。
+	program_test_release_lead_ms : UDINT := 50;
+	program_test_reclamp_lead_ms : UDINT := 50;
 	program_test_forward_velocity : LREAL := 20.0;
 	program_test_forward_acceleration : LREAL := 100.0;
 	program_test_forward_deceleration : LREAL := 100.0;
