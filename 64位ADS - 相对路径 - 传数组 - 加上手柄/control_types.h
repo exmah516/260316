@@ -100,9 +100,9 @@ struct ControlConfig
 	unsigned char btn_b7 = 0x80;
 
 	// 基于左限位参考的爬行窗口。
-	double axis1_window_left_from_left_mm = 3.0;
-	double axis1_window_right_from_left_mm = 18.0;
-	double axis6_window_size_mm = 20.0;
+	double axis1_window_left_from_left_mm = 8.0;
+	double axis1_window_right_from_left_mm = 28.0;
+	double axis6_window_size_mm = 25.0;
 	// 轴6窗口以轴5当前位置为基准，左边界至少领先轴5该距离。
 	double axis6_window_min_gap_from_axis5_mm = 1.0;
 	// 协同模式双边换手目标分别从近端/远端窗口向内缩该距离。
@@ -185,11 +185,11 @@ struct ControlConfig
 	double startup_loading_axis6_from_left_mm = 580.0;
 	double startup_loading_pose_tolerance_mm = 2.0;
 	// 标准装卸启动的中间移动目标。
-	double startup_axis1_ready_from_left_mm = 20.0;
+	double startup_axis1_ready_from_left_mm = 28.0;
 	double startup_axis5_ready_from_left_mm = startup_loading_axis3_from_left_mm + 10.0; ;
 	// 未经 UI 覆盖时采用的最终启动目标。
-	double startup_final_axis1_default_from_left_mm = 20.0;
-	double startup_final_axis3_default_from_left_mm = 635.0;
+	double startup_final_axis1_default_from_left_mm = 28.0;
+	double startup_final_axis3_default_from_left_mm = 635.0; 
 	double startup_final_axis5_default_from_left_mm = 640.0;
 	double startup_final_axis6_default_from_left_mm = 640.0;
 	double startup_rot_arrive_tol_deg = 0.2;

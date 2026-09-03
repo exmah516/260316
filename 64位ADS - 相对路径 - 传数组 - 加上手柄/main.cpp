@@ -469,6 +469,53 @@ int main(int argc, char* argv[])
 	auto consume_startup_loading_ready = [&]() -> bool { return startup_sequence::consume_startup_loading_ready(ctx); };
 	auto restore_startup_v_limit = [&]() -> bool { return startup_sequence::restore_startup_v_limit(ctx); };
 	auto prompt_startup_mode = [&]() { startup_sequence::prompt_startup_mode(ctx); };
+	bool emergency_retract_active = false;
+	double emergency_retract_axis1_hold_rel = 0.0;
+	double emergency_retract_axis2_hold_rel = 0.0;
+	double emergency_retract_axis7_hold_rel = 0.0;
+	double emergency_retract_v_limit_backup[7] = {};
+	bool emergency_retract_v_limit_scaled = false;
+	auto apply_emergency_retract_v_limit = [&]() -> bool
+	{
+		if (startup.v_limit_scaled && !restore_startup_v_limit())
+		{
+			return false;
+		}
+		if (!plc_io::read_v_limit(ctx))
+		{
+			return false;
+		}
+
+		copy_positions(plc_v_limit, emergency_retract_v_limit_backup, 7);
+		double scaled_v_limit[7] = {};
+		copy_positions(plc_v_limit, scaled_v_limit, 7);
+		double common_v_limit = plc_v_limit[0];
+		if (plc_v_limit[2] < common_v_limit) common_v_limit = plc_v_limit[2];
+		if (plc_v_limit[4] < common_v_limit) common_v_limit = plc_v_limit[4];
+		if (plc_v_limit[5] < common_v_limit) common_v_limit = plc_v_limit[5];
+		scaled_v_limit[2] = common_v_limit * cfg.startup_motion_speed_scale;
+		scaled_v_limit[4] = common_v_limit * cfg.startup_motion_speed_scale;
+		scaled_v_limit[5] = common_v_limit * cfg.startup_motion_speed_scale;
+		if (!plc_io::write_v_limit(ctx, scaled_v_limit))
+		{
+			return false;
+		}
+		emergency_retract_v_limit_scaled = true;
+		return true;
+	};
+	auto restore_emergency_retract_v_limit = [&]() -> bool
+	{
+		if (!emergency_retract_v_limit_scaled)
+		{
+			return true;
+		}
+		if (!plc_io::write_v_limit(ctx, emergency_retract_v_limit_backup))
+		{
+			return false;
+		}
+		emergency_retract_v_limit_scaled = false;
+		return true;
+	};
 	// 递送只接受手柄“推”产生的负轴向增量，撤出只接受“拉”产生的正轴向增量。
 	// 被拒绝的增量仍会在循环末尾刷新采样基准，因此不会积压到后续控制拍。
 	auto gate_linear_increment_for_mode = [](double increment_mm, bool reverse_mode) -> double
@@ -1671,6 +1718,7 @@ int main(int argc, char* argv[])
 			!spacing_recovery.active() &&
 			!spacing_recovery.requested &&
 			!ft_exp.active() &&
+			!emergency_retract_active &&
 			guidewire_mode != GuidewireMode::Cooperative &&
 			cooperative_direction_requested == CooperativeDirection::None &&
 			!planned_return.active();
@@ -1782,6 +1830,7 @@ int main(int argc, char* argv[])
 			freeze_active ||
 			estop_hold_active ||
 			startup_sequence_active ||
+			emergency_retract_active ||
 			spacing_recovery.active() ||
 			spacing_recovery.requested ||
 			ft_exp.active() ||
@@ -1820,6 +1869,7 @@ int main(int argc, char* argv[])
 			}
 		}
 		const bool axis4_jog_allowed = ads_motion_cycle_valid && !freeze_active && !estop_hold_active && !startup_sequence_active &&
+			!emergency_retract_active &&
 			!spacing_recovery.active() && !spacing_recovery.requested;
 		// 轴4只保留UI点动，物理手柄按键不再映射到轴4。
 		const bool axis4_forward_semantic = axis4_ui_forward_pressed;
@@ -2454,7 +2504,7 @@ int main(int argc, char* argv[])
 
 		// 8) 当启动已完成但控制未激活时，通过全量重同步恢复。
 		const bool motion_startup_active = startup.is_active();
-		startup_smoothing_bypass = motion_startup_active;
+		startup_smoothing_bypass = motion_startup_active || emergency_retract_active;
 		if (!control_active && !return_ads_fault_hold && !motion_startup_active &&
 			!freeze_active && !estop_hold_active && !ads_soft_hold_active && startup.completed)
 		{
@@ -2477,6 +2527,7 @@ int main(int argc, char* argv[])
 		unsigned short cylinder2_cmd = cyl.cyl2_clamp;
 		unsigned short cylinder3_cmd = cyl.cyl3_follow_release;
 		unsigned short cylinder4_cmd = cyl.cyl4_follow_release;
+		bool emergency_retract_targets_reached = false;
 		// 轴4 接线方向与按键语义相反，此处交换映射。
 		bool axis4_manual_forward_req = axis4_reverse_request;
 		bool axis4_manual_reverse_req = axis4_forward_request;
@@ -2492,7 +2543,7 @@ int main(int argc, char* argv[])
 
 		// 9) 根据当前顶层模式构建一帧 refer 和一组气缸指令。
 		if (!ads_soft_hold_active && !return_ads_fault_hold && !freeze_active && !estop_hold_active &&
-			(control_active || motion_startup_active) && read_plc_state())
+			(control_active || motion_startup_active || emergency_retract_active) && read_plc_state())
 		{
 			load_pos_from_actual();
 			pos[1] = axis2_hold_rel;
@@ -3704,7 +3755,25 @@ int main(int argc, char* argv[])
 				}
 			}
 
-			if (axis6_soft_limit_hold && !motion_startup_active)
+			if (emergency_retract_active)
+			{
+				// 极简撤出固定执行机构组合，并锁存轴1/2/7；轴3/5/6直接返回启动准备完成位。
+				cylinder1_cmd = 1000;
+				cylinder2_cmd = 0;
+				cylinder3_cmd = 100;
+				cylinder4_cmd = 1000;
+				pos[0] = emergency_retract_axis1_hold_rel;
+				pos[1] = emergency_retract_axis2_hold_rel;
+				pos[2] = from_left_to_rel(2, startup.final_axis3_from_left_mm);
+				pos[4] = from_left_to_rel(4, startup.final_axis5_from_left_mm);
+				pos[5] = from_left_to_rel(5, startup.final_axis6_from_left_mm);
+				pos[6] = emergency_retract_axis7_hold_rel;
+				emergency_retract_targets_reached =
+					std::abs(plc_act_pos[2] - pos[2]) <= cfg.crawl_arrive_tol_mm &&
+					std::abs(plc_act_pos[4] - pos[4]) <= cfg.crawl_arrive_tol_mm &&
+					std::abs(plc_act_pos[5] - pos[5]) <= cfg.crawl_arrive_tol_mm;
+			}
+			else if (axis6_soft_limit_hold && !motion_startup_active)
 			{
 				// 实际越限时继续冻结；启动准备的安全目标允许把 axis6 拉回限制内。
 				hold_axis6_related_axes();
@@ -4527,12 +4596,12 @@ int main(int argc, char* argv[])
 		axis4_manual_error_id_prev = axis4_manual_error_id_now;
 
 		// 10) 构建本拍离散输出；与 refer 一起交给 100 Hz 通信线程。
-		bool cylinder5_req = y_valve_open;
+		bool cylinder5_req = emergency_retract_active || y_valve_open;
 		const bool cylinder_output_enabled = !connection_hold_active && !freeze_active &&
-			!estop_hold_active && (control_active || motion_startup_active);
+			!estop_hold_active && (control_active || motion_startup_active || emergency_retract_active);
 		if (cylinder_output_enabled)
 		{
-			if (!spacing_recovery.active() && !axis6_soft_limit_hold)
+			if (!emergency_retract_active && !spacing_recovery.active() && !axis6_soft_limit_hold)
 			{
 				auto apply_cylinder_manual_mode = [](CylinderManualMode mode, unsigned short& command,
 					unsigned short open_value, unsigned short closed_value)
@@ -4819,7 +4888,7 @@ int main(int argc, char* argv[])
 		AdsOutputCommand ads_output{};
 		const bool normal_motion_output_enabled = ads_motion_cycle_valid && !connection_hold_active &&
 			!return_ads_fault_hold && !freeze_active && !estop_hold_active &&
-			(control_active || motion_startup_active);
+			(control_active || motion_startup_active || emergency_retract_active);
 		ads_output.motion_enabled = normal_motion_output_enabled || cancel_hold_output_enabled;
 		for (int axis = 0; axis < 7; ++axis) ads_output.refer[axis] = pos[axis];
 		ads_output.axis1_fast_return = ads_output.motion_enabled && axis1_fast_return;
@@ -4853,6 +4922,26 @@ int main(int argc, char* argv[])
 		}
 		ads_output.startup_smoothing_bypass = ads_output.motion_enabled && startup_smoothing_bypass;
 		const std::uint64_t output_generation = ads_communication.publish_output(ads_output);
+		if (emergency_retract_active && emergency_retract_targets_reached)
+		{
+			emergency_retract_active = false;
+			startup_smoothing_bypass = false;
+			if (!restore_emergency_retract_v_limit())
+			{
+				std::cout << "极简器械撤出已到位，但恢复速度上限失败。" << std::endl;
+			}
+			startup.recovery_mode = false;
+			startup.phase = StartupPhase::Done;
+			startup.completed = true;
+			startup.prompted = false;
+			apply_mode_selection(ModeSelection::CatheterDelivery);
+			guidewire_mode = GuidewireMode::None;
+			cooperative_direction = CooperativeDirection::None;
+			control_active = sync_all(20);
+			std::cout << (control_active
+				? "极简器械撤出已完成，进入直接控制模式。"
+				: "极简器械撤出已完成，但直接控制重同步失败。") << std::endl;
+		}
 		if (planned_return.phase == PlannedReturnPhase::SubmitRequest &&
 			planned_return.request_prepared &&
 			planned_return.commit_guard_generation == 0 &&
@@ -5105,6 +5194,7 @@ int main(int argc, char* argv[])
 					const bool valid_cylinder_index = vcmd.param1 >= 0 && vcmd.param1 < 4;
 					const bool automatic_cylinder_sequence_active =
 						motion_startup_active ||
+						emergency_retract_active ||
 						axis6_soft_limit_hold ||
 						planned_return.active();
 					if (!spacing_recovery.active() && !spacing_recovery.requested &&
@@ -5338,6 +5428,54 @@ int main(int argc, char* argv[])
 							: GetTickCount64() + injector_ui_jog_lease_ms;
 					}
 					break;
+				case VisCommandType::EmergencyRetractDevice:
+				{
+					if (planned_return.active())
+					{
+						std::cout << "UI：极简器械撤出已忽略，请等待当前换手完成。" << std::endl;
+						break;
+					}
+					if (emergency_retract_active)
+					{
+						break;
+					}
+					if (ft_exp.active()) ft_exp.abort(ctx, "emergency retract");
+					if (!apply_emergency_retract_v_limit())
+					{
+						std::cout << "UI：极简器械撤出启动失败，无法设置启动准备速度上限。" << std::endl;
+						break;
+					}
+
+					emergency_retract_axis1_hold_rel = plc_act_pos[0];
+					emergency_retract_axis2_hold_rel = plc_act_pos[1];
+					emergency_retract_axis7_hold_rel = plc_act_pos[6];
+					spacing_recovery.reset();
+					pending_mode_selection = ModeSelection::None;
+					pending_physical_mode_source = PhysicalModeSource::None;
+					physical_mode_source = PhysicalModeSource::None;
+					apply_mode_selection(ModeSelection::CatheterDelivery);
+					guidewire_mode = GuidewireMode::None;
+					cooperative_direction = CooperativeDirection::None;
+					axis6_crawl.enabled = false;
+					axis6_window_locked = false;
+					clear_cylinder_manual_overrides();
+					tracking_controller.disable_compensation();
+					ff.enabled = false;
+					ff.reset();
+					clear_force_output();
+					startup.recovery_mode = false;
+					startup.phase = StartupPhase::Done;
+					startup.completed = true;
+					startup.prompted = false;
+					control_active = true;
+					y_valve_open = true;
+					emergency_retract_active = true;
+					std::cout << "UI：极简器械撤出已启动；轴3/5/6目标（距左限位）="
+						<< startup.final_axis3_from_left_mm << "/"
+						<< startup.final_axis5_from_left_mm << "/"
+						<< startup.final_axis6_from_left_mm << " mm。" << std::endl;
+					break;
+				}
 				case VisCommandType::SetAxis1PostReturnLead:
 				{
 					const double lead_mm = static_cast<double>(vcmd.param1) / 1000.0;
@@ -5609,6 +5747,7 @@ int main(int argc, char* argv[])
 		}
 	}
 
+	(void)restore_emergency_retract_v_limit();
 	AdsOutputCommand shutdown_output{};
 	shutdown_output.motion_enabled = false;
 	shutdown_output.cylinder_valid = false;

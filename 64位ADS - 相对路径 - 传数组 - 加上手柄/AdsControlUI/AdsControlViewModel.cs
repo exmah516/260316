@@ -1015,6 +1015,9 @@ namespace AdsControlUI
         public void SelectDirectControl() =>
             _client.SendCommand(VisCommandType.SelectDirectControl);
 
+        public void EmergencyRetractDevice() =>
+            _client.SendCommand(VisCommandType.EmergencyRetractDevice);
+
         public void SendStartupParams(double a1, double a3, double a5, double a6, double a2deg, double a7deg, double speed)
         {
             _client.SendCommand(VisCommandType.SetStartupAxisPos, 1, (int)(a1 * 100));

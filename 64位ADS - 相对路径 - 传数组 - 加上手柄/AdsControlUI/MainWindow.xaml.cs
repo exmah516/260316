@@ -362,6 +362,8 @@ namespace AdsControlUI
 
         private void DirectControl_Click(object sender, RoutedEventArgs e) => _vm.SelectDirectControl();
 
+        private void EmergencyRetract_Click(object sender, RoutedEventArgs e) => _vm.EmergencyRetractDevice();
+
         private void ShowForce_Click(object sender, RoutedEventArgs e)
         {
             ForcePlotError.Text = "";

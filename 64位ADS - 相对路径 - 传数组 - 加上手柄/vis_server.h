@@ -185,6 +185,7 @@ enum class VisCommandType : int
 	SetForceFeedbackHold = 35, // param1: 0=关闭，1=开启；自动换手闭爪后保持200ms
 	SetYValveOpen = 36, // param1: 0=关闭，1=打开
 	SetInjectorManualJog = 37, // param1: 注射器1..2，param2: -1=拉，0=停止，1=推
+	EmergencyRetractDevice = 38, // 极简器械撤出：固定夹爪组合，轴3/5/6退回启动准备完成位
 };
 
 #pragma pack(push, 1)

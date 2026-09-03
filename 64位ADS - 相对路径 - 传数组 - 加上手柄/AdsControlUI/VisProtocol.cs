@@ -179,5 +179,6 @@ namespace AdsControlUI
 		SetForceFeedbackHold = 35,
 		SetYValveOpen = 36,
 		SetInjectorManualJog = 37,
+		EmergencyRetractDevice = 38,
 	}
 }
