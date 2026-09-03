@@ -64,7 +64,7 @@
 | `G.inject_axis[1..2]` | `ARRAY[1..2] OF AXIS_REF` | PLC 内部 / TwinCAT 链接 | 分别链接 NC Axis 13/14（Drive 16/17），由 `InjectorManual` 自动上电和点动。 |
 | `G.inject_push_req[1..2]` | `ARRAY[1..2] OF BOOL` | 上位机写 | 注射器推请求，正方向；按下 TRUE、松开 FALSE。 |
 | `G.inject_pull_req[1..2]` | `ARRAY[1..2] OF BOOL` | 上位机写 | 注射器拉请求，负方向；按下 TRUE、松开 FALSE。 |
-| `G.axis2_sync_axis` | `AXIS_REF` | PLC 内部 / TwinCAT 链接 | 链接 NC Axis15（Drive18），与业务轴2（NC Axis7）建立 -1:1 反向增量同步。 |
+| `G.axis2_sync_axis` | `AXIS_REF` | PLC 内部 / TwinCAT 链接 | 链接 NC Axis15（Drive18），与业务轴2（NC Axis7）建立 1:1 同向增量同步。 |
 
 ### 2.2 顶层控制变量
 
@@ -156,16 +156,16 @@ PID 参数（`G.Kp / G.Ki / G.Kd / G.pid_i / G.pid_e_prev / G.pid_i_limit`）：
 | `G.cylinder2_value` | `WORD AT %Q*` | **上位机写** | 轴1 机构 | 与电缸1 交替夹持导管 |
 | `G.cylinder3_value` | `WORD AT %Q*` | **上位机写** | 轴5 机构 | 夹/松导丝 |
 | `G.cylinder4_value` | `WORD AT %Q*` | **上位机写** | 轴6 机构 | 与电缸3 交替夹持导丝 |
-| `G.cylinder5_value` | `WORD AT %Q*` | **PLC 内部写**（handle 每周期映射） | 轴3 机构 | Y 阀控制（500=打开，2000=关闭） |
+| `G.cylinder5_value` | `WORD AT %Q*` | **PLC 内部写**（handle 每周期映射） | 轴3 机构 | Y 阀控制（0=打开，2000=关闭） |
 | `G.cylinder5_cmd` | `WORD` | 历史遗留，未被 handle 主链路使用 | — | — |
-| `G.cylinder5_press_req` | `BOOL` | **上位机写** | — | TRUE=Y阀打开→ cylinder5=500；FALSE=Y阀关闭→ cylinder5=2000 |
+| `G.cylinder5_press_req` | `BOOL` | **上位机写** | — | TRUE=Y阀打开→ cylinder5=0；FALSE=Y阀关闭→ cylinder5=2000 |
 
 电缸值含义（参考上位机 `ADS通讯说明.md §3.3`）：
 - `cylinder1`：`0` 开 / `400` 预夹 / `1000` 夹
 - `cylinder2`：`0` 开 / `150` 预开 / `400` 预夹 / `600` 夹
 - `cylinder3`：`50` 夹 / `200` 预夹 / `250` 开 / `400` 跟随释放 / `500` 启动准备开
 - `cylinder4`：`0` 开 / `100` 跟随释放 / `300` 预 / `500` 夹
-- `cylinder5`：`500` 打开 / `2000` 关闭
+- `cylinder5`：`0` 打开 / `2000` 关闭
 
 ### 2.10 力传感器 IO
 
@@ -270,7 +270,7 @@ END_STRUCT
 2. **`G.leftlimit[i]` 只在 SelfCheck 完成后有意义**；自检前为 0（PLC 初始值），上位机不应在 `self_check_done = FALSE` 时使用 `from_left` 换算结果。
 3. **`G.estop_hold_req` 在以下时刻强制为 TRUE**：`init`（上电期间）、`_err`、`_clear_err`（200ms 前）、`handle` 的 `NOT init_done` 阶段、`handle` 的 `hold_active` 阶段。上位机应当把此标志作为"禁止手柄推动"的门控。
 4. **`G.return_cmd[i].Req` 上位机写 TRUE 后，必须等到 Done/Error 其中之一置位，再写 FALSE**。不允许在 Busy 期间重写 TRUE（见 §3）。
-5. **`G.cylinder5_value` 上位机不应直接写**；通过 `G.cylinder5_press_req` 写布尔量，由 PLC 每周期映射为 `500`（打开）或 `2000`（关闭）。直接写 `cylinder5_value` 会在下一周期被 PLC 覆盖。
+5. **`G.cylinder5_value` 上位机不应直接写**；通过 `G.cylinder5_press_req` 写布尔量，由 PLC 每周期映射。直接写 `cylinder5_value` 会在下一周期被 PLC 覆盖。
 6. **定位臂变量不参与原 `G.gen_state` 状态机**；`G.arm_manual_enable=FALSE` 或 `G.host_comm_timeout=TRUE` 时 PLC 会关闭所有定位臂 `MC_Power` 并清除单轴上电/点动请求，必须先写总使能 TRUE，再写对应 `G.arm_enable_req[i]=TRUE`。总使能或对应轴未上电时，`G.arm_jog_*` 请求不会产生运动。正反向同时为 TRUE 时 `G.arm_cmd_conflict[i]=TRUE`，PLC 停止该轴并拒绝启动新运动。
 7. **`G.startup_loading_ready` 不是位置反馈**：PLC 仅在本轮 SelfCheck 全部完成后置 TRUE。上位机还会核对 axis1/3/5/6 距左限位是否分别处于 `[96,280,430,580] ±2 mm`；任一条件不满足时改走中断恢复启动。旧 PLC 没有该符号时仅按实际位置兼容判定。
 8. **主机看门狗超时不是普通状态提示**：`host_heartbeat_sequence` 连续 100 ms 不变化时，PLC 锁存 `host_comm_timeout`，冻结外部参考，清快退、axis4 和平滑旁路请求，并对运行中的计划回退/axis4 运动执行受控停止；气缸保持最后状态。只有新鲜心跳、显式 `host_recover_req` 和停稳条件同时满足后才受理恢复。
@@ -313,7 +313,7 @@ PLC 侧无 ADS 配置文件，由 TwinCAT XAR 路由表管理。上位机连接�
 
 ### 2026-08-19 — Axis15 与注射器 ADS 接口
 - 新增 `G.axis2_sync_axis`，独立链接 NC Axis15；新增 `G.inject_push_req[1..2]` / `G.inject_pull_req[1..2]` 控制 NC Axis13/14 点动。
-- Y阀 `G.cylinder5_press_req` 语义明确为 TRUE=打开（输出500）、FALSE=关闭（输出2000）。
+- Y阀 `G.cylinder5_press_req` 语义明确为 TRUE=打开（输出0）、FALSE=关闭（输出2000）。
 - 不扩展 `G.axis/refer/Act_pos[1..7]`，不改变旧介入机器人 ADS 契约。
 
 ### 2026-08-03 — 100 Hz ADS 契约与主机看门狗

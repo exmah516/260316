@@ -202,7 +202,7 @@ Busy = TRUE AND ABS(ActVelo) < 0.5 AND (
 
 自检期间：
 - stu=1 且 i=1（错峰阶段第一次进入）：写一次 `cylinder1=1000 / cylinder2=0 / cylinder3=1000 / cylinder4=0`（导管夹紧、导丝夹紧）。
-- 每周期顶部固定：`cylinder5_value := 2000`、`cylinder5_cmd := 2000`、`cylinder5_press_req := FALSE`（Y 阀关闭）。
+- 每周期顶部固定：`cylinder5_value := 2000`、`cylinder5_cmd := 2000`、`cylinder5_press_req := FALSE`（Y 阀打开）。
 - 全部完成后（`all_done`）再写一次 `cylinder1=1000 / cylinder2=0 / cylinder3=1000 / cylinder4=0`，确保切 handle 时电缸组合固定。
 
 ### 3.6 重初始化
@@ -318,9 +318,9 @@ G.estop_hold_req := FALSE;
 
 ```
 IF G.cylinder5_press_req THEN
-    G.cylinder5_value := 500;    -- TRUE → Y 阀打开
+    G.cylinder5_value := 0;      -- 按下 → 夹紧
 ELSE
-    G.cylinder5_value := 2000;   -- FALSE → Y 阀关闭
+    G.cylinder5_value := 2000;   -- 释放 → 打开
 END_IF
 ```
 

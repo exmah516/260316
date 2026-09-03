@@ -1,4 +1,4 @@
-<?xml version="1.0" encoding="utf-8"?>
+﻿<?xml version="1.0" encoding="utf-8"?>
 <TcPlcObject Version="1.1.0.1" ProductVersion="3.1.4024.15">
   <POU Name="Axis2Sync" Id="{b5eb0f0a-28b5-4f69-a0a5-8a6a1d8c4e21}" SpecialFunc="None">
     <Declaration><![CDATA[FUNCTION_BLOCK Axis2Sync
@@ -36,7 +36,7 @@ fb_gear(
 	Master:=G.axis[2],
 	Slave:=G.axis2_sync_axis,
 	Execute:=gear_execute,
-	RatioNumerator:=-1.0,
+	RatioNumerator:=1.0,
 	RatioDenominator:=1,
 	Acceleration:=100.0,
 	Deceleration:=100.0,
