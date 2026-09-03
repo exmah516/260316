@@ -4201,7 +4201,8 @@ int main(int argc, char* argv[])
 						(axis1_rot_filtered - axis1_crawl.rot_ref) * cfg.axis_rot_scale_deg;
 					axis2_hold_rel = pos[1];
 
-					apply_axis1_mirror_from_abs(axis1_cmd_abs, false);
+					// 轴3/5镜像跟随名义目标（扣除轴1已累计的先行附加量），使轴1相对后方各轴产生真正先行效果
+					apply_axis1_mirror_from_abs(axis1_cmd_abs + axis1_delivery_mapping_applied_extra_mm, false);
 					if (!cooperative_mode)
 					{
 						// 导管模式下 axis6 不再随 axis1 跟随，保持在导管基准位。
