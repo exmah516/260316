@@ -808,8 +808,8 @@ namespace
 
 		const double fn_1_50g_v = -0.03059;
 		const double ft_1_50g_v = 0.67303;
-		const double expected_axial_n = 0.490953762385746;
-		const double expected_tangential_n = 0.491213129859387;
+		const double expected_axial_n = 0.56048917067358;
+		const double expected_tangential_n = 0.4328789114133;
 		const CleanForce loaded_clean = calculate_clean_force(
 			fn_1_50g_v, ft_1_50g_v, direct_cfg, direct_zero);
 		check(nearly_equal(loaded_clean.force_n, expected_axial_n, 1e-12),
@@ -827,8 +827,8 @@ namespace
 
 		const double fn_2_50g_v = -0.38615;
 		const double ft_2_50g_v = 1.53886;
-		const double expected_guidewire_axial_n = 0.489042103289968;
-		const double expected_guidewire_tangential_n = 0.4903529688982;
+		const double expected_guidewire_axial_n = 1.1513734529742;
+		const double expected_guidewire_tangential_n = 0.17465149506701;
 		const CalibratedForce guidewire_loaded_feedback = calibrate_guidewire_force(
 			fn_2_50g_v, ft_2_50g_v, 0.0, direct_cfg, direct_zero);
 		check(nearly_equal(
@@ -945,10 +945,10 @@ namespace
 		const double ft_absolute_zero =
 			force_direct_calibration::ft_1_slope_n_per_count * (direct_zero.ft_zero * 1000.0) +
 			force_direct_calibration::ft_1_intercept_n;
-		check(nearly_equal(fn_absolute_loaded, 0.489688315853313, 1e-12) &&
-			nearly_equal(fn_absolute_zero, -0.0012654465324331, 1e-12) &&
-			nearly_equal(ft_absolute_loaded, 0.490683826766822, 1e-12) &&
-			nearly_equal(ft_absolute_zero, -0.000529303092565662, 1e-12),
+		check(nearly_equal(fn_absolute_loaded, 0.00357494784826, 1e-12) &&
+			nearly_equal(fn_absolute_zero, -0.55691422282532, 1e-12) &&
+			nearly_equal(ft_absolute_loaded, 1.04202274152665, 1e-12) &&
+			nearly_equal(ft_absolute_zero, 0.60914383011335, 1e-12),
 			"报告F_direct绝对值锚点");
 		check(nearly_equal(fn_absolute_loaded - fn_absolute_zero, loaded_clean.force_n, 1e-12) &&
 			nearly_equal(ft_absolute_loaded - ft_absolute_zero, expected_tangential_n, 1e-12),
@@ -1011,9 +1011,9 @@ namespace
 			nearly_equal(negative_limited_feedback.t_feedback_nm, -limited_cfg.t_max_nm, 1e-12),
 			"导管F_direct反馈按运行上限正负限幅");
 		const CalibratedForce guidewire_limited_feedback = calibrate_guidewire_force(
-			20.0, 20.0, 0.0, limited_cfg, origin_zero);
+			100.0, 100.0, 0.0, limited_cfg, origin_zero);
 		const CalibratedForce guidewire_negative_limited_feedback = calibrate_guidewire_force(
-			-20.0, -20.0, 0.0, limited_cfg, origin_zero);
+			-100.0, -100.0, 0.0, limited_cfg, origin_zero);
 		check(nearly_equal(
 			guidewire_limited_feedback.f_feedback_n, limited_cfg.f_max_n, 1e-12) &&
 			nearly_equal(

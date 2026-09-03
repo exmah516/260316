@@ -202,7 +202,7 @@ Busy = TRUE AND ABS(ActVelo) < 0.5 AND (
 
 自检期间：
 - stu=1 且 i=1（错峰阶段第一次进入）：写一次 `cylinder1=1000 / cylinder2=0 / cylinder3=1000 / cylinder4=0`（导管夹紧、导丝夹紧）。
-- 每周期顶部固定：`cylinder5_value := 2000`、`cylinder5_cmd := 2000`、`cylinder5_press_req := FALSE`（Y 阀打开）。
+- 每周期顶部固定：`cylinder5_value := 2000`、`cylinder5_cmd := 2000`、`cylinder5_press_req := FALSE`（Y 阀关闭）。
 - 全部完成后（`all_done`）再写一次 `cylinder1=1000 / cylinder2=0 / cylinder3=1000 / cylinder4=0`，确保切 handle 时电缸组合固定。
 
 ### 3.6 重初始化
@@ -236,87 +236,80 @@ END_IF
 
 **注意**：这里没有覆盖 `G.init_pos[i]`——`stu=10` 内已经写过 `G.init_pos[i] := ActPos`。切 `_handle` 时，`G.Act_pos = 0` 就是"当前工作位"。`G.startup_loading_ready` 是一次性资格位：上位机启动准备/直接控制入口会写 FALSE；若 PLC 未重启而机构已由上一轮上位机移离装卸位，下次启动将改走中断恢复路径。
 
-## 4. `handle.TcPOU` — 正常跟随与通信管理
+## 4. `handle.TcPOU` — 正常跟随控制
 
-`handle` 是 PLC 主链路的核心。包含以下核心模块：
+`handle` 是 PLC 主链路的核心。分为**四大功能块**：
 
-0. **应用层通信四状态机**（`WaitHost` / `Online` / `CommHold` / `RecoveryWait`）
-1. **重初始化握手与基准重建**（响应 `G.handle_reinit_req`）
-2. **轴层掉使能与硬件故障分层处理**（`_err` 分离）
-3. **参考位置平滑与统一设定点输出**（速度限幅 + 滑动平均 + 二阶滤波 + `MC_ExtSetPointGenFeed`）
+1. **重初始化握手**（响应 `G.handle_reinit_req`）
+2. **掉使能/错误保持**（`hold_active` 分支）
+3. **参考位置平滑与设定点输出**（速度限幅 + 滑动平均 + 二阶滤波 + `MC_ExtSetPointGenFeed`）
 4. **计划回退 FB**（`return_state[i]`）+ **axis4 手动点动**（`axis4_manual_state`）
-5. **MC 功能块周期尾部唯一调用**
 
-### 4.0 通信四状态机（内部变量驱动）
+### 4.1 重初始化握手
 
-为杜绝 ADS 外部误写破坏 PLC 控制流，状态机由 `handle` 内部局部变量 `host_comm_state_internal : USINT` 驱动，`G.host_comm_state` 仅每周期导出为只读诊断镜像。
-
-| 状态值 | 状态名 | 含义 | 进入条件 | 退出条件 |
-|---|---|---|---|---|
-| `0` | `WaitHost` | 上电/初次进入等待主机 | PLC 启动初值 | 心跳新鲜 + 全要素停稳 + 收到 `host_recover_req` $\to$ 转 `3 (RecoveryWait)` |
-| `1` | `Online` | 正常通信跟随 | 恢复重同步完成（`init_done AND handle_reinit_done`） | 心跳超时（250 ms 无变化）$\to$ 转 `2 (CommHold)` |
-| `2` | `CommHold` | 通信保持态 | 心跳超时 或 非零会话发生变化 | 心跳稳定 $\ge 300\text{ ms}$ + 收到 `host_recover_req` + 全要素停稳 + 无故障 $\to$ 转 `3 (RecoveryWait)` |
-| `3` | `RecoveryWait` | 基准重同步中 | 从 `WaitHost` 或 `CommHold` 触发重同步 | 心跳中断 $\to$ 退回 `2 (CommHold)`；基准重建完成（`handle_reinit_done = TRUE`）$\to$ 转 `1 (Online)` |
-
-**全要素停稳判定 (`host_all_stopped`)**：
-必须同时满足：全 7 轴实际速度 $\le 0.05\text{ mm/s}$、停止 FB 无激活/Busy、回退 MoveAbsolute FB 非 Busy/Active、回退 Busy 位为 FALSE、回退状态机归零、Axis4 点动 FB 非 Busy/Active、Axis4 点动状态机归零。
-
-**新会话强切保持**：
-当检测到 `host_session_changed` 且新旧 ID 均非 0 时，立即清除 `G.host_recover_req` 并强切 `CommHold` 锁存位置，必须等待新心跳稳定（$\ge 300\text{ ms}$）后方可重新握手重同步，防止新上位机直接继承旧 refer。
-
-### 4.1 重初始化握手与基准重建
-
-```pascal
+```
 IF G.handle_reinit_req THEN
     init_done := FALSE;
     G.handle_reinit_done := FALSE;
     G.handle_reinit_req := FALSE;
     G.estop_hold_req := TRUE;
-    // 重置 ext_setpoint_enabled / return_state / return_cmd / traj_pos/vel/acc / axis4 等;
+    重置 ext_setpoint_enabled / return_state / return_cmd /
+         refer_interval/tick/progress / traj_pos/vel/acc /
+         axis4_manual_state / axis4_fwd/rev_req / axis4_manual_busy/done/error;
 END_IF
 
 IF NOT init_done THEN
-    FOR i:=1 TO 7 DO spg_enable_exec[i] := TRUE; spg_disable_exec[i] := FALSE; END_FOR
-    IF 全部 SetPointGenEnable_output.Done THEN
-        FOR j:=1 TO 7 DO
+    FOR i: G.SetPointGenEnable[i].Execute := TRUE
+    IF 全部 SetPointGenEnable.Done THEN
+        FOR j:
             G.Act_pos[j] := ActPos - init_pos[j];
             G.act_pos_from_left[j] := ActPos - leftlimit[j];
             G.ref_slow[j] := G.act_h[j] := G.act_hf[j] := G.refer[j] := G.Act_pos[j];
             G.refer_from_left[j] := G.act_pos_from_left[j];
             用 Act_pos 填充 act_hh[j][1..30];
-            act_h_prev[j] := Act_pos;
+            act_h_prev[j] := refer_prev[j] := refer_interp[j] := Act_pos;
             traj_pos[j] := Act_pos; traj_vel := traj_acc := 0;
             IF slimit_enable[j]: right_slimit[j] := leftlimit[j] + rslimit_distance[j];
         END_FOR
         init_done := TRUE;
         G.handle_reinit_done := TRUE;
     END_IF
+    RETURN;
 END_IF
 ```
 
-**唯一调用权解耦**：
-`G.SetPointGenEnable/Disable` 实例在 `MAIN.SETPOSITIONGEN()` Action 中执行，`handle.TcPOU` 仅操作 `spg_enable_exec / spg_disable_exec` 标志并读取 `SetPointGenEnable_output[i].Done`，杜绝多处重复调用。
+**关键**：`init_done` 只保证过一次 `SetPointGenEnable.Done`；后续通过 `all_powered / has_axis_error` 判定是否需要再次进入。
 
-### 4.2 掉使能/硬件错误分层处理
+### 4.2 掉使能/错误保持
 
-```pascal
+```
 all_powered := 全 power_output.Done;
 has_axis_error := 任一 axis.Status.Error / power_output.Error / reset_output.Error;
-
-IF has_axis_error THEN
-    G.estop_hold_req := TRUE;
-    G.gen_state := _err;  // 仅真实硬件/轴错误切 _err，通信超时绝不切 _err
-END_IF
 
 IF NOT all_powered THEN
     G.estop_hold_req := TRUE;
     hold_active := TRUE;
-    // 同步 refer/平滑/二阶滤波状态到当前实际位置
-ELSIF hold_active THEN
+    重置 Act_pos / refer / ref_slow / act_h / act_hf / act_hh / act_h_prev /
+         traj_pos/vel/acc 到当前实际位置;
+    IF has_axis_error: G.gen_state := _err;
+    RETURN;
+END_IF
+
+IF hold_active THEN     -- 从 hold 恢复
     hold_active := FALSE;
     G.handle_reinit_req := TRUE;
     G.estop_hold_req := TRUE;
+    IF has_axis_error: G.gen_state := _err;
+    RETURN;
 END_IF
+
+IF has_axis_error THEN
+    G.estop_hold_req := TRUE;
+    G.gen_state := _err;
+    RETURN;
+END_IF
+
+G.estop_hold_req := FALSE;
 ```
 
 **语义**：任何时候检测到掉使能，立刻把所有 refer/平滑/二阶滤波状态**同步到当前实际位置**（防止使能恢复瞬间跳变），并通过 `hold_active` 边沿在下一周期请求重同步。
@@ -325,9 +318,9 @@ END_IF
 
 ```
 IF G.cylinder5_press_req THEN
-    G.cylinder5_value := 0;      -- 按下 → 夹紧
+    G.cylinder5_value := 500;    -- TRUE → Y 阀打开
 ELSE
-    G.cylinder5_value := 2000;   -- 释放 → 打开
+    G.cylinder5_value := 2000;   -- FALSE → Y 阀关闭
 END_IF
 ```
 
@@ -408,44 +401,34 @@ ELSE:
 | `traj_amax` | `[2000, 0, 2000, 0, 2000, 2000, 0]` | 加速度上限（mm/s²） |
 | `traj_enable` | `[T, F, T, F, T, T, F]` | 仅平移轴启用 |
 
-### 4.5 设定点输出（单点统一调用）
+### 4.5 设定点输出
 
-为避免多分支内分散调用导致时序混乱或跳步，`handle.TcPOU` 在状态分支中仅计算每个轴的 `feed_pos[i]`、`feed_vel[i]`、`feed_acc[i]` 与使能标志 `feed_exec[i]`，并在周期尾部统一单点调用 `MC_ExtSetPointGenFeed`：
-
-```pascal
-// 在分支中生成参数：
-IF host_timeout_latched OR (NOT init_done) OR (NOT all_powered) OR has_axis_error THEN
-    // 保持态：送锁存绝对位置，0速度
-    feed_pos[i] := host_hold_abs[i];
-    feed_vel[i] := 0.0;
-    feed_acc[i] := 0.0;
-    feed_exec[i] := ext_setpoint_enabled[i];
-ELSIF ext_setpoint_enabled[i] OR (return_state[i] = 31) OR spg_enable_exec[i] THEN
-    // 正常跟随态：二阶滤波或滑动平均路径
-    IF traj_enable[i] AND NOT G.startup_smoothing_bypass THEN
-        feed_pos[i] := traj_pos[i] + G.init_pos[i];
-        feed_vel[i] := traj_vel[i];
-        feed_acc[i] := traj_acc[i];
-    ELSE
-        feed_pos[i] := G.act_h[i] + G.init_pos[i];
-        feed_vel[i] := (G.act_h[i] - act_h_prev[i]) / 0.001;
-        feed_acc[i] := 0.0;
-    END_IF
-    feed_exec[i] := TRUE;
-ELSE
-    feed_exec[i] := FALSE;
-END_IF
-
-// 周期尾部统一执行一次：
+```
 FOR i:=1 TO 7 DO
-    IF feed_exec[i] THEN
-        MC_ExtSetPointGenFeed(
-            Position     := feed_pos[i],
-            Velocity     := feed_vel[i],
-            Acceleration := feed_acc[i],
-            Direction    := 1,
-            Axis         := G.axis[i]);
+    IF ext_setpoint_enabled[i]:
+        IF traj_enable[i] AND NOT G.startup_smoothing_bypass:
+            pos_abs := traj_pos[i] + G.init_pos[i];
+            MC_ExtSetPointGenFeed(
+                Position := pos_abs,
+                Velocity := traj_vel[i],
+                Acceleration := traj_acc[i],
+                Direction := 1,
+                Axis := G.axis[i]);
+        ELSE:
+            pos_abs := G.act_h[i] + G.init_pos[i];
+            legacy_vel := (G.act_h[i] - act_h_prev[i]) / 0.001;
+            MC_ExtSetPointGenFeed(
+                Position := pos_abs,
+                Velocity := legacy_vel,
+                Acceleration := 0,
+                Direction := 1,
+                Axis := G.axis[i]);
+        END_IF
+        G.act_hf[i] := G.act_h[i];
+    ELSE:
+        G.act_hf[i] := G.axis[i].NcToPlc.ActPos - G.init_pos[i];
     END_IF
+    act_h_prev[i] := G.act_h[i];
 END_FOR
 ```
 
@@ -453,7 +436,7 @@ END_FOR
 - 二阶滤波路径（平移轴常用）：送 `traj_pos/vel/acc`；
 - 传统路径（旋转轴 2/4/7、快退旁路、启动准备旁路）：送 `act_h`，速度由 `act_h` 差分算出。
 
-`ext_setpoint_enabled[i]` 是 handle POU 内部的映射标志，只有它为 TRUE 且 `SetPointGenEnable.Done` 已达成才输出。计划回退状态 10 会临时 `ext_setpoint_enabled[i] := FALSE` 禁用外部给定。
+`ext_setpoint_enabled[i]` 是 handle POU 内部的映射标志，只有它为 TRUE 且 `SetPointGenEnable.Done` 已达成才输出。计划回退 stu=10 会临时 `ext_setpoint_enabled[i] := FALSE` 禁用外部给定。
 
 ### 4.6 计划回退 FB（每轴 return_state[i]）
 
@@ -727,18 +710,6 @@ END_FOR
 7. 若改了错误恢复策略（`err` / `clear_err`），更新 §5 / §6 + 说明是否影响上位机的重同步路径（`sync_all` / `sync_axis1` / `sync_axis6`）。
 
 ## 12. 变更日志
-
-### 2026-08-24 — handle 通信四状态机重构与 MC FB 单点调用
-- 作者：AI（Antigravity）。
-- 涉及文件：`handle.TcPOU`、`G.TcGVL`。
-- 行为变化：
-  1. `handle.TcPOU` 内部实现四状态通信状态机（`0:WaitHost`, `1:Online`, `2:CommHold`, `3:RecoveryWait`），由局部变量 `host_comm_state_internal` 驱动，外部只读；
-  2. 看门狗初值调整为 250 ms，恢复握手增加 300 ms 连续心跳稳定窗口 + 全要素停稳判定（速度/停止/回退/点动全就绪）；
-  3. 检测到非零新会话接管时强切 `CommHold` 并清除旧握手；
-  4. 分离硬件轴错误与通信保持，通信超时保持在 `CommHold`（不切 `_err`），轴硬件/驱动器错误才切 `_err`；
-  5. 明确 `MAIN.SETPOSITIONGEN()` 为 `SetPointGenEnable/Disable` 唯一调用权，`handle` 仅设置执行标志；
-  6. `MC_ExtSetPointGenFeed`、回退/停止 FB 移至周期尾部单点统一调用。
-- 契约影响：不改变原 7 轴 ADS 数组与既有变量语义；新增 `G.host_comm_state`、`G.host_comm_reason`、`G.host_stop_error_id` 只读诊断镜像。
 
 ### 2026-07-28 — SelfCheck 输出标准装卸启动资格
 - 作者：AI（Codex）。

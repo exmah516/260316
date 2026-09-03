@@ -54,5 +54,9 @@ ELSIF fb_gear.Error OR fb_gear.CommandAborted THEN
 	gear_failed := TRUE;
 END_IF]]></ST>
     </Implementation>
+    <LineIds Name="Axis2Sync">
+      <LineId Id="3" Count="40" />
+      <LineId Id="2" Count="0" />
+    </LineIds>
   </POU>
 </TcPlcObject>

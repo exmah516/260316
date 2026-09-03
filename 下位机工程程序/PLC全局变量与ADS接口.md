@@ -64,7 +64,7 @@
 | `G.inject_axis[1..2]` | `ARRAY[1..2] OF AXIS_REF` | PLC 内部 / TwinCAT 链接 | 分别链接 NC Axis 13/14（Drive 16/17），由 `InjectorManual` 自动上电和点动。 |
 | `G.inject_push_req[1..2]` | `ARRAY[1..2] OF BOOL` | 上位机写 | 注射器推请求，正方向；按下 TRUE、松开 FALSE。 |
 | `G.inject_pull_req[1..2]` | `ARRAY[1..2] OF BOOL` | 上位机写 | 注射器拉请求，负方向；按下 TRUE、松开 FALSE。 |
-| `G.axis2_sync_axis` | `AXIS_REF` | PLC 内部 / TwinCAT 链接 | 链接 NC Axis15（Drive18），与业务轴2（NC Axis7）建立 1:1 同向增量同步。 |
+| `G.axis2_sync_axis` | `AXIS_REF` | PLC 内部 / TwinCAT 链接 | 链接 NC Axis15（Drive18），与业务轴2（NC Axis7）建立 -1:1 反向增量同步。 |
 
 ### 2.2 顶层控制变量
 
@@ -109,37 +109,14 @@
 | `G.estop_hold_req` | `BOOL` | PLC（handle/err/clear_err/init） | 上位机 100 Hz 快照 + Notification | 急停/保持激活；上位机应停写 refer |
 | `G.startup_smoothing_bypass` | `BOOL` | **上位机写** | PLC（handle） | 启动准备阶段临时旁路二阶滤波，用传统滑动平均路径 |
 
-### 2.5.1 上位机通信看门狗与握手
+### 2.5.1 上位机通信看门狗
 
 | 变量 | 类型 | 写方 | 读方 | 说明 |
 |---|---|---|---|---|
-| `G.host_session_id` | `UDINT` | 上位机 100 Hz | PLC | 本次上位机进程会话号；新进程接管（非零会话变化）时 PLC 立即强切 CommHold |
-| `G.host_heartbeat_sequence` | `UDINT` | 上位机 100 Hz | PLC | 每个通信周期递增；连续 250 ms 不变化触发超时锁存进入 CommHold (试验初值) |
-| `G.host_recover_req` | `BOOL` | 上位机请求，PLC 清除 | 双向握手 | 心跳稳定（≥300 ms）且机构停稳后请求解除超时并启动重初始化 |
-| `G.host_comm_timeout` | `BOOL` | PLC | 上位机 100 Hz 快照 + Notification | 主机通信超时锁存；为 TRUE 时冻结外部参考并执行受控停止与位置保持 |
-
-### 2.5.2 通信诊断与保持原因镜像变量
-
-这些变量在 2026-08-24 通信改造中新增，为只读诊断镜像，不影响原 7 轴 ADS 契约：
-
-| 变量 | 类型 | 写方 | 读方 | 说明 |
-|---|---|---|---|---|
-| `G.host_comm_state` | `USINT` | PLC | 上位机/在线监控 | 通信状态机只读镜像：`0`=WaitHost, `1`=Online, `2`=CommHold, `3`=RecoveryWait |
-| `G.host_comm_reason` | `UDINT` | PLC | 上位机/在线监控 | 最近一次/当前保持原因位图（见下表） |
-| `G.host_stop_error_id` | `UDINT` | PLC | 上位机/在线监控 | 受控停止 FB 错误码（`fb_host_return_stop` 或 `fb_axis4_stop` 报错，0=正常） |
-
-**保持原因位图定义（`G.host_comm_reason`）**：
-
-| 位（Bit） | 掩码值 | 含义说明 |
-|---|---|---|
-| Bit 0 | 1 | 无有效会话（`G.host_session_id = 0`） |
-| Bit 1 | 2 | 心跳超时（看门狗超时 `host_watchdog_timer.Q = TRUE`） |
-| Bit 2 | 4 | 新会话接管（检测到非零会话发生变化） |
-| Bit 3 | 8 | 计划回退正在受控停止（`host_return_stop_active`） |
-| Bit 4 | 16 | Axis4 正在受控停止（`host_axis4_stop_active`） |
-| Bit 5 | 32 | 轴未全部上电（`all_powered = FALSE`） |
-| Bit 6 | 64 | 轴硬件/驱动器故障（`has_axis_error = TRUE`，主状态转 `_err`） |
-| Bit 7 | 128 | 保持或受控停止 FB 执行报错（`host_stop_error_id <> 0`） |
+| `G.host_session_id` | `UDINT` | 上位机 100 Hz | PLC | 本次上位机进程会话号；新进程接管时变化 |
+| `G.host_heartbeat_sequence` | `UDINT` | 上位机 100 Hz | PLC | 每个通信周期递增；连续 100 ms 不变化触发超时锁存 |
+| `G.host_recover_req` | `BOOL` | 上位机请求，PLC 清除 | 双向握手 | 心跳恢复且机构停稳后请求解除超时并重初始化 |
+| `G.host_comm_timeout` | `BOOL` | PLC | 上位机 100 Hz 快照 + Notification | 主机通信超时锁存；为 TRUE 时冻结外部参考并执行安全清理 |
 
 ### 2.6 快退控制
 
@@ -179,16 +156,16 @@ PID 参数（`G.Kp / G.Ki / G.Kd / G.pid_i / G.pid_e_prev / G.pid_i_limit`）：
 | `G.cylinder2_value` | `WORD AT %Q*` | **上位机写** | 轴1 机构 | 与电缸1 交替夹持导管 |
 | `G.cylinder3_value` | `WORD AT %Q*` | **上位机写** | 轴5 机构 | 夹/松导丝 |
 | `G.cylinder4_value` | `WORD AT %Q*` | **上位机写** | 轴6 机构 | 与电缸3 交替夹持导丝 |
-| `G.cylinder5_value` | `WORD AT %Q*` | **PLC 内部写**（handle 每周期映射） | 轴3 机构 | Y 阀控制（0=打开，2000=关闭） |
+| `G.cylinder5_value` | `WORD AT %Q*` | **PLC 内部写**（handle 每周期映射） | 轴3 机构 | Y 阀控制（500=打开，2000=关闭） |
 | `G.cylinder5_cmd` | `WORD` | 历史遗留，未被 handle 主链路使用 | — | — |
-| `G.cylinder5_press_req` | `BOOL` | **上位机写** | — | TRUE=Y阀打开→ cylinder5=0；FALSE=Y阀关闭→ cylinder5=2000 |
+| `G.cylinder5_press_req` | `BOOL` | **上位机写** | — | TRUE=Y阀打开→ cylinder5=500；FALSE=Y阀关闭→ cylinder5=2000 |
 
 电缸值含义（参考上位机 `ADS通讯说明.md §3.3`）：
 - `cylinder1`：`0` 开 / `400` 预夹 / `1000` 夹
 - `cylinder2`：`0` 开 / `150` 预开 / `400` 预夹 / `600` 夹
 - `cylinder3`：`50` 夹 / `200` 预夹 / `250` 开 / `400` 跟随释放 / `500` 启动准备开
 - `cylinder4`：`0` 开 / `100` 跟随释放 / `300` 预 / `500` 夹
-- `cylinder5`：`0` 打开 / `2000` 关闭
+- `cylinder5`：`500` 打开 / `2000` 关闭
 
 ### 2.10 力传感器 IO
 
@@ -293,7 +270,7 @@ END_STRUCT
 2. **`G.leftlimit[i]` 只在 SelfCheck 完成后有意义**；自检前为 0（PLC 初始值），上位机不应在 `self_check_done = FALSE` 时使用 `from_left` 换算结果。
 3. **`G.estop_hold_req` 在以下时刻强制为 TRUE**：`init`（上电期间）、`_err`、`_clear_err`（200ms 前）、`handle` 的 `NOT init_done` 阶段、`handle` 的 `hold_active` 阶段。上位机应当把此标志作为"禁止手柄推动"的门控。
 4. **`G.return_cmd[i].Req` 上位机写 TRUE 后，必须等到 Done/Error 其中之一置位，再写 FALSE**。不允许在 Busy 期间重写 TRUE（见 §3）。
-5. **`G.cylinder5_value` 上位机不应直接写**；通过 `G.cylinder5_press_req` 写布尔量，由 PLC 每周期映射。直接写 `cylinder5_value` 会在下一周期被 PLC 覆盖。
+5. **`G.cylinder5_value` 上位机不应直接写**；通过 `G.cylinder5_press_req` 写布尔量，由 PLC 每周期映射为 `500`（打开）或 `2000`（关闭）。直接写 `cylinder5_value` 会在下一周期被 PLC 覆盖。
 6. **定位臂变量不参与原 `G.gen_state` 状态机**；`G.arm_manual_enable=FALSE` 或 `G.host_comm_timeout=TRUE` 时 PLC 会关闭所有定位臂 `MC_Power` 并清除单轴上电/点动请求，必须先写总使能 TRUE，再写对应 `G.arm_enable_req[i]=TRUE`。总使能或对应轴未上电时，`G.arm_jog_*` 请求不会产生运动。正反向同时为 TRUE 时 `G.arm_cmd_conflict[i]=TRUE`，PLC 停止该轴并拒绝启动新运动。
 7. **`G.startup_loading_ready` 不是位置反馈**：PLC 仅在本轮 SelfCheck 全部完成后置 TRUE。上位机还会核对 axis1/3/5/6 距左限位是否分别处于 `[96,280,430,580] ±2 mm`；任一条件不满足时改走中断恢复启动。旧 PLC 没有该符号时仅按实际位置兼容判定。
 8. **主机看门狗超时不是普通状态提示**：`host_heartbeat_sequence` 连续 100 ms 不变化时，PLC 锁存 `host_comm_timeout`，冻结外部参考，清快退、axis4 和平滑旁路请求，并对运行中的计划回退/axis4 运动执行受控停止；气缸保持最后状态。只有新鲜心跳、显式 `host_recover_req` 和停稳条件同时满足后才受理恢复。
@@ -334,16 +311,9 @@ PLC 侧无 ADS 配置文件，由 TwinCAT XAR 路由表管理。上位机连接�
 
 ## 7. 变更日志
 
-### 2026-08-24 — 通信四状态机重构与诊断镜像
-- 作者：AI（Antigravity）。
-- 变量：在 `G.TcGVL` 末尾新增 `G.host_comm_state : USINT`（只读诊断镜像）、`G.host_comm_reason : UDINT`（保持原因位图）、`G.host_stop_error_id : UDINT`（受控停止错误码）。
-- 状态机：`handle.TcPOU` 内部采用四状态机（`0:WaitHost`, `1:Online`, `2:CommHold`, `3:RecoveryWait`），由内部局部变量 `host_comm_state_internal` 驱动，外部只读；彻底解耦应用层通信异常与轴硬件故障 `_err`。
-- 安全与恢复：看门狗初始试验阈值调整为 250 ms；恢复握手增加 300 ms 连续心跳稳定窗口 + 全要素停稳（速度、停止 FB、回退 FB/状态机、Axis4 FB/状态机均就绪）；新会话接管强切 CommHold；重同步基准以实际 NC 位置重建；MC FB 与 `MC_ExtSetPointGenFeed` 实现严格每周期单点调用。
-- 契约兼容：不改变原 7 轴数组与既有 ADS 变量类型。
-
 ### 2026-08-19 — Axis15 与注射器 ADS 接口
 - 新增 `G.axis2_sync_axis`，独立链接 NC Axis15；新增 `G.inject_push_req[1..2]` / `G.inject_pull_req[1..2]` 控制 NC Axis13/14 点动。
-- Y阀 `G.cylinder5_press_req` 语义明确为 TRUE=打开（输出0）、FALSE=关闭（输出2000）。
+- Y阀 `G.cylinder5_press_req` 语义明确为 TRUE=打开（输出500）、FALSE=关闭（输出2000）。
 - 不扩展 `G.axis/refer/Act_pos[1..7]`，不改变旧介入机器人 ADS 契约。
 
 ### 2026-08-03 — 100 Hz ADS 契约与主机看门狗

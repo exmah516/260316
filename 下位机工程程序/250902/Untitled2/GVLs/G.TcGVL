@@ -108,7 +108,7 @@ VAR_GLOBAL
 	cylinder4_value		AT %Q* : WORD;		// 电缸4控制值 (安装在轴6机构上)
 	cylinder5_value		AT %Q* : WORD;		// 电缸5控制值 (安装在轴3机构上控制y阀)
 	cylinder5_cmd		: WORD := 2000;		// 历史兼容缓存，当前正式控制不写此变量
-	cylinder5_press_req	: BOOL := FALSE;	// Y阀请求（TRUE=打开，输出0；FALSE=关闭，输出2000）
+	cylinder5_press_req	: BOOL := FALSE;	// Y阀请求（TRUE=打开，输出500；FALSE=关闭，输出2000）
 	
 	
 	ft_1_value			AT %I* : INT;
@@ -116,10 +116,6 @@ VAR_GLOBAL
 	fn_2_value			AT %I* : INT;
 	ft_2_value			AT %I* : INT;
 
-	// ========== 通信状态与诊断变量（通讯逻辑改造） ==========
-	host_comm_state		: USINT := 0;	// 0=WaitHost, 1=Online, 2=CommHold, 3=RecoveryWait (只读诊断镜像)
-	host_comm_reason	: UDINT := 1;	// 最近一次保持原因位图 (初值1=无有效会话)
-	host_stop_error_id	: UDINT := 0;	// 受控停止功能块错误码 (0=无错误)
 
 END_VAR]]></Declaration>
   </GVL>

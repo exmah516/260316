@@ -23,25 +23,20 @@ VAR
 	has_axis_error : BOOL;
 	hold_active : BOOL := FALSE;
 
-	// 通信状态机内部状态与看门狗（局部变量，不受外部 ADS 误写干扰）
-	host_comm_state_internal : USINT := 0; // 0=WaitHost, 1=Online, 2=CommHold, 3=RecoveryWait
-	host_watchdog_timer : TON; // 心跳看门狗定时器 (PT:=T#250MS 试验初值)
-	host_recover_stable_timer : TON; // 恢复前心跳稳定窗口计时器 (PT:=T#300MS)
+	// 上位机通信看门狗。超时锁存后只能通过显式恢复握手解除。
+	host_watchdog_timer : TON;
 	host_last_session_id : UDINT := 0;
 	host_last_heartbeat_sequence : UDINT := 0;
 	host_heartbeat_seen : BOOL := FALSE;
 	host_session_changed : BOOL;
 	host_heartbeat_changed : BOOL;
-	host_heartbeat_age_ms : UDINT := 0;
 	host_timeout_latched : BOOL := TRUE;
 	host_timeout_prev : BOOL := FALSE;
-	host_timeout_count : UDINT := 0;
-
 	// 看门狗超时后锁存一次外部设定值保持位置。
 	// 不能每拍把 Actual Position 回写为下一拍设定值，否则编码器微动会被回灌到 NC。
 	host_hold_abs : ARRAY[1..7] OF LREAL;
 	host_hold_captured : BOOL := FALSE;
-	host_all_stopped : BOOL := TRUE;
+	host_all_stopped : BOOL;
 	host_return_stop_active : ARRAY[1..7] OF BOOL;
 	host_return_stop_exec : ARRAY[1..7] OF BOOL;
 	host_axis4_stop_active : BOOL := FALSE;
@@ -54,12 +49,6 @@ VAR
 	ext_setpoint_enabled : ARRAY[1..7] OF BOOL := [FALSE,FALSE,FALSE,FALSE,FALSE,FALSE,FALSE];
 	spg_enable_exec	: ARRAY[1..7] OF BOOL;
 	spg_disable_exec : ARRAY[1..7] OF BOOL;
-
-	// MC_ExtSetPointGenFeed 统一控制参数
-	feed_pos : ARRAY[1..7] OF LREAL;
-	feed_vel : ARRAY[1..7] OF LREAL;
-	feed_acc : ARRAY[1..7] OF LREAL;
-	feed_exec : ARRAY[1..7] OF BOOL;
 
 	return_enable : ARRAY[1..7] OF BOOL := [TRUE, FALSE, TRUE, FALSE, TRUE, TRUE, FALSE];
 	return_state : ARRAY[1..7] OF INT;
@@ -101,183 +90,50 @@ VAR
 	traj_amax    : ARRAY[1..7] OF LREAL := [2000, 0, 2000, 0, 2000, 2000, 0];
 	traj_enable  : ARRAY[1..7] OF BOOL := [TRUE, FALSE, TRUE, FALSE, TRUE, TRUE, FALSE];
 END_VAR
+
 ]]></Declaration>
     <Implementation>
-      <ST><![CDATA[// =========================================================================
-// 1. 会话与心跳监测
-// =========================================================================
-host_session_changed := (G.host_session_id <> host_last_session_id);
+      <ST><![CDATA[host_session_changed := G.host_session_id <> host_last_session_id;
 host_heartbeat_changed := host_session_changed OR
 	(G.host_heartbeat_sequence <> host_last_heartbeat_sequence);
 
 IF host_session_changed THEN
-	// 非零会话发生变化表示新的上位机接管：立即清除旧恢复请求并强切 CommHold，杜绝继承旧坐标
-	IF (host_last_session_id <> 0) AND (G.host_session_id <> 0) THEN
-		G.host_recover_req := FALSE;
+	// 非零会话发生变化表示新的上位机接管，必须重新完成恢复握手。
+	IF host_last_session_id <> 0 THEN
 		host_timeout_latched := TRUE;
-		host_comm_state_internal := 2; // CommHold
 	END_IF
 	host_last_session_id := G.host_session_id;
 END_IF
 
 IF host_heartbeat_changed THEN
 	host_last_heartbeat_sequence := G.host_heartbeat_sequence;
-	host_heartbeat_age_ms := 0;
-ELSE
-	IF host_heartbeat_age_ms < 60000 THEN
-		host_heartbeat_age_ms := host_heartbeat_age_ms + 1;
-	END_IF
 END_IF
 
-host_heartbeat_seen := (G.host_session_id <> 0);
-
-// 心跳变化的扫描周期将 TON 复位；序号连续 250 ms 不变化判定通信超时 (初始试验值)
+host_heartbeat_seen := G.host_session_id <> 0;
+// 心跳变化的扫描周期将 TON 复位；序号连续 100 ms 不变化才判定通信超时。
 host_watchdog_timer(
 	IN:=host_heartbeat_seen AND NOT host_heartbeat_changed,
-	PT:=T#250MS
+	PT:=T#100MS
 );
-
-// 恢复前心跳连续稳定窗口计时器 (300 ms)
-host_recover_stable_timer(
-	IN:=host_heartbeat_seen AND NOT host_watchdog_timer.Q,
-	PT:=T#300MS
-);
-
-// =========================================================================
-// 2. 受控停止状态收集、收尾清理与错误锁存
-// =========================================================================
-// 锁存受控停止 FB 错误码（不能每拍清零，仅在重初始化/人工清除时复位）
-FOR i:=1 TO 7 DO
-	IF fb_host_return_stop[i].Error THEN
-		G.host_stop_error_id := fb_host_return_stop[i].ErrorID;
-	END_IF
-END_FOR
-IF fb_axis4_stop.Error THEN
-	G.host_stop_error_id := fb_axis4_stop.ErrorID;
+IF (NOT host_heartbeat_seen) OR host_watchdog_timer.Q THEN
+	host_timeout_latched := TRUE;
 END_IF
+G.host_comm_timeout := host_timeout_latched;
 
-// 检查停止 FB 状态并完成取消收尾
-FOR i:=1 TO 7 DO
-	IF host_return_stop_active[i] THEN
-		IF fb_host_return_stop[i].Done THEN
-			// 停止完成：执行取消收尾，清零状态机与Busy位
-			host_return_stop_exec[i] := FALSE;
-			host_return_stop_active[i] := FALSE;
-			return_state[i] := 0;
-			return_exec[i] := FALSE;
-			G.return_cmd[i].Busy := FALSE;
-			G.return_cmd[i].Req := FALSE;
-			G.return_cmd[i].Done := FALSE;
-		ELSIF fb_host_return_stop[i].Error THEN
-			// 停止报错：清除执行请求，锁存错误码，结束停止激活态
-			host_return_stop_exec[i] := FALSE;
-			host_return_stop_active[i] := FALSE;
-			return_state[i] := 0;
-			return_exec[i] := FALSE;
-			G.return_cmd[i].Busy := FALSE;
-		ELSE
-			host_return_stop_exec[i] := TRUE;
-		END_IF
-	ELSE
-		host_return_stop_exec[i] := FALSE;
-	END_IF
-	IF host_return_stop_active[i] THEN
-		G.return_cmd[i].Busy := TRUE;
-	END_IF
-END_FOR
-
-IF host_axis4_stop_active THEN
-	IF fb_axis4_stop.Done THEN
-		// 停止完成：执行取消收尾，清零状态机与Busy位
-		axis4_stop_exec := FALSE;
-		host_axis4_stop_active := FALSE;
-		axis4_manual_state := 0;
-		axis4_move_exec := FALSE;
-		axis4_request_dir_now := 0;
-		axis4_requested_dir := 0;
-		axis4_pending_dir := 0;
-		G.axis4_fwd_req := FALSE;
-		G.axis4_rev_req := FALSE;
-		G.axis4_manual_busy := FALSE;
-		G.axis4_manual_done := FALSE;
-	ELSIF fb_axis4_stop.Error THEN
-		// 停止报错：清除执行请求，锁存错误码，结束停止激活态
-		axis4_stop_exec := FALSE;
-		host_axis4_stop_active := FALSE;
-		axis4_manual_state := 0;
-		axis4_move_exec := FALSE;
-		G.axis4_manual_busy := FALSE;
-	ELSE
-		axis4_stop_exec := TRUE;
-	END_IF
-END_IF
-IF host_axis4_stop_active THEN
-	G.axis4_manual_busy := TRUE;
-END_IF
-
-// 全要素停稳判定：实际速度<=0.05，无停止FB激活/Busy，无回退FB运行，无回退状态，无Axis4点动FB/状态
-host_all_stopped := TRUE;
-FOR i:=1 TO 7 DO
-	IF ABS(G.axis[i].NcToPlc.ActVelo) > 0.05 THEN
-		host_all_stopped := FALSE;
-	END_IF
-	IF host_return_stop_active[i] OR fb_host_return_stop[i].Busy THEN
-		host_all_stopped := FALSE;
-	END_IF
-	IF fb_return_move_abs[i].Busy OR fb_return_move_abs[i].Active THEN
-		host_all_stopped := FALSE;
-	END_IF
-	IF G.return_cmd[i].Busy OR (return_state[i] <> 0) THEN
-		host_all_stopped := FALSE;
-	END_IF
-END_FOR
-
-IF host_axis4_stop_active OR fb_axis4_stop.Busy THEN
-	host_all_stopped := FALSE;
-END_IF
-IF fb_axis4_move_velocity.Busy OR fb_axis4_move_velocity.Active OR (axis4_manual_state <> 0) THEN
-	host_all_stopped := FALSE;
-END_IF
-
-// =========================================================================
-// 3. 轴层状态分层检测
-// =========================================================================
-all_powered := TRUE;
-FOR i:=1 TO 7 DO
-	IF NOT G.power_output[i].Done THEN
-		all_powered := FALSE;
-		EXIT;
-	END_IF
-END_FOR
-
-has_axis_error := FALSE;
-FOR i:=1 TO 7 DO
-	IF G.axis[i].Status.Error OR G.power_output[i].Error OR G.reset_output[i].Error THEN
-		has_axis_error := TRUE;
-		EXIT;
-	END_IF
-END_FOR
-
-// =========================================================================
-// 4. 重初始化请求与基准重建 (SetPointGen 使能)
-// =========================================================================
 IF G.handle_reinit_req THEN
 	init_done := FALSE;
 	G.handle_reinit_done := FALSE;
 	G.handle_reinit_req := FALSE;
 	G.estop_hold_req := TRUE;
-	G.host_stop_error_id := 0; // 显式重初始化时清除停止错误锁存
 
 	FOR i:=1 TO 7 DO
 		ext_setpoint_enabled[i] := FALSE;
-		spg_enable_exec[i] := TRUE;
+		spg_enable_exec[i] := FALSE;
 		spg_disable_exec[i] := FALSE;
 		return_state[i] := 0;
 		return_exec[i] := FALSE;
 		return_finish_error[i] := FALSE;
 		return_error_id_pending[i] := 0;
-		host_return_stop_active[i] := FALSE;
-		host_return_stop_exec[i] := FALSE;
 		traj_pos[i] := 0.0;
 		traj_vel[i] := 0.0;
 		traj_acc[i] := 0.0;
@@ -299,7 +155,6 @@ IF G.handle_reinit_req THEN
 	axis4_stop_exec := FALSE;
 	axis4_finish_error := FALSE;
 	axis4_error_id_pending := 0;
-	host_axis4_stop_active := FALSE;
 	G.axis4_fwd_req := FALSE;
 	G.axis4_rev_req := FALSE;
 	G.axis4_manual_busy := FALSE;
@@ -312,10 +167,8 @@ IF NOT init_done THEN
 	G.estop_hold_req := TRUE;
 	all_enabled := TRUE;
 	FOR i:=1 TO 7 DO
-		spg_enable_exec[i] := TRUE;
-		spg_disable_exec[i] := FALSE;
-		// 由 MAIN::SETPOSITIONGEN() 调用，此处仅读取 Done 输出
-		IF NOT G.SetPointGenEnable_output[i].Done THEN
+		G.SetPointGenEnable[i](Axis:=G.axis[i], Execute:=TRUE);
+		IF NOT G.SetPointGenEnable[i].Done THEN
 			all_enabled := FALSE;
 		END_IF
 	END_FOR
@@ -353,97 +206,27 @@ IF NOT init_done THEN
 		G.axis4_manual_error_id := 0;
 
 		init_done := TRUE;
-		G.handle_reinit_done := TRUE;
+		// 通信超时未解除时不提前确认恢复；正式握手后会再次进入本初始化流程。
+		G.handle_reinit_done := NOT G.host_comm_timeout;
 	END_IF
+	RETURN;
 END_IF
 
-// =========================================================================
-// 5. 内部通信四状态机调度
-// =========================================================================
-CASE host_comm_state_internal OF
-0: // WaitHost: 上电或初次进入，等待心跳连续稳定 300 ms 且机构停稳
-	host_timeout_latched := TRUE;
-	IF host_recover_stable_timer.Q AND host_all_stopped AND (G.host_stop_error_id = 0) AND all_powered AND (NOT has_axis_error) THEN
-		IF G.host_recover_req OR (NOT init_done) THEN
-			init_done := FALSE;
-			G.handle_reinit_done := FALSE;
-			G.handle_reinit_req := TRUE;
-			host_comm_state_internal := 3; // RecoveryWait
-		END_IF
-	END_IF
-
-1: // Online: 正常通信与跟随
-	IF (NOT host_heartbeat_seen) OR host_watchdog_timer.Q THEN
-		host_timeout_latched := TRUE;
-		host_timeout_count := host_timeout_count + 1;
-		host_comm_state_internal := 2; // CommHold
-	END_IF
-
-2: // CommHold: 心跳超时/中断保持
-	host_timeout_latched := TRUE;
-	// 心跳持续稳定>=300ms + 上位机请求恢复 + 机构全要素停稳 + 无停止错误 + 全轴上电无故障
-	IF host_recover_stable_timer.Q AND G.host_recover_req AND host_all_stopped AND (G.host_stop_error_id = 0) AND all_powered AND (NOT has_axis_error) THEN
-		init_done := FALSE;
-		G.handle_reinit_done := FALSE;
-		G.handle_reinit_req := TRUE;
-		host_comm_state_internal := 3; // RecoveryWait
-	END_IF
-
-3: // RecoveryWait: 正在重同步基准，等待完成
-	host_timeout_latched := TRUE;
-	IF (NOT host_heartbeat_seen) OR host_watchdog_timer.Q THEN
-		host_comm_state_internal := 2; // CommHold
-	ELSIF init_done AND G.handle_reinit_done AND all_powered AND (NOT has_axis_error) THEN
-		// 基准重建真正完成，解除通信锁存与握手，安全转入 Online
-		host_timeout_latched := FALSE;
-		G.host_recover_req := FALSE;
-		host_comm_state_internal := 1; // Online
-	END_IF
-END_CASE
-
-// 导出只读状态与通信标志
-G.host_comm_state := host_comm_state_internal;
-G.host_comm_timeout := host_timeout_latched;
-
-// =========================================================================
-// 6. 保持原因位图更新 (G.host_comm_reason)
-// =========================================================================
-G.host_comm_reason := 0;
-IF G.host_session_id = 0 THEN
-	G.host_comm_reason := G.host_comm_reason OR 1; // Bit 0: 无有效会话
-END_IF
-IF host_watchdog_timer.Q THEN
-	G.host_comm_reason := G.host_comm_reason OR 2; // Bit 1: 心跳超时
-END_IF
-IF host_session_changed AND (host_last_session_id <> 0) THEN
-	G.host_comm_reason := G.host_comm_reason OR 4; // Bit 2: 新会话接管
-END_IF
+all_powered := TRUE;
 FOR i:=1 TO 7 DO
-	IF host_return_stop_active[i] THEN
-		G.host_comm_reason := G.host_comm_reason OR 8; // Bit 3: 计划回退正在停止
+	IF NOT G.power_output[i].Done THEN
+		all_powered := FALSE;
 		EXIT;
 	END_IF
 END_FOR
-IF host_axis4_stop_active THEN
-	G.host_comm_reason := G.host_comm_reason OR 16; // Bit 4: Axis4正在停止
-END_IF
-IF NOT all_powered THEN
-	G.host_comm_reason := G.host_comm_reason OR 32; // Bit 5: 轴未上电
-END_IF
-IF has_axis_error THEN
-	G.host_comm_reason := G.host_comm_reason OR 64; // Bit 6: 轴错误
-END_IF
-IF G.host_stop_error_id <> 0 THEN
-	G.host_comm_reason := G.host_comm_reason OR 128; // Bit 7: 保持/停止FB错误
-END_IF
 
-// =========================================================================
-// 7. 轴故障与掉使能处理 (分层处理)
-// =========================================================================
-IF has_axis_error THEN
-	G.estop_hold_req := TRUE;
-	G.gen_state := _err;
-END_IF
+has_axis_error := FALSE;
+FOR i:=1 TO 7 DO
+	IF G.axis[i].Status.Error OR G.power_output[i].Error OR G.reset_output[i].Error THEN
+		has_axis_error := TRUE;
+		EXIT;
+	END_IF
+END_FOR
 
 IF NOT all_powered THEN
 	G.estop_hold_req := TRUE;
@@ -464,21 +247,35 @@ IF NOT all_powered THEN
 		traj_vel[j] := 0.0;
 		traj_acc[j] := 0.0;
 	END_FOR
-ELSIF hold_active THEN
+	IF has_axis_error THEN
+		G.gen_state := _err;
+	END_IF
+	RETURN;
+END_IF
+
+IF hold_active THEN
 	hold_active := FALSE;
 	G.handle_reinit_req := TRUE;
 	G.estop_hold_req := TRUE;
+	IF has_axis_error THEN
+		G.gen_state := _err;
+	END_IF
+	RETURN;
 END_IF
 
-// =========================================================================
-// 8. 运动控制计算分支 (保持态 vs Online 正常跟随态)
-// =========================================================================
-IF host_timeout_latched OR (NOT init_done) OR (NOT all_powered) OR has_axis_error THEN
-	// ---------------------- 通信保持/未就绪态 ----------------------
+IF has_axis_error THEN
 	G.estop_hold_req := TRUE;
+	G.gen_state := _err;
+	RETURN;
+END_IF
+
+IF G.host_comm_timeout THEN
+	G.estop_hold_req := TRUE;
+	G.handle_reinit_done := FALSE;
 
 	IF (NOT host_timeout_prev) OR (NOT host_hold_captured) THEN
-		// 仅在进入保持边沿采样一次绝对位置，避免回灌抖动
+		// 仅在进入超时保持时采样一次。之后始终维持同一绝对位置，
+		// 避免 Actual -> Set Position 的逐周期回灌导致低频来回摆动。
 		FOR i:=1 TO 7 DO
 			host_hold_abs[i] := G.axis[i].NcToPlc.ActPos;
 		END_FOR
@@ -486,41 +283,32 @@ IF host_timeout_latched OR (NOT init_done) OR (NOT all_powered) OR has_axis_erro
 	END_IF
 
 	IF NOT host_timeout_prev THEN
-		// 仅捕获超时发生时已经在运行的独立运动，触发受控停止
+		// 仅捕获超时发生时已经在运行的独立运动，禁止恢复后自动续跑。
 		FOR i:=1 TO 7 DO
 			host_return_stop_active[i] := return_enable[i] AND
 				((return_state[i] <> 0) OR G.return_cmd[i].Busy OR fb_return_move_abs[i].Busy);
-			host_return_stop_exec[i] := host_return_stop_active[i];
+			host_return_stop_exec[i] := FALSE;
 		END_FOR
 		host_axis4_stop_active := (axis4_manual_state <> 0) OR fb_axis4_move_velocity.Busy;
-		axis4_stop_exec := host_axis4_stop_active;
 	END_IF
 
-	// 超时保持期间持续清除上位机运动请求，防止恢复后误触发
+	// 超时期间持续清除运动请求，避免上位机重连时把旧请求重新送入状态机。
 	G.axis1_fast_return := FALSE;
 	G.axis6_fast_retract := FALSE;
 	G.axis4_fwd_req := FALSE;
 	G.axis4_rev_req := FALSE;
 	G.startup_smoothing_bypass := FALSE;
 	axis4_move_exec := FALSE;
-
-	// 若受控停止未激活或已完成，确保状态机和Busy位清零，避免阻断 host_all_stopped
-	IF NOT host_axis4_stop_active THEN
-		axis4_manual_state := 0;
-		G.axis4_manual_busy := FALSE;
-		G.axis4_manual_done := FALSE;
-	END_IF
+	host_all_stopped := TRUE;
 
 	FOR i:=1 TO 7 DO
-		IF NOT host_return_stop_active[i] THEN
-			return_state[i] := 0;
-			return_exec[i] := FALSE;
-			G.return_cmd[i].Busy := FALSE;
-			G.return_cmd[i].Req := FALSE;
-			G.return_cmd[i].Done := FALSE;
-		END_IF
+		spg_enable_exec[i] := FALSE;
+		spg_disable_exec[i] := FALSE;
+		return_exec[i] := FALSE;
+		G.return_cmd[i].Req := FALSE;
+		G.return_cmd[i].Done := FALSE;
 
-		// 实际位置实时刷新用于诊断；外部参考始终维持超时锁存位置
+		// 实际位置仍实时刷新用于诊断；外部参考始终保持超时边沿的锁存位置。
 		G.Act_pos[i] := G.axis[i].NcToPlc.ActPos - G.init_pos[i];
 		G.act_pos_from_left[i] := G.axis[i].NcToPlc.ActPos - G.leftlimit[i];
 		G.refer[i] := host_hold_abs[i] - G.init_pos[i];
@@ -536,416 +324,479 @@ IF host_timeout_latched OR (NOT init_done) OR (NOT all_powered) OR has_axis_erro
 		traj_vel[i] := 0.0;
 		traj_acc[i] := 0.0;
 
-		// 保持态设定点输出参数：锁存位置 + 0速度
-		feed_pos[i] := host_hold_abs[i];
-		feed_vel[i] := 0.0;
-		feed_acc[i] := 0.0;
-		feed_exec[i] := ext_setpoint_enabled[i];
+		IF host_return_stop_active[i] THEN
+			IF fb_host_return_stop[i].Done THEN
+				host_return_stop_exec[i] := FALSE;
+				host_return_stop_active[i] := FALSE;
+			ELSIF fb_host_return_stop[i].Error THEN
+				// 拉低一个扫描周期清除错误，下一周期继续尝试受控停止。
+				host_return_stop_exec[i] := FALSE;
+				host_all_stopped := FALSE;
+			ELSE
+				host_return_stop_exec[i] := TRUE;
+				host_all_stopped := FALSE;
+			END_IF
+		ELSE
+			host_return_stop_exec[i] := FALSE;
+		END_IF
+		G.return_cmd[i].Busy := host_return_stop_active[i];
+
+		IF ext_setpoint_enabled[i] THEN
+			MC_ExtSetPointGenFeed(
+				Position:=host_hold_abs[i],
+				Velocity:=0.0,
+				Acceleration:=0.0,
+				Direction:=1,
+				Axis:=G.axis[i]);
+		END_IF
+
+		// 所有运动功能块在看门狗分支中仍保持每扫描调用。
+		G.SetPointGenEnable[i](Axis:=G.axis[i], Execute:=FALSE);
+		G.SetPointGenDisable[i](Axis:=G.axis[i], Execute:=FALSE);
+		fb_return_move_abs[i](
+			Axis:=G.axis[i],
+			Position:=return_target_abs[i],
+			Velocity:=return_velocity[i],
+			Acceleration:=return_acc[i],
+			Deceleration:=return_dec[i],
+			Jerk:=return_jerk[i],
+			Execute:=FALSE
+		);
+		fb_host_return_stop[i](
+			Axis:=G.axis[i],
+			Execute:=host_return_stop_exec[i],
+			Deceleration:=100.0,
+			Jerk:=500.0
+		);
 	END_FOR
 
-	host_timeout_prev := TRUE;
-ELSE
-	// ---------------------- Online 正常跟随态 ----------------------
-	host_timeout_prev := FALSE;
-	host_hold_captured := FALSE;
-	G.host_recover_req := FALSE;
-	G.estop_hold_req := FALSE;
-
-	// Y阀电缸映射
-	IF G.cylinder5_press_req THEN
-		G.cylinder5_value := 0;
+	IF host_axis4_stop_active THEN
+		IF fb_axis4_stop.Done THEN
+			axis4_stop_exec := FALSE;
+			host_axis4_stop_active := FALSE;
+		ELSIF fb_axis4_stop.Error THEN
+			// 拉低一个扫描周期清除错误，下一周期继续尝试受控停止。
+			axis4_stop_exec := FALSE;
+			host_all_stopped := FALSE;
+		ELSE
+			axis4_stop_exec := TRUE;
+			host_all_stopped := FALSE;
+		END_IF
 	ELSE
-		G.cylinder5_value := 2000;
+		axis4_stop_exec := FALSE;
+	END_IF
+	G.axis4_manual_busy := host_axis4_stop_active;
+	G.axis4_manual_done := FALSE;
+
+	fb_axis4_move_velocity(
+		Axis:=G.axis[4],
+		Execute:=FALSE,
+		Velocity:=axis4_manual_velocity,
+		Acceleration:=axis4_manual_acc,
+		Deceleration:=axis4_manual_dec,
+		Jerk:=axis4_manual_jerk,
+		Direction:=axis4_manual_direction
+	);
+	fb_axis4_stop(
+		Axis:=G.axis[4],
+		Execute:=axis4_stop_exec,
+		Deceleration:=axis4_manual_dec,
+		Jerk:=axis4_manual_jerk
+	);
+
+	// 清请求并解除超时即为 PLC 对恢复请求的确认；随后复用既有重初始化流程。
+	IF G.host_recover_req AND host_heartbeat_seen AND
+		(NOT host_watchdog_timer.Q) AND host_all_stopped THEN
+		host_timeout_latched := FALSE;
+		G.host_comm_timeout := FALSE;
+		G.host_recover_req := FALSE;
+		G.handle_reinit_req := TRUE;
 	END_IF
 
-	FOR i:=1 TO 7 DO
-		spg_enable_exec[i] := FALSE;
-		spg_disable_exec[i] := FALSE;
-		return_exec[i] := FALSE;
+	host_timeout_prev := G.host_comm_timeout;
+	RETURN;
+END_IF
+
+host_timeout_prev := FALSE;
+host_hold_captured := FALSE;
+// 非超时状态收到的恢复请求没有业务含义，清除以免成为下一次超时的陈旧握手。
+G.host_recover_req := FALSE;
+
+G.estop_hold_req := FALSE;
+
+IF G.cylinder5_press_req THEN
+	G.cylinder5_value := 500;
+ELSE
+	G.cylinder5_value := 2000;
+END_IF
+
+FOR i:=1 TO 7 DO
+	spg_enable_exec[i] := FALSE;
+	spg_disable_exec[i] := FALSE;
+	return_exec[i] := FALSE;
+END_FOR
+axis4_move_exec := FALSE;
+axis4_stop_exec := FALSE;
+
+FOR j:=1 TO 7 DO
+	G.Act_pos[j] := G.axis[j].NcToPlc.ActPos - G.init_pos[j];
+	G.act_pos_from_left[j] := G.axis[j].NcToPlc.ActPos - G.leftlimit[j];
+	G.refer_from_left[j] := (G.refer[j] + G.init_pos[j]) - G.leftlimit[j];
+
+	v_step := G.v_limit[j];
+	// 回退接管旁路：回退 Busy 期间跳过斜坡/均值，避免回退末端重新进入慢链路
+	return_handoff_bypass := ((j = 1) AND (G.axis1_fast_return OR G.return_cmd[1].Busy))
+		OR ((j = 6) AND (G.axis6_fast_retract OR G.return_cmd[6].Busy));
+	IF return_handoff_bypass THEN
+		avg_window := 1;
+		ramp_counter[j] := 0;
+	ELSE
+		ramp_counter[j] := MIN(ramp_counter[j] + 1, avg_window_size);
+		avg_window := MAX(1, ramp_counter[j]);
+	END_IF
+
+	FOR k:=2 TO 20 DO
+		act_hh[j][22-k] := act_hh[j][21-k];
 	END_FOR
-	axis4_move_exec := FALSE;
-	axis4_stop_exec := FALSE;
 
-	FOR j:=1 TO 7 DO
-		G.Act_pos[j] := G.axis[j].NcToPlc.ActPos - G.init_pos[j];
-		G.act_pos_from_left[j] := G.axis[j].NcToPlc.ActPos - G.leftlimit[j];
-		G.refer_from_left[j] := (G.refer[j] + G.init_pos[j]) - G.leftlimit[j];
-
-		v_step := G.v_limit[j];
-		// 回退接管旁路：回退 Busy 期间跳过斜坡/均值，避免回退末端重新进入慢链路
-		return_handoff_bypass := ((j = 1) AND (G.axis1_fast_return OR G.return_cmd[1].Busy))
-			OR ((j = 6) AND (G.axis6_fast_retract OR G.return_cmd[6].Busy));
-		IF return_handoff_bypass THEN
-			avg_window := 1;
-			ramp_counter[j] := 0;
-		ELSE
-			ramp_counter[j] := MIN(ramp_counter[j] + 1, avg_window_size);
-			avg_window := MAX(1, ramp_counter[j]);
+	IF slimit_enable[j] THEN
+		IF (G.axis[j].NcToPlc.ActPos >= right_slimit[j]) AND (G.refer[j] > G.ref_slow[j]) THEN
+			G.refer[j] := G.ref_slow[j];
 		END_IF
+	END_IF
 
-		FOR k:=2 TO 20 DO
-			act_hh[j][22-k] := act_hh[j][21-k];
+	IF return_handoff_bypass THEN
+		G.ref_slow[j] := G.refer[j];
+	ELSIF (G.refer[j] - G.ref_slow[j]) > v_step THEN
+		G.ref_slow[j] := G.ref_slow[j] + v_step;
+	ELSIF (G.refer[j] - G.ref_slow[j]) < -v_step THEN
+		G.ref_slow[j] := G.ref_slow[j] - v_step;
+	ELSE
+		G.ref_slow[j] := G.refer[j];
+	END_IF
+
+	IF return_handoff_bypass THEN
+		FOR i:=1 TO 20 DO
+			act_hh[j][i] := G.ref_slow[j];
 		END_FOR
+		G.act_h[j] := G.ref_slow[j];
+	ELSE
+		act_hh[j][1] := G.ref_slow[j];
+		G.act_h[j] := 0;
+		FOR i:=1 TO avg_window DO
+			G.act_h[j] := G.act_h[j] + act_hh[j][i] / TO_LREAL(avg_window);
+		END_FOR
+	END_IF
 
-		IF slimit_enable[j] THEN
-			IF (G.axis[j].NcToPlc.ActPos >= right_slimit[j]) AND (G.refer[j] > G.ref_slow[j]) THEN
-				G.refer[j] := G.ref_slow[j];
-			END_IF
+	IF traj_enable[j] AND NOT return_handoff_bypass AND NOT G.startup_smoothing_bypass THEN
+		acc_raw := traj_wn * traj_wn * (G.refer[j] - traj_pos[j]) - 2.0 * traj_wn * traj_vel[j];
+		IF acc_raw > traj_amax[j] THEN
+			acc_raw := traj_amax[j];
+		ELSIF acc_raw < -traj_amax[j] THEN
+			acc_raw := -traj_amax[j];
 		END_IF
-
-		IF return_handoff_bypass THEN
-			G.ref_slow[j] := G.refer[j];
-		ELSIF (G.refer[j] - G.ref_slow[j]) > v_step THEN
-			G.ref_slow[j] := G.ref_slow[j] + v_step;
-		ELSIF (G.refer[j] - G.ref_slow[j]) < -v_step THEN
-			G.ref_slow[j] := G.ref_slow[j] - v_step;
-		ELSE
-			G.ref_slow[j] := G.refer[j];
+		traj_acc[j] := acc_raw;
+		traj_vel[j] := traj_vel[j] + 0.001 * traj_acc[j];
+		IF traj_vel[j] > traj_vmax[j] THEN
+			traj_vel[j] := traj_vmax[j];
+		ELSIF traj_vel[j] < -traj_vmax[j] THEN
+			traj_vel[j] := -traj_vmax[j];
 		END_IF
-
-		IF return_handoff_bypass THEN
-			FOR i:=1 TO 20 DO
-				act_hh[j][i] := G.ref_slow[j];
-			END_FOR
-			G.act_h[j] := G.ref_slow[j];
-		ELSE
-			act_hh[j][1] := G.ref_slow[j];
-			G.act_h[j] := 0;
-			FOR i:=1 TO avg_window DO
-				G.act_h[j] := G.act_h[j] + act_hh[j][i] / TO_LREAL(avg_window);
-			END_FOR
-		END_IF
-
-		IF traj_enable[j] AND NOT return_handoff_bypass AND NOT G.startup_smoothing_bypass THEN
-			acc_raw := traj_wn * traj_wn * (G.refer[j] - traj_pos[j]) - 2.0 * traj_wn * traj_vel[j];
-			IF acc_raw > traj_amax[j] THEN
-				acc_raw := traj_amax[j];
-			ELSIF acc_raw < -traj_amax[j] THEN
-				acc_raw := -traj_amax[j];
-			END_IF
-			traj_acc[j] := acc_raw;
-			traj_vel[j] := traj_vel[j] + 0.001 * traj_acc[j];
-			IF traj_vel[j] > traj_vmax[j] THEN
-				traj_vel[j] := traj_vmax[j];
-			ELSIF traj_vel[j] < -traj_vmax[j] THEN
-				traj_vel[j] := -traj_vmax[j];
-			END_IF
-			traj_pos[j] := traj_pos[j] + 0.001 * traj_vel[j];
-			IF ABS(G.refer[j] - traj_pos[j]) < 0.001 AND ABS(traj_vel[j]) < 0.01 THEN
-				traj_pos[j] := G.refer[j];
-				traj_vel[j] := 0.0;
-				traj_acc[j] := 0.0;
-			END_IF
-		ELSE
-			traj_pos[j] := G.act_h[j];
+		traj_pos[j] := traj_pos[j] + 0.001 * traj_vel[j];
+		IF ABS(G.refer[j] - traj_pos[j]) < 0.001 AND ABS(traj_vel[j]) < 0.01 THEN
+			traj_pos[j] := G.refer[j];
 			traj_vel[j] := 0.0;
 			traj_acc[j] := 0.0;
 		END_IF
-	END_FOR
+	ELSE
+		traj_pos[j] := G.act_h[j];
+		traj_vel[j] := 0.0;
+		traj_acc[j] := 0.0;
+	END_IF
+END_FOR
 
-	// 计划回退状态机
-	FOR i:=1 TO 7 DO
-		IF NOT return_enable[i] THEN
-			CONTINUE;
-		END_IF
-
-		IF return_state[i] = 0 THEN
-			G.return_cmd[i].Busy := FALSE;
-			IF NOT G.return_cmd[i].Req THEN
-				G.return_cmd[i].Done := FALSE;
-				G.return_cmd[i].Error := FALSE;
-				G.return_cmd[i].ErrorId := 0;
-				return_finish_error[i] := FALSE;
-				return_error_id_pending[i] := 0;
-			ELSIF (NOT G.return_cmd[i].Done) AND (NOT G.return_cmd[i].Error) THEN
-				return_target_abs[i] := G.return_cmd[i].TargetAbs;
-				return_velocity[i] := G.return_cmd[i].Velocity;
-				return_acc[i] := G.return_cmd[i].Acc;
-				return_dec[i] := G.return_cmd[i].Dec;
-				return_jerk[i] := G.return_cmd[i].Jerk;
-				return_state[i] := 10;
-			END_IF
-		END_IF
-
-		CASE return_state[i] OF
-		10:
-			G.return_cmd[i].Busy := TRUE;
-			spg_disable_exec[i] := TRUE;
-			IF G.SetPointGenDisable_output[i].Done OR NOT G.SetPointGenDisable_output[i].Enabled THEN
-				ext_setpoint_enabled[i] := FALSE;
-				return_state[i] := 20;
-			END_IF
-
-		20:
-			G.return_cmd[i].Busy := TRUE;
-			return_exec[i] := TRUE;
-			G.refer_from_left[i] := return_target_abs[i] - G.leftlimit[i];
-
-			IF fb_return_move_abs[i].Done OR
-			   ((NOT fb_return_move_abs[i].Busy) AND (ABS(G.axis[i].NcToPlc.ActPos - return_target_abs[i]) <= 0.05)) THEN
-				return_finish_error[i] := FALSE;
-				return_error_id_pending[i] := 0;
-				return_state[i] := 30;
-			ELSIF fb_return_move_abs[i].Error OR fb_return_move_abs[i].CommandAborted THEN
-				return_finish_error[i] := TRUE;
-				return_error_id_pending[i] := fb_return_move_abs[i].ErrorID;
-				return_state[i] := 30;
-			END_IF
-
-		30:
-			G.return_cmd[i].Busy := TRUE;
-			IF ABS(G.axis[i].NcToPlc.ActVelo) <= 0.5 THEN
-				G.Act_pos[i] := G.axis[i].NcToPlc.ActPos - G.init_pos[i];
-				G.act_pos_from_left[i] := G.axis[i].NcToPlc.ActPos - G.leftlimit[i];
-				G.refer[i] := G.Act_pos[i];
-				G.ref_slow[i] := G.Act_pos[i];
-				G.act_h[i] := G.Act_pos[i];
-				G.act_hf[i] := G.Act_pos[i];
-				G.refer_from_left[i] := G.act_pos_from_left[i];
-				FOR k:=1 TO 30 DO
-					act_hh[i][k] := G.Act_pos[i];
-				END_FOR
-				act_h_prev[i] := G.Act_pos[i];
-				traj_pos[i] := G.Act_pos[i];
-				traj_vel[i] := 0.0;
-				traj_acc[i] := 0.0;
-				return_state[i] := 31;
-			END_IF
-
-		31:
-			G.return_cmd[i].Busy := TRUE;
-			spg_enable_exec[i] := TRUE;
-			IF G.SetPointGenEnable_output[i].Done THEN
-				ext_setpoint_enabled[i] := TRUE;
-				G.return_cmd[i].Busy := FALSE;
-				IF return_finish_error[i] THEN
-					G.return_cmd[i].Done := FALSE;
-					G.return_cmd[i].Error := TRUE;
-					G.return_cmd[i].ErrorId := return_error_id_pending[i];
-				ELSE
-					G.return_cmd[i].Done := TRUE;
-					G.return_cmd[i].Error := FALSE;
-					G.return_cmd[i].ErrorId := 0;
-				END_IF
-				return_finish_error[i] := FALSE;
-				return_error_id_pending[i] := 0;
-				return_state[i] := 0;
-			END_IF
-		END_CASE
-	END_FOR
-
-	// Axis4 手动点动状态机
-	axis4_request_dir_now := 0;
-	IF G.axis4_fwd_req AND NOT G.axis4_rev_req THEN
-		axis4_request_dir_now := 1;
-	ELSIF G.axis4_rev_req AND NOT G.axis4_fwd_req THEN
-		axis4_request_dir_now := -1;
+FOR i:=1 TO 7 DO
+	IF NOT return_enable[i] THEN
+		CONTINUE;
 	END_IF
 
-	IF axis4_manual_state = 0 THEN
-		G.axis4_manual_busy := FALSE;
-		IF axis4_request_dir_now = 0 THEN
-			G.axis4_manual_done := FALSE;
-			G.axis4_manual_error := FALSE;
-			G.axis4_manual_error_id := 0;
-		ELSIF NOT G.axis4_manual_error THEN
-			G.axis4_manual_done := FALSE;
-			G.axis4_manual_error := FALSE;
-			G.axis4_manual_error_id := 0;
-			axis4_requested_dir := axis4_request_dir_now;
-			axis4_pending_dir := 0;
-			axis4_finish_error := FALSE;
-			axis4_error_id_pending := 0;
-			axis4_manual_state := 10;
+	IF return_state[i] = 0 THEN
+		G.return_cmd[i].Busy := FALSE;
+		IF NOT G.return_cmd[i].Req THEN
+			G.return_cmd[i].Done := FALSE;
+			G.return_cmd[i].Error := FALSE;
+			G.return_cmd[i].ErrorId := 0;
+			return_finish_error[i] := FALSE;
+			return_error_id_pending[i] := 0;
+		ELSIF (NOT G.return_cmd[i].Done) AND (NOT G.return_cmd[i].Error) THEN
+			// Req 由上位机在完整写入参数后最后置位；此处只锁存一次，
+			// 本次 MC_MoveAbsolute 后续不再直接读取可被 ADS 改写的命令参数。
+			return_target_abs[i] := G.return_cmd[i].TargetAbs;
+			return_velocity[i] := G.return_cmd[i].Velocity;
+			return_acc[i] := G.return_cmd[i].Acc;
+			return_dec[i] := G.return_cmd[i].Dec;
+			return_jerk[i] := G.return_cmd[i].Jerk;
+			return_state[i] := 10;
 		END_IF
 	END_IF
 
-	CASE axis4_manual_state OF
+	CASE return_state[i] OF
 	10:
-		G.axis4_manual_busy := TRUE;
-		spg_disable_exec[4] := TRUE;
-		IF G.SetPointGenDisable_output[4].Done OR NOT G.SetPointGenDisable_output[4].Enabled THEN
-			ext_setpoint_enabled[4] := FALSE;
-			axis4_manual_state := 20;
+		G.return_cmd[i].Busy := TRUE;
+		spg_disable_exec[i] := TRUE;
+		IF G.SetPointGenDisable[i].Done OR NOT G.SetPointGenDisable[i].Enabled THEN
+			ext_setpoint_enabled[i] := FALSE;
+			return_state[i] := 20;
 		END_IF
 
 	20:
-		G.axis4_manual_busy := TRUE;
-		axis4_pending_dir := axis4_request_dir_now;
-		IF axis4_requested_dir >= 0 THEN
-			axis4_manual_direction := MC_Direction.MC_Positive_Direction;
-		ELSE
-			axis4_manual_direction := MC_Direction.MC_Negative_Direction;
-		END_IF
+		G.return_cmd[i].Busy := TRUE;
+		return_exec[i] := TRUE;
+		G.refer_from_left[i] := return_target_abs[i] - G.leftlimit[i];
 
-		IF axis4_pending_dir = 0 THEN
-			axis4_manual_state := 30;
-		ELSIF axis4_pending_dir <> axis4_requested_dir THEN
-			axis4_manual_state := 30;
-		ELSE
-			axis4_move_exec := TRUE;
-		END_IF
-
-		IF fb_axis4_move_velocity.Error OR fb_axis4_move_velocity.CommandAborted THEN
-			axis4_finish_error := TRUE;
-			axis4_error_id_pending := fb_axis4_move_velocity.ErrorID;
-			G.axis4_manual_error_id := fb_axis4_move_velocity.ErrorID;
-			axis4_pending_dir := 0;
-			axis4_manual_state := 40;
+		IF fb_return_move_abs[i].Done OR
+		   ((NOT fb_return_move_abs[i].Busy) AND (ABS(G.axis[i].NcToPlc.ActPos - return_target_abs[i]) <= 0.05)) THEN
+			return_finish_error[i] := FALSE;
+			return_error_id_pending[i] := 0;
+			return_state[i] := 30;
+		ELSIF fb_return_move_abs[i].Error OR fb_return_move_abs[i].CommandAborted THEN
+			return_finish_error[i] := TRUE;
+			return_error_id_pending[i] := fb_return_move_abs[i].ErrorID;
+			return_state[i] := 30;
 		END_IF
 
 	30:
-		G.axis4_manual_busy := TRUE;
-		axis4_pending_dir := axis4_request_dir_now;
-		axis4_stop_exec := TRUE;
-
-		IF fb_axis4_stop.Error THEN
-			axis4_finish_error := TRUE;
-			axis4_error_id_pending := fb_axis4_stop.ErrorID;
-			axis4_pending_dir := 0;
-			axis4_manual_state := 39;
-		ELSIF fb_axis4_stop.Done OR (ABS(G.axis[4].NcToPlc.ActVelo) <= 0.05) THEN
-			IF axis4_pending_dir <> 0 THEN
-				axis4_requested_dir := axis4_pending_dir;
-				axis4_manual_state := 20;
-			ELSE
-				axis4_requested_dir := 0;
-				axis4_manual_state := 39;
-			END_IF
+		G.return_cmd[i].Busy := TRUE;
+		IF ABS(G.axis[i].NcToPlc.ActVelo) <= 0.5 THEN
+			G.Act_pos[i] := G.axis[i].NcToPlc.ActPos - G.init_pos[i];
+			G.act_pos_from_left[i] := G.axis[i].NcToPlc.ActPos - G.leftlimit[i];
+			G.refer[i] := G.Act_pos[i];
+			G.ref_slow[i] := G.Act_pos[i];
+			G.act_h[i] := G.Act_pos[i];
+			G.act_hf[i] := G.Act_pos[i];
+			G.refer_from_left[i] := G.act_pos_from_left[i];
+			FOR k:=1 TO 30 DO
+				act_hh[i][k] := G.Act_pos[i];
+			END_FOR
+			act_h_prev[i] := G.Act_pos[i];
+			traj_pos[i] := G.Act_pos[i];
+			traj_vel[i] := 0.0;
+			traj_acc[i] := 0.0;
+			// 先留出一个完整 PLC 扫描周期预送当前设定值，再重新使能外部设定值发生器。
+			return_state[i] := 31;
 		END_IF
 
-	39:
-		G.axis4_manual_busy := TRUE;
-		axis4_manual_state := 40;
-		
-	40:
-		G.axis4_manual_busy := TRUE;
-		G.Act_pos[4] := G.axis[4].NcToPlc.ActPos - G.init_pos[4];
-		G.act_pos_from_left[4] := G.axis[4].NcToPlc.ActPos - G.leftlimit[4];
-		G.refer[4] := G.Act_pos[4];
-		G.ref_slow[4] := G.Act_pos[4];
-		G.act_h[4] := G.Act_pos[4];
-		G.act_hf[4] := G.Act_pos[4];
-		G.refer_from_left[4] := G.act_pos_from_left[4];
-		FOR k:=1 TO 30 DO
-			act_hh[4][k] := G.Act_pos[4];
-		END_FOR
-		act_h_prev[4] := G.Act_pos[4];
-		traj_pos[4] := G.Act_pos[4];
-		traj_vel[4] := 0.0;
-		traj_acc[4] := 0.0;
-		spg_enable_exec[4] := TRUE;
-		IF G.SetPointGenEnable_output[4].Done THEN
-			ext_setpoint_enabled[4] := TRUE;
-			G.axis4_manual_busy := FALSE;
-			IF axis4_finish_error THEN
-				G.axis4_manual_done := FALSE;
-				G.axis4_manual_error := TRUE;
-				G.axis4_manual_error_id := axis4_error_id_pending;
+	31:
+		G.return_cmd[i].Busy := TRUE;
+		spg_enable_exec[i] := TRUE;
+		IF G.SetPointGenEnable[i].Done THEN
+			ext_setpoint_enabled[i] := TRUE;
+			G.return_cmd[i].Busy := FALSE;
+			IF return_finish_error[i] THEN
+				G.return_cmd[i].Done := FALSE;
+				G.return_cmd[i].Error := TRUE;
+				G.return_cmd[i].ErrorId := return_error_id_pending[i];
 			ELSE
-				G.axis4_manual_done := TRUE;
-				G.axis4_manual_error := FALSE;
-				G.axis4_manual_error_id := 0;
+				G.return_cmd[i].Done := TRUE;
+				G.return_cmd[i].Error := FALSE;
+				G.return_cmd[i].ErrorId := 0;
 			END_IF
-			axis4_finish_error := FALSE;
-			axis4_error_id_pending := 0;
-			axis4_manual_state := 0;
+			return_finish_error[i] := FALSE;
+			return_error_id_pending[i] := 0;
+			return_state[i] := 0;
 		END_IF
 	END_CASE
+END_FOR
 
-	// 正常跟随态设定点输出参数计算
-	FOR i:=1 TO 7 DO
-		IF ext_setpoint_enabled[i] OR (return_state[i] = 31) OR spg_enable_exec[i] THEN
-			IF traj_enable[i] AND NOT G.startup_smoothing_bypass THEN
-				pos_abs := traj_pos[i] + G.init_pos[i];
-				feed_pos[i] := pos_abs;
-				feed_vel[i] := traj_vel[i];
-				feed_acc[i] := traj_acc[i];
-				feed_exec[i] := TRUE;
-			ELSE
-				pos_abs := G.act_h[i] + G.init_pos[i];
-				legacy_vel := (G.act_h[i] - act_h_prev[i]) / 0.001;
-				feed_pos[i] := pos_abs;
-				feed_vel[i] := legacy_vel;
-				feed_acc[i] := 0.0;
-				feed_exec[i] := TRUE;
-			END_IF
-			G.act_hf[i] := G.act_h[i];
-		ELSE
-			G.act_hf[i] := G.axis[i].NcToPlc.ActPos - G.init_pos[i];
-			feed_exec[i] := FALSE;
-		END_IF
-		act_h_prev[i] := G.act_h[i];
-	END_FOR
+axis4_request_dir_now := 0;
+IF G.axis4_fwd_req AND NOT G.axis4_rev_req THEN
+	axis4_request_dir_now := 1;
+ELSIF G.axis4_rev_req AND NOT G.axis4_fwd_req THEN
+	axis4_request_dir_now := -1;
 END_IF
 
-// =========================================================================
-// 9. 统一功能块调用 (每周期尾部恰好调用一次)
-// =========================================================================
+IF axis4_manual_state = 0 THEN
+	G.axis4_manual_busy := FALSE;
+	IF axis4_request_dir_now = 0 THEN
+		G.axis4_manual_done := FALSE;
+		G.axis4_manual_error := FALSE;
+		G.axis4_manual_error_id := 0;
+	ELSIF NOT G.axis4_manual_error THEN
+		G.axis4_manual_done := FALSE;
+		G.axis4_manual_error := FALSE;
+		G.axis4_manual_error_id := 0;
+		axis4_requested_dir := axis4_request_dir_now;
+		axis4_pending_dir := 0;
+		axis4_finish_error := FALSE;
+		axis4_error_id_pending := 0;
+		axis4_manual_state := 10;
+	END_IF
+END_IF
+
+CASE axis4_manual_state OF
+10:
+	G.axis4_manual_busy := TRUE;
+	spg_disable_exec[4] := TRUE;
+	IF G.SetPointGenDisable[4].Done OR NOT G.SetPointGenDisable[4].Enabled THEN
+		ext_setpoint_enabled[4] := FALSE;
+		axis4_manual_state := 20;
+	END_IF
+
+20:
+	G.axis4_manual_busy := TRUE;
+	axis4_pending_dir := axis4_request_dir_now;
+	IF axis4_requested_dir >= 0 THEN
+		axis4_manual_direction := MC_Direction.MC_Positive_Direction;
+	ELSE
+		axis4_manual_direction := MC_Direction.MC_Negative_Direction;
+	END_IF
+
+	IF axis4_pending_dir = 0 THEN
+		axis4_manual_state := 30;
+	ELSIF axis4_pending_dir <> axis4_requested_dir THEN
+		axis4_manual_state := 30;
+	ELSE
+		axis4_move_exec := TRUE;
+	END_IF
+
+	IF fb_axis4_move_velocity.Error OR fb_axis4_move_velocity.CommandAborted THEN
+		axis4_finish_error := TRUE;
+		axis4_error_id_pending := fb_axis4_move_velocity.ErrorID;
+		G.axis4_manual_error_id := fb_axis4_move_velocity.ErrorID;
+		axis4_pending_dir := 0;
+		axis4_manual_state := 40;
+	END_IF
+
+30:
+	G.axis4_manual_busy := TRUE;
+	axis4_pending_dir := axis4_request_dir_now;
+	axis4_stop_exec := TRUE;
+
+	IF fb_axis4_stop.Error THEN
+		axis4_finish_error := TRUE;
+		axis4_error_id_pending := fb_axis4_stop.ErrorID;
+		axis4_pending_dir := 0;
+		axis4_manual_state := 39;
+	ELSIF fb_axis4_stop.Done OR (ABS(G.axis[4].NcToPlc.ActVelo) <= 0.05) THEN
+		IF axis4_pending_dir <> 0 THEN
+			axis4_requested_dir := axis4_pending_dir;
+			axis4_manual_state := 20;
+		ELSE
+			axis4_requested_dir := 0;
+			axis4_manual_state := 39;
+		END_IF
+	END_IF
+
+39:
+G.axis4_manual_busy := TRUE;
+// MC_Stop needs one cycle with Execute=FALSE before SetPointGenEnable can get a clean rising edge
+axis4_manual_state := 40;
+
+40:
+	G.axis4_manual_busy := TRUE;
+	G.Act_pos[4] := G.axis[4].NcToPlc.ActPos - G.init_pos[4];
+	G.act_pos_from_left[4] := G.axis[4].NcToPlc.ActPos - G.leftlimit[4];
+	G.refer[4] := G.Act_pos[4];
+	G.ref_slow[4] := G.Act_pos[4];
+	G.act_h[4] := G.Act_pos[4];
+	G.act_hf[4] := G.Act_pos[4];
+	G.refer_from_left[4] := G.act_pos_from_left[4];
+	FOR k:=1 TO 30 DO
+		act_hh[4][k] := G.Act_pos[4];
+	END_FOR
+	act_h_prev[4] := G.Act_pos[4];
+	traj_pos[4] := G.Act_pos[4];
+	traj_vel[4] := 0.0;
+	traj_acc[4] := 0.0;
+	spg_enable_exec[4] := TRUE;
+	IF G.SetPointGenEnable[4].Done THEN
+		ext_setpoint_enabled[4] := TRUE;
+		G.axis4_manual_busy := FALSE;
+		IF axis4_finish_error THEN
+			G.axis4_manual_done := FALSE;
+			G.axis4_manual_error := TRUE;
+			G.axis4_manual_error_id := axis4_error_id_pending;
+		ELSE
+			G.axis4_manual_done := TRUE;
+			G.axis4_manual_error := FALSE;
+			G.axis4_manual_error_id := 0;
+		END_IF
+		axis4_finish_error := FALSE;
+		axis4_error_id_pending := 0;
+		axis4_manual_state := 0;
+	END_IF
+END_CASE
+
 FOR i:=1 TO 7 DO
 	IF G.power_output[i].Error THEN
 		G.axis_Reset[i].Execute := TRUE;
 	END_IF
 END_FOR
 
-// 统一外部设定点刷新 (单点调用)
 FOR i:=1 TO 7 DO
-	IF feed_exec[i] THEN
-		MC_ExtSetPointGenFeed(
-			Position     := feed_pos[i],
-			Velocity     := feed_vel[i],
-			Acceleration := feed_acc[i],
-			Direction    := 1,
-			Axis         := G.axis[i]
-		);
+	// 计划回退结束后，状态 31 的预送周期和 SetPointGenEnable 过渡周期都必须喂入当前设定值。
+	// 否则 NC 重新接管时会短暂使用禁用前遗留的左窗口设定值，造成约一个窗口宽度的反向尖峰。
+	IF ext_setpoint_enabled[i] OR (return_state[i] = 31) OR spg_enable_exec[i] THEN
+		IF traj_enable[i] AND NOT G.startup_smoothing_bypass THEN
+			pos_abs := traj_pos[i] + G.init_pos[i];
+			MC_ExtSetPointGenFeed(
+				Position     := pos_abs,
+				Velocity     := traj_vel[i],
+				Acceleration := traj_acc[i],
+				Direction    := 1,
+				Axis         := G.axis[i]);
+		ELSE
+			pos_abs := G.act_h[i] + G.init_pos[i];
+			legacy_vel := (G.act_h[i] - act_h_prev[i]) / 0.001;
+			MC_ExtSetPointGenFeed(
+				Position     := pos_abs,
+				Velocity     := legacy_vel,
+				Acceleration := 0,
+				Direction    := 1,
+				Axis         := G.axis[i]);
+		END_IF
+		G.act_hf[i] := G.act_h[i];
+	ELSE
+		G.act_hf[i] := G.axis[i].NcToPlc.ActPos - G.init_pos[i];
 	END_IF
+	act_h_prev[i] := G.act_h[i];
 END_FOR
 
-// SetPointGenEnable / Disable 的 .Execute 赋值由 MAIN::SETPOSITIONGEN() 周期执行
 FOR i:=1 TO 7 DO
-	G.SetPointGenEnable[i].Execute := spg_enable_exec[i];
-	G.SetPointGenDisable[i].Execute := spg_disable_exec[i];
-END_FOR
-
-// 统一计划回退与受控停止 FB 调用
-FOR i:=1 TO 7 DO
+	G.SetPointGenEnable[i](Axis:=G.axis[i], Execute:=spg_enable_exec[i]);
+	G.SetPointGenDisable[i](Axis:=G.axis[i], Execute:=spg_disable_exec[i]);
 	fb_return_move_abs[i](
-		Axis         := G.axis[i],
-		Position     := return_target_abs[i],
-		Velocity     := return_velocity[i],
-		Acceleration := return_acc[i],
-		Deceleration := return_dec[i],
-		Jerk         := return_jerk[i],
-		Execute      := return_exec[i]
-	);
-	fb_host_return_stop[i](
-		Axis         := G.axis[i],
-		Execute      := host_return_stop_exec[i],
-		Deceleration := 100.0,
-		Jerk         := 500.0
+		Axis:=G.axis[i],
+		Position:=return_target_abs[i],
+		Velocity:=return_velocity[i],
+		Acceleration:=return_acc[i],
+		Deceleration:=return_dec[i],
+		Jerk:=return_jerk[i],
+		Execute:=return_exec[i]
 	);
 END_FOR
 
-// 统一 Axis4 手动点动与受控停止 FB 调用
 fb_axis4_move_velocity(
-	Axis         := G.axis[4],
-	Execute      := axis4_move_exec,
-	Velocity     := axis4_manual_velocity,
-	Acceleration := axis4_manual_acc,
-	Deceleration := axis4_manual_dec,
-	Jerk         := axis4_manual_jerk,
-	Direction    := axis4_manual_direction
+	Axis:=G.axis[4],
+	Execute:=axis4_move_exec,
+	Velocity:=axis4_manual_velocity,
+	Acceleration:=axis4_manual_acc,
+	Deceleration:=axis4_manual_dec,
+	Jerk:=axis4_manual_jerk,
+	Direction:=axis4_manual_direction
 );
 fb_axis4_stop(
-	Axis         := G.axis[4],
-	Execute      := axis4_stop_exec,
-	Deceleration := axis4_manual_dec,
-	Jerk         := axis4_manual_jerk
+	Axis:=G.axis[4],
+	Execute:=axis4_stop_exec,
+	Deceleration:=axis4_manual_dec,
+	Jerk:=axis4_manual_jerk
 );
+
 ]]></ST>
     </Implementation>
     <LineIds Name="handle">
       <LineId Id="2" Count="0" />
+      <LineId Id="4" Count="698" />
     </LineIds>
   </POU>
 </TcPlcObject>

@@ -1467,8 +1467,8 @@ External Setpoint Generation:
 					<Name>Axis 1</Name>
 					<AxisPara>
 						<General UnitName="°"/>
-						<Dynamic Acceleration="40" Deceleration="40" Jerk="80"/>
-						<Velo SlowManual="3" FastManual="5" Maximum="20"/>
+						<Dynamic Acceleration="10100" Deceleration="10100" Jerk="5100500"/>
+						<Velo SlowManual="300"/>
 						<OtherSettings AllowMotionCmdToSlave="true"/>
 					</AxisPara>
 					<Encoder Name="Enc" EncType="19">
@@ -3454,7 +3454,7 @@ External Setpoint Generation:
 						<OtherSettings AllowMotionCmdToSlave="true"/>
 					</AxisPara>
 					<Encoder Name="Enc" EncType="19">
-						<EncPara ScaleFactorNumerator="360" ScaleFactorDenominator="131072" MaxCount="#xffffffff"/>
+						<EncPara ScaleFactorNumerator="360" ScaleFactorDenominator="757760" MaxCount="#xffffffff"/>
 						<Vars VarGrpType="1">
 							<Name>Inputs</Name>
 							<Var>
@@ -3960,8 +3960,8 @@ External Setpoint Generation:
 					<EtherCAT SlaveType="2" PdiType="#x0480" MboxDataLinkLayer="true" StateMBoxPolling="true" CycleMBoxPollingTime="0" CoeType="15" EoeType="1" FoeType="1" VendorId="#x000001a3" ProductCode="#x01313932" RevisionNo="#x4130324b" InfoDataAddr="true" InfoDataSoeDS401="true" InfoDataDcTimes="true" PortPhys="17" MaxSlotCount="256" MaxSlotGroupCount="1" SlotPdoIncrement="1" SlotIndexIncrement="16" Type="Micro 4804 MZ-CAT-STO" Desc="Micro 4804 MZ-CAT-STO " PortABoxInfo="#x01000001">
 						<SyncMan>001080002600010001000000000000008000001026010000</SyncMan>
 						<SyncMan>001480002200010002000000000000008000001422010000</SyncMan>
-						<SyncMan>001806006400010003000000000000000600001864010000</SyncMan>
-						<SyncMan>001c10002000010004000000000000001000001c20010000</SyncMan>
+						<SyncMan>001819006400010003000000000000000600001864010000</SyncMan>
+						<SyncMan>001c15002000010004000000000000001000001c20010000</SyncMan>
 						<Fmmu>0000000000000000001800020100000001000000000000000000000000000000</Fmmu>
 						<Fmmu>0000000000000000001c00010100000002000000000000000000000000000000</Fmmu>
 						<Fmmu>00000000000000000d0800010100000003000000000000000000000000000000</Fmmu>
@@ -3989,12 +3989,12 @@ External Setpoint Generation:
 								<Type>UDINT</Type>
 							</Entry>
 						</Pdo>
-						<Pdo Name="Transmit PDO 3 mapping parameters" Index="#x1a02" Flags="#x0000">
+						<Pdo Name="Transmit PDO 3 mapping parameters" Index="#x1a02" Flags="#x0000" SyncMan="3">
 							<Entry Name="Velocity actual value" Index="#x606c">
 								<Type>DINT</Type>
 							</Entry>
 						</Pdo>
-						<Pdo Name="Transmit PDO 4 mapping parameters" Index="#x1a03" Flags="#x0000">
+						<Pdo Name="Transmit PDO 4 mapping parameters" Index="#x1a03" Flags="#x0000" SyncMan="3">
 							<Entry Name="Modes of operation display" Index="#x6061">
 								<Type>SINT</Type>
 							</Entry>
@@ -4007,7 +4007,7 @@ External Setpoint Generation:
 								<Type>DINT</Type>
 							</Entry>
 						</Pdo>
-						<Pdo Name="Receive PDO 2 mapping parameters" Index="#x1601" InOut="1" Flags="#x0000">
+						<Pdo Name="Receive PDO 2 mapping parameters" Index="#x1601" InOut="1" Flags="#x0000" SyncMan="2">
 							<Entry Name="Digital outputs - Physical outputs" Index="#x60fe" Sub="#x01">
 								<Type>UDINT</Type>
 							</Entry>
@@ -4015,7 +4015,7 @@ External Setpoint Generation:
 								<Type>UDINT</Type>
 							</Entry>
 						</Pdo>
-						<Pdo Name="Receive PDO 3 mapping parameters" Index="#x1602" InOut="1" Flags="#x0000">
+						<Pdo Name="Receive PDO 3 mapping parameters" Index="#x1602" InOut="1" Flags="#x0000" SyncMan="2">
 							<Entry Name="Modes of operation" Index="#x6060">
 								<Type>SINT</Type>
 							</Entry>
@@ -4023,7 +4023,7 @@ External Setpoint Generation:
 								<Type>INT</Type>
 							</Entry>
 						</Pdo>
-						<Pdo Name="Receive PDO 4 mapping parameters" Index="#x1603" InOut="1" Flags="#x0000">
+						<Pdo Name="Receive PDO 4 mapping parameters" Index="#x1603" InOut="1" Flags="#x0000" SyncMan="2">
 							<Entry Name="Profile velocity" Index="#x6081">
 								<Type>DINT</Type>
 							</Entry>
@@ -7336,10 +7336,14 @@ External Setpoint Generation:
 				<Link VarA="Drive^Inputs^In^nState2" VarB="Transmit PDO 1 mapping parameters^Statusword" Size="8" OffsB="8"/>
 				<Link VarA="Drive^Inputs^In^nState4" VarB="WcState^InputToggle" Size="1" OffsA="1"/>
 				<Link VarA="Drive^Inputs^In^nState4" VarB="WcState^WcState"/>
+				<Link VarA="Drive^Inputs^In^nState5" VarB="Transmit PDO 4 mapping parameters^Modes of operation display"/>
 				<Link VarA="Drive^Outputs^Out^nCtrl1" VarB="Receive PDO 1 mapping parameters^Controlword"/>
 				<Link VarA="Drive^Outputs^Out^nCtrl2" VarB="Receive PDO 1 mapping parameters^Controlword" Size="8" OffsB="8"/>
+				<Link VarA="Drive^Outputs^Out^nCtrl5" VarB="Receive PDO 3 mapping parameters^Modes of operation"/>
 				<Link VarA="Drive^Outputs^Out^nDataOut1" VarB="Receive PDO 1 mapping parameters^Target position"/>
+				<Link VarA="Drive^Outputs^Out^nDataOut4[0]" VarB="Receive PDO 3 mapping parameters^Target torque"/>
 				<Link VarA="Enc^Inputs^In^nDataIn1" VarB="Transmit PDO 1 mapping parameters^Position actual value"/>
+				<Link VarA="Enc^Inputs^In^nDataIn7" VarB="Transmit PDO 3 mapping parameters^Velocity actual value"/>
 				<Link VarA="Enc^Inputs^In^nDcInputTime" VarB="InfoData^DcInputShift"/>
 				<Link VarA="Enc^Inputs^In^nState4" VarB="WcState^InputToggle" Size="1" OffsA="1"/>
 				<Link VarA="Enc^Inputs^In^nState4" VarB="WcState^WcState"/>

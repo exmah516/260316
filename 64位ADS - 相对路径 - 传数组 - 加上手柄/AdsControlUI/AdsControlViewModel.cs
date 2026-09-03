@@ -26,12 +26,12 @@ namespace AdsControlUI
                 ArmAxes.Add(new ArmAxisControlModel(axis));
 
             _client.Start();
-            _refreshTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(33) };
+			_refreshTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(66) };
             _refreshTimer.Tick += (s, e) => RefreshFromPipe();
             _refreshTimer.Start();
         }
 
-        // 位置类显示值变化阈值，避免 33ms 全量刷绑定。
+		// 位置类显示值变化阈值，避免 66 ms 全量刷绑定。
         private const double PosEpsilon = 1e-4;
         private const double ForceEpsilon = 1e-6;
 
@@ -401,8 +401,6 @@ namespace AdsControlUI
 			OnPropertyChanged(nameof(AdsHealthy));
 			OnPropertyChanged(nameof(HostCommTimeout));
 			OnPropertyChanged(nameof(AdsStateText));
-			OnPropertyChanged(nameof(AdsDiagnosticsText));
-			OnPropertyChanged(nameof(AdsCounterText));
 			NotifyManualControlProperties();
 		}
 

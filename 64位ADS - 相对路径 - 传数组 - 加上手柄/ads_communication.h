@@ -42,8 +42,11 @@ struct AdsFastSnapshot
 	short ft_2_value = 0;
 	bool estop_hold_req = false;
 	bool host_comm_timeout = false;
+	// 位置/速度和 PLC 时序可用于运动控制时为 true；不受单独力数据质量影响。
 	bool position_valid = false;
+	// 本次 Sum Read 通信成功且四路力值均为有限数时为 true；PLC 周期跨度仅用于诊断。
 	bool force_valid = false;
+	// 完整快照标记，等价于 position_valid && force_valid；不作为运动控制唯一门控。
 	bool valid = false;
 };
 

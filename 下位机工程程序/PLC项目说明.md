@@ -16,7 +16,7 @@
 
 - 原介入机器人 7 个 EtherCAT 伺服轴的**使能、寻参自检、错误处理、外部设定点输出**；
 - 新增定位臂 5 个 NC 轴的**独立上电、复位、点动和状态上报**；
-- 注射器 2 个 NC 轴的**自动上电与独立按住点动**，以及 Axis15 对业务轴2的 **1:1 同向增量同步**；
+- 注射器 2 个 NC 轴的**自动上电与独立按住点动**，以及 Axis15 对业务轴2的 **-1:1 反向增量同步**；
 - 5 个电缸（含 Y 阀电缸）与 2 组力传感器 IO 的**总线 I/O 映射**；
 - 与上位机（`64位ADS - 相对路径 - 传数组 - 加上手柄\ADS.exe`）之间通过 **ADS 通讯**交换 refer/actual 位置、电缸控制量、握手位、力采样电压；
 - 顶层运行状态由**主状态机** `G.gen_state`（`state.TcDUT`）调度：上电 → 自检 → 正常跟随 → 故障/复位。
@@ -57,7 +57,7 @@ PLC 侧**不直接决定运动模式**（导管/导丝/协同、启动准备阶�
 
 `G.refer[i]` 与 `G.Act_pos[i]` 使用相对坐标；`G.leftlimit[i]` 用绝对坐标；`G.axisN_return_cmd.TargetAbs` 用绝对坐标。这与上位机文档 `§1.5.4` 的三套基准一一对应。
 
-### 2.3 使能/回退与通信握手诊断变量
+### 2.3 使能/回退相关握手位
 
 | 变量 | 方向 | 语义 |
 |---|---|---|
@@ -70,11 +70,8 @@ PLC 侧**不直接决定运动模式**（导管/导丝/协同、启动准备阶�
 | `G.axis1_fast_return` / `G.axis6_fast_retract` | 上位→PLC | 快退阶段旁路 PLC 平滑层 |
 | `G.startup_smoothing_bypass` | 上位→PLC | 启动准备阶段旁路二阶滤波 |
 | `G.axisN_return_cmd.Req` | 上位→PLC | 计划回退触发 |
-| `G.host_session_id` / `G.host_heartbeat_sequence` | 上位→PLC | 100 Hz 主机身份与递增心跳（250 ms 超时初值） |
-| `G.host_recover_req` / `G.host_comm_timeout` | 双向握手 / PLC→上位 | 通信超时锁存与显式恢复握手（稳定窗口 ≥300 ms） |
-| `G.host_comm_state` | PLC→只读诊断 | 通信状态机镜像：`0`=WaitHost, `1`=Online, `2`=CommHold, `3`=RecoveryWait |
-| `G.host_comm_reason` | PLC→只读诊断 | 保持原因位图（无会话/超时/新会话/停止中/掉使能/轴错误/FB错误） |
-| `G.host_stop_error_id` | PLC→只读诊断 | 受控停止 FB 错误码（0=正常） |
+| `G.host_session_id` / `G.host_heartbeat_sequence` | 上位→PLC | 100 Hz 主机身份与递增心跳 |
+| `G.host_recover_req` / `G.host_comm_timeout` | 双向握手 / PLC→上位 | 通信超时锁存与显式恢复 |
 
 ## 3. 硬件对象与轴映射
 
@@ -87,7 +84,7 @@ PLC 侧**不直接决定运动模式**（导管/导丝/协同、启动准备阶�
 | Axis 1..5 | `G.arm_axis[1..5]` | 新增定位臂 | 首版仅提供上电、复位、正/反向点动和状态上报；不做自动回零、自检、软限位和正运动学 |
 | Axis 6..12 | `G.axis[1..7]` | 原血管介入机器人 | 保持原业务轴 1..7 语义和 ADS 契约；`G.refer[1..7]`、`G.Act_pos[1..7]` 等不扩展到 12 轴 |
 | Axis 13..14 | `G.inject_axis[1..2]` | 注射器1/2 | 自动保持上电；通过 `G.inject_push_req[]` / `G.inject_pull_req[]` 按住点动，推为正向、拉为负向 |
-| Axis 15 | `G.axis2_sync_axis` | 业务轴2同步从轴 | Axis15 上电跟随业务轴2；静止时建立 1:1 同向电子齿轮，保留建立耦合时的角度差 |
+| Axis 15 | `G.axis2_sync_axis` | 业务轴2同步从轴 | Axis15 上电跟随业务轴2；静止时建立 -1:1 反向电子齿轮，保留建立耦合时的角度差 |
 
 `250902.tsproj` 中仅恢复 PLC `AXIS_REF` 与 NC Axis 的双向链接：`*.NcToPlc ↔ Axis*.ToPlc`、`*.PlcToNc ↔ Axis*.FromPlc`。EtherCAT Drive 到 NC Axis 的 I/O 映射不因本次改造而改变。
 
@@ -113,7 +110,7 @@ PLC 侧**不直接决定运动模式**（导管/导丝/协同、启动准备阶�
 | 电缸4 | `G.cylinder4_value` | 轴6 机构 | 与电缸3 交替夹持导丝，实现导丝蠕动 |
 | 电缸5 | `G.cylinder5_value` / `G.cylinder5_cmd` / `G.cylinder5_press_req` | 轴3 机构 | 控制 Y 阀开合 |
 
-**cylinder1..4** 由上位机直接写 WORD 目标值；**cylinder5** 采用双层：UI 写 `G.cylinder5_press_req`（BOOL），`handle` POU 每周期映射为 `G.cylinder5_value = 0`（Y阀打开）或 `2000`（Y阀关闭）。正式控制阶段不再响应手柄 b6。
+**cylinder1..4** 由上位机直接写 WORD 目标值；**cylinder5** 采用双层：UI 写 `G.cylinder5_press_req`（BOOL），`handle` POU 每周期映射为 `G.cylinder5_value = 500`（Y阀打开）或 `2000`（Y阀关闭）。正式控制阶段不再响应手柄 b6。
 
 ### 3.3 力传感器 IO
 
@@ -146,7 +143,7 @@ PLC 侧**不直接决定运动模式**（导管/导丝/协同、启动准备阶�
 │   │       ├── MAIN.TcPOU             # 主程序（状态调度 + Actions）
 │   │       ├── ArmManual.TcPOU        # 定位臂 5 轴独立上电/复位/点动
 │   │       ├── InjectorManual.TcPOU    # 注射器 2 轴自动上电/按住点动
-│   │       ├── Axis2Sync.TcPOU         # Axis15 对业务轴2的 1:1 同向同步
+│   │       ├── Axis2Sync.TcPOU         # Axis15 对业务轴2的 -1:1 反向同步
 │   │       ├── init.TcPOU             # 上电初始化
 │   │       ├── SelfCheck.TcPOU        # 自检寻参
 │   │       ├── handle.TcPOU           # ★ 正常跟随控制
@@ -304,7 +301,7 @@ G.arm_jog_pos_req[i] 按住              ├─ MC_Power / MC_Reset
 | 定位臂点动默认速度 | `5.0` | `G.arm_jog_velocity[1..5]` | 单位跟随各 NC Axis 配置，可由 ADS/UI 覆盖 |
 | 定位臂点动默认加/减速度 | `50.0 / 50.0` | `G.arm_jog_acc/dec[1..5]` | 单位跟随各 NC Axis 配置 |
 | 定位臂点动默认 jerk | `500.0` | `G.arm_jog_jerk[1..5]` | 单位跟随各 NC Axis 配置 |
-| 注射器点动速度/加减速度/jerk | `30 / 100 / 100 / 500` | `InjectorManual.TcPOU` | 单位跟随 NC Axis 13/14 配置 |
+| 注射器点动速度/加减速度/jerk | `180 / 100 / 100 / 500` | `InjectorManual.TcPOU` | 速度为原 30 的 6 倍，单位跟随 NC Axis 13/14 配置 |
 
 ## 8. 文档索引
 
@@ -336,16 +333,11 @@ G.arm_jog_pos_req[i] 按住              ├─ MC_Power / MC_Reset
 
 ## 10. 变更日志
 
-### 2026-08-24 — 通信四状态机重构与 MC FB 单点调用
-- 作者：AI（Antigravity）。
-- 内容：`handle.TcPOU` 内部实现四状态机（`WaitHost/Online/CommHold/RecoveryWait`），由内部局部变量驱动，`G.host_comm_state` 仅作为只读诊断镜像；新增 `G.host_comm_reason` 与 `G.host_stop_error_id`。
-- 关键安全机制：看门狗超时初值 250 ms；恢复握手要求 $\ge 300\text{ ms}$ 连续稳定心跳 + 全要素停稳判定；新会话强切保持；硬件故障与通信保持分层解耦；`MAIN.SETPOSITIONGEN()` 保留为 `SetPointGen` 唯一调用权，`MC_ExtSetPointGenFeed` 尾部单点调用。
-
 ### 2026-08-19 — Axis15 同步与辅助执行器控制
 - 作者：AI（Codex）。
-- 新增 `G.axis2_sync_axis` 并链接 NC Axis15；`Axis2Sync.TcPOU` 在业务轴2与从轴均上电、静止后建立 1:1 同向电子齿轮，保留初始角度差。
+- 新增 `G.axis2_sync_axis` 并链接 NC Axis15；`Axis2Sync.TcPOU` 在业务轴2与从轴均上电、静止后建立 -1:1 反向电子齿轮，保留初始角度差。
 - NC Axis13/14 由 `InjectorManual.TcPOU` 自动上电，通过 `G.inject_push_req[1..2]` / `G.inject_pull_req[1..2]` 执行固定参数点动；不进入原主状态机。
-- Y阀改为纯 UI 控制：打开输出 `0`、关闭输出 `2000`；原 `G.axis[1..7]`、`G.refer[1..7]` 和介入机器人状态机不变。
+- Y阀改为纯 UI 控制：打开输出 `500`、关闭输出 `2000`；原 `G.axis[1..7]`、`G.refer[1..7]` 和介入机器人状态机不变。
 
 ### 2026-08-03 — 100 Hz ADS 通信与最小主机看门狗
 - 作者：AI（Codex）。

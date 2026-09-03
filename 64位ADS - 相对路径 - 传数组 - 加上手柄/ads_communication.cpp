@@ -13,9 +13,8 @@
 namespace
 {
 	constexpr std::uint32_t kCommunicationRateHz = 100;
-	constexpr std::uint32_t kHardTimeoutMs = 100;
+	constexpr std::uint32_t kHardTimeoutMs = 300;
 	constexpr std::uint32_t kDeviceStateCheckPeriodCycles = 10;
-	constexpr std::uint32_t kMaxAcceptedPlcCycleSpan = 5;
 	constexpr std::uint32_t kMaxStalledPlcSnapshots = 3;
 	constexpr std::size_t kSnapshotQueueCapacity = 2048;
 	constexpr std::uint64_t kReconnectIntervalMs = 1000;
@@ -1023,8 +1022,8 @@ void AdsCommunicationService::run()
 			disconnect = hard_timeout;
 		}
 
-		// 只有完整读写成功且本拍正式进入 Running 才发布有效测量；
-		// 写失败、PLC 重启保持拍和软保持拍都必须让 CSV 记录 valid=0 + NaN。
+		// 只有完整读写成功且本拍正式进入 Running 才发布可用于运动控制的测量；
+		// 力数据的首尾 PLC 周期跨度只保留作诊断，不参与有效性和运动保持判定。
 		if (!process_low_frequency)
 		{
 			snapshot.position_valid = false;
@@ -1086,8 +1085,8 @@ bool AdsCommunicationService::ensure_connection(bool reconnecting)
 		ads_.CloseComm();
 		return false;
 	}
-	// 握手成功后立即恢复 20 ms 运行期实时超时
-	if (!ads_.SetTimeout(20))
+	// 运行期允许单次 ADS 调用等待 300 ms，短时调度抖动不直接升级为断线。
+	if (!ads_.SetTimeout(300))
 	{
 		clear_runtime_connection_state();
 		ads_.CloseComm();
@@ -1476,10 +1475,16 @@ bool AdsCommunicationService::read_fast_snapshot(AdsFastSnapshot& snapshot, bool
 			std::isfinite(snapshot.act_pos_rel[axis]) &&
 			std::isfinite(snapshot.act_pos_from_left[axis]);
 	}
+	// PLC 侧环形锁存允许首尾周期不同，因此 plc_cycle_span 只保留作诊断。
+	// 力数据只要本次 Sum Read 成功且四路数值有限即可使用。
+	const bool force_values_finite =
+		std::isfinite(static_cast<double>(snapshot.ft_1_value)) &&
+		std::isfinite(static_cast<double>(snapshot.fn_1_value)) &&
+		std::isfinite(static_cast<double>(snapshot.fn_2_value)) &&
+		std::isfinite(static_cast<double>(snapshot.ft_2_value));
 	snapshot.position_valid = positions_finite &&
-		std::isfinite(snapshot.axis1_act_velocity_mm_s) &&
-		snapshot.plc_cycle_span <= kMaxAcceptedPlcCycleSpan;
-	snapshot.force_valid = snapshot.plc_cycle_span <= kMaxAcceptedPlcCycleSpan;
+		std::isfinite(snapshot.axis1_act_velocity_mm_s);
+	snapshot.force_valid = force_values_finite;
 	snapshot.valid = snapshot.position_valid && snapshot.force_valid;
 
 	const bool plc_time_regressed =
@@ -1511,7 +1516,8 @@ bool AdsCommunicationService::read_fast_snapshot(AdsFastSnapshot& snapshot, bool
 		snapshot.valid = false;
 		return false;
 	}
-	return snapshot.valid;
+	// 返回值表示本拍是否仍可用于运动控制，而不是力数据是否有效。
+	return snapshot.position_valid;
 }
 
 bool AdsCommunicationService::write_output_cycle(bool& planned_return_processed)
@@ -2120,7 +2126,7 @@ void AdsCommunicationService::publish_snapshot(const AdsFastSnapshot& snapshot)
 		std::lock_guard<std::mutex> lock(stats_mutex_);
 		++stats_.snapshot_queue_dropped;
 	}
-	if (snapshot.valid) latest_valid_qpc_.store(snapshot.qpc_ticks, std::memory_order_release);
+	if (snapshot.position_valid) latest_valid_qpc_.store(snapshot.qpc_ticks, std::memory_order_release);
 	snapshot_cv_.notify_all();
 }
 

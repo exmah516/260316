@@ -5,7 +5,7 @@
 VAR
 	i : INT;
 	req_dir : SINT;
-	cmd_velocity : LREAL := 30.0;
+	cmd_velocity : LREAL := 180.0;
 	cmd_acc : LREAL := 100.0;
 	cmd_dec : LREAL := 100.0;
 	cmd_jerk : LREAL := 500.0;

@@ -86,7 +86,8 @@ struct ControlConfig
 	// 手柄运动缩放系数与符号约定。
 	double k_handle_to_mm = 500.0 * (75.0 / 50.0); // 手柄线性位移差 -> 轴位移增量(mm)
 	double axis_push_sign = -1.0; // 手柄“推/拉”到轴“正/负”方向的映射符号
-	double axis_rot_scale_deg = Rad;
+	// 旋转手柄到轴2/轴7的方向与实机机构一致，负号用于反向映射。
+	double axis_rot_scale_deg = -Rad;
 
 	// 力反馈输出配置：轴向力映射到 SDK 三轴力向量中的一个轴。
 	int axial_force_axis = 1;
@@ -111,14 +112,11 @@ struct ControlConfig
 	double axis3_delivery_stop_from_left_mm = 20.0;
 	double axis3_delivery_release_hysteresis_mm = 2.0;
 	double guidewire_entry_axis6_from_left_max_mm = 667.0;
-	// 普通导管正向递送中，axis1 每次计划回退完成后自动执行的单独先行量。
-	// 0 表示关闭；正值表示递送方向（axis1 绝对坐标减小），UI 与内部均限制在 [0, 10] mm。
+	// 普通导管正向递送中，axis1 每次计划回退后前 10 mm 手柄输入的附加映射量。
+	// 0 表示关闭；默认 1 mm，UI 与内部均限制在 [0, 5] mm。
 	double axis1_post_return_lead_mm = 1.0;
-	double axis1_post_return_lead_limit_mm = 10.0;
-	// 自动先行不再使用固定交接/到位等待；连续新鲜快照同时满足位置和速度条件才完成。
-	double axis1_post_return_lead_arrive_tol_mm = 0.01;
-	double axis1_post_return_lead_arrive_velocity_mm_s = 0.1;
-	unsigned int axis1_post_return_lead_arrive_samples = 2;
+	double axis1_post_return_lead_limit_mm = 5.0;
+	double axis1_post_return_mapping_span_mm = 10.0;
 	// axis6 距自身左限位的上位机内部软限位。达到预测越限条件后仅锁止上位机链路，
 	// 不改变 PLC/NC 内已有的硬限位与安全逻辑。
 	double axis6_soft_limit_from_left_mm = 670.0;
@@ -180,21 +178,21 @@ struct ControlConfig
 	unsigned short startup_cyl4_open = 0;
 	unsigned short startup_cyl3_clamp = 0;
 	unsigned short startup_cyl4_clamp = 1000;
-	// 标准装卸启动的中间移动目标。
-	double startup_axis1_ready_from_left_mm = 20.0;
-	double startup_axis5_ready_from_left_mm = 290.0;
-	// 未经 UI 覆盖时采用的最终启动目标。
-	double startup_final_axis1_default_from_left_mm = 20.0;
-	double startup_final_axis3_default_from_left_mm = 649.0;
-	double startup_final_axis5_default_from_left_mm = 649.0;
-	double startup_final_axis6_default_from_left_mm = 650.0;
-	double startup_rot_arrive_tol_deg = 0.2;
 	// PLC 自检完成后的器械装卸等待姿态；旧 PLC 无就绪标志时也用于兼容判定。
 	double startup_loading_axis1_from_left_mm = 96.0;
-	double startup_loading_axis3_from_left_mm = 280.0;
+	double startup_loading_axis3_from_left_mm = 400.0;
 	double startup_loading_axis5_from_left_mm = 430.0;
 	double startup_loading_axis6_from_left_mm = 580.0;
 	double startup_loading_pose_tolerance_mm = 2.0;
+	// 标准装卸启动的中间移动目标。
+	double startup_axis1_ready_from_left_mm = 20.0;
+	double startup_axis5_ready_from_left_mm = startup_loading_axis3_from_left_mm + 10.0; ;
+	// 未经 UI 覆盖时采用的最终启动目标。
+	double startup_final_axis1_default_from_left_mm = 20.0;
+	double startup_final_axis3_default_from_left_mm = 635.0;
+	double startup_final_axis5_default_from_left_mm = 640.0;
+	double startup_final_axis6_default_from_left_mm = 640.0;
+	double startup_rot_arrive_tol_deg = 0.2;
 	// 在 axis3 完全到达目标前提前触发 cylinder2 夹紧；现场调参使其领先约 0.5 s。
 	double startup_axis3_cyl2_clamp_advance_mm = 10.0;
 };
@@ -248,7 +246,7 @@ enum class CooperativeReturnOwner
 };
 
 // 六种业务模式共用的计划回退生命周期。Follow 仍由各轴现有逻辑计算，
-// 这里只管理触发后的夹爪稳定、PLC握手、非阻塞交接和可选自动先行。
+// 这里只管理触发后的夹爪稳定、PLC握手和非阻塞交接。
 enum class PlannedReturnPhase : unsigned char
 {
 	Idle,
@@ -261,8 +259,7 @@ enum class PlannedReturnPhase : unsigned char
 	AwaitFreshSnapshot,
 	PublishHandoff,
 	AwaitHandoffApplied,
-	PostHandoffClampSettle,
-	OptionalLead
+	PostHandoffClampSettle
 };
 
 enum class PlannedReturnMode : unsigned char
@@ -283,12 +280,6 @@ enum class PlannedReturnRebaseScope : unsigned char
 	Axis1,
 	Axis6,
 	Cooperative
-};
-
-enum class PlannedReturnPostAction : unsigned char
-{
-	None,
-	Axis1DeliveryLead
 };
 
 // 统一换手通过通信线程异步提交的 ADS 批量命令用途。
@@ -332,7 +323,6 @@ struct PlannedReturnCoordinator
 	PlannedReturnPhase phase = PlannedReturnPhase::Idle;
 	PlannedReturnMode mode = PlannedReturnMode::None;
 	PlannedReturnRebaseScope rebase_scope = PlannedReturnRebaseScope::Axis1;
-	PlannedReturnPostAction post_action = PlannedReturnPostAction::None;
 	PlannedReturnLeg legs[2];
 	int leg_count = 0;
 	unsigned int retry_count = 0;
@@ -359,10 +349,6 @@ struct PlannedReturnCoordinator
 	std::uint64_t cancel_hold_generation = 0;
 	std::uint64_t done_snapshot_sequence = 0;
 	std::uint64_t handoff_generation = 0;
-	std::uint64_t lead_arrive_snapshot_sequence = 0;
-	unsigned int lead_arrive_samples = 0;
-	ULONGLONG lead_t0_ms = 0;
-	double lead_target_abs = 0.0;
 	double hold_axis3_rel = 0.0;
 	double hold_axis5_rel = 0.0;
 
@@ -403,7 +389,7 @@ struct PlannedReturnCoordinator
 		return CooperativeReturnOwner::None;
 	}
 
-	// 保持既有WPF数值契约：0=Follow，1=夹爪稳定，2=请求/运动，3=交接/恢复夹爪稳定/先行。
+	// 保持既有WPF数值契约：0=Follow，1=夹爪稳定，2=请求/运动，3=交接/恢复夹爪稳定。
 	int compatibility_phase_for_axis(int axis_index) const
 	{
 		if (!active() || !contains_axis(axis_index)) return 0;

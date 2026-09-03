@@ -10,8 +10,6 @@
         <local:BoolToColorConverter x:Key="BoolToGreenRed"   TrueColor="#22C55E" FalseColor="#CBD5E1"/>
         <local:BoolToColorConverter x:Key="BoolToYellowGray" TrueColor="#F59E0B" FalseColor="#CBD5E1"/>
         <local:BoolToColorConverter x:Key="BoolToRedGray"    TrueColor="#EF4444" FalseColor="#CBD5E1"/>
-		<local:BoolToColorConverter x:Key="BoolToAdsState"   TrueColor="#22C55E" FalseColor="#EF4444"/>
-		<local:BoolToColorConverter x:Key="BoolToAdsDetail"  TrueColor="#475569" FalseColor="#EF4444"/>
     </Window.Resources>
 
     <Grid Margin="16">
@@ -22,9 +20,8 @@
 
         <!-- 状态条 -->
         <Border Grid.Row="0" Style="{StaticResource CardBorder}" Padding="14,10" Margin="0,0,0,12">
-            <Grid>
+			<Grid>
 				<Grid.RowDefinitions>
-					<RowDefinition Height="Auto"/>
 					<RowDefinition Height="Auto"/>
 				</Grid.RowDefinitions>
                 <Grid.ColumnDefinitions>
@@ -88,25 +85,6 @@
                     </Border>
                 </StackPanel>
 
-				<Border Grid.Row="1" Grid.ColumnSpan="2"
-						BorderBrush="{StaticResource BorderBrush}" BorderThickness="0,1,0,0"
-						Margin="0,8,0,0" Padding="0,8,0,0">
-					<WrapPanel VerticalAlignment="Center">
-						<StackPanel Orientation="Horizontal" Margin="0,0,18,2">
-							<Ellipse Width="9" Height="9"
-									 Fill="{Binding AdsHealthy, Converter={StaticResource BoolToAdsState}}"/>
-							<TextBlock Text="{Binding AdsStateText}"
-									   Margin="7,0,0,0" FontWeight="SemiBold"
-									   Foreground="{Binding AdsHealthy, Converter={StaticResource BoolToAdsState}}"/>
-						</StackPanel>
-						<TextBlock Text="{Binding AdsDiagnosticsText}" Margin="0,0,18,2"
-								   Style="{StaticResource CaptionText}"
-								   Foreground="{Binding AdsHealthy, Converter={StaticResource BoolToAdsDetail}}"/>
-						<TextBlock Text="{Binding AdsCounterText}" Margin="0,0,0,2"
-								   Style="{StaticResource CaptionText}"
-								   Foreground="{Binding AdsHealthy, Converter={StaticResource BoolToAdsDetail}}"/>
-					</WrapPanel>
-				</Border>
             </Grid>
         </Border>
 
@@ -157,7 +135,7 @@
                                    FontSize="11" Margin="6,0,6,4"
                                    TextWrapping="Wrap"/>
 
-                        <!-- 屈曲恢复与导管回退完成后的轴1自动先行量 -->
+                         <!-- 屈曲恢复与导管递送中的轴1比例映射 -->
                         <Border BorderBrush="{StaticResource BorderBrush}"
                                 BorderThickness="0,1,0,0"
                                 Margin="2,6,2,0" Padding="0,10,0,0">
@@ -167,14 +145,14 @@
                                                   IsChecked="{Binding SpacingRecoveryActive, Mode=OneWay}"
                                                   Click="SpacingRecovery_Click"
                                                   MinWidth="112" MinHeight="38" Margin="0,0,12,0"/>
-                                    <TextBlock Text="回退完成后轴1自动先行量"
+                                    <TextBlock Text="导管递送前10mm轴1映射量"
                                                Style="{StaticResource FieldLabelText}"
                                                VerticalAlignment="Center"
-                                               ToolTip="导管回退完成后轴1自动沿递送方向先行，范围 0~10 mm"/>
+                                               ToolTip="导管轴1完成回退后，正常递送前10 mm按比例增加该值，范围 0~5 mm"/>
                                     <TextBox x:Name="TbAxis1PostReturnLead"
                                              Text="1.00" Width="72" Margin="8,2,0,2"
                                              VerticalContentAlignment="Center"
-                                             ToolTip="单位 mm，允许范围 0~10；输入 0 可关闭自动先行"/>
+                                             ToolTip="单位 mm，允许范围 0~5；输入 0 可关闭映射"/>
                                     <Button Content="应用" Click="ApplyAxis1PostReturnLead_Click"
                                             Padding="12,7" Margin="8,0,0,0"/>
                                 </WrapPanel>

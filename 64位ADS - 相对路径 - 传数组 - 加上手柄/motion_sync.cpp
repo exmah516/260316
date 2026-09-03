@@ -148,7 +148,7 @@ namespace motion_sync
 			return false;
 		}
 
-		// 回退和自动先行期间手柄持续正常采样，因此直接使用当前滤波值即可。
+		// 回退期间手柄持续正常采样，因此直接使用当前滤波值即可。
 		// 不再额外 poll/Sleep，避免把交接变成阻塞式多点平均。
 		plc_io::load_pos_from_actual(ctx);
 		*ctx.axis2_hold_rel = ctx.plc_act_pos[1];

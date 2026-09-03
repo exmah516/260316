@@ -171,7 +171,7 @@ enum class VisCommandType : int
 	SetTrackingCompensation = 21, // param1: 0=关闭，1=开启
 	SetTrackingCompensationParam = 22, // param1=TrackingParameterField，param2=数值×1000
 	SetCooperativeRetraction = 23, // param1: 0=退出，1=进入
-	SetAxis1PostReturnLead = 24, // param1=轴1回退后先行量，单位 mm×1000，范围 [-10, 10]
+	SetAxis1PostReturnLead = 24, // param1=轴1前10 mm比例映射量，单位 mm×1000，范围 [0, 5]
 	StartExperimentRecording = 25, // UTF-8 负载为实验名称
 	StopExperimentRecording = 26,
 	SetCameraPreview = 27, // param1: 0=关闭，1=打开

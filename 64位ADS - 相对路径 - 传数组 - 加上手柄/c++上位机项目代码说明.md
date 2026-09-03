@@ -70,10 +70,10 @@ WPF 不直接连接 PLC、DAQ 或相机。两个进程只通过本地命名管�
   -> motion.csv 取偶数快照序号形成 50 Hz
   -> 力过渡状态机/专用表入队
   -> 力反馈处理和手柄力输出
-  -> 30 Hz VisState（含 ADS 诊断）推送与 VisCommand 消费
+  -> 15 Hz VisState（含 ADS 诊断）推送与 VisCommand 消费
 ```
 
-`read_plc_state` / `read_force_sample` 在正常模式只复制通信服务的最新有效快照，不做额外高频 ADS 请求；refer、快退、气缸、axis4 和平滑旁路先组成一份输出快照。计划回退、启动准备等运行期专项 ADS 操作也提交给通信服务串行执行，主循环不与 100 Hz worker 并发访问同一个 ADS 端口。任何主循环日志路径都只能调用 `try_enqueue`，目录、`fwrite`、flush、MP4 编码和 Finalize 由后台线程完成。
+`read_plc_state` 在正常模式只复制通信服务的最新有效位置快照，`read_force_sample` 则单独检查 `force_valid`，两者都不做额外高频 ADS 请求；refer、快退、气缸、axis4 和平滑旁路先组成一份输出快照。计划回退、启动准备等运行期专项 ADS 操作也提交给通信服务串行执行，主循环不与 100 Hz worker 并发访问同一个 ADS 端口。任何主循环日志路径都只能调用 `try_enqueue`，目录、`fwrite`、flush、MP4 编码和 Finalize 由后台线程完成。
 
 ## 5. ADS 数据模型
 
@@ -111,7 +111,7 @@ G.estop_hold_req / G.host_comm_timeout
 ### 5.3 失败与恢复边界
 
 - 第一个失败周期立即进入 `SoftHold`：保持最后参考、清力反馈、丢弃故障期间手柄增量；
-- 距最后完整成功达到 100 ms 后关闭端口，并按 `250/500/1000/2000 ms` 退避重连；
+- 距最后完整成功达到 300 ms 后关闭端口，并按 `250/500/1000/2000 ms` 退避重连；
 - 同一 PLC 运行实例的链路重连会刷新坐标并重建位置/手柄基准，清除计划回退、屈曲恢复、力过渡和 PI 瞬态，但保留稳定模式和方向；
 - 设备非 RUN、PLC DcTaskTime/CycleCount 回退或应用名变化按 PLC 重启/应用重载处理：清力零点、关闭力反馈和 PI、退出控制，必须重新自检、调零和人工启动；
 - PLC 100 ms 主机看门狗通过 `host_session_id/host_heartbeat_sequence/host_recover_req/host_comm_timeout` 锁存超时、冻结参考并受控停止；心跳恢复后仍必须完成显式恢复和重初始化握手，不能直接续跑。
@@ -192,7 +192,7 @@ ADS 记录由 100 Hz 主机快照序号驱动：`force.csv` 每个尝试序号�
 
 ### 11.1 状态
 
-`VisState` 是 pack(1) 的 877 字节二进制结构。C++ 有 `static_assert`，C# 启动时检查固定 wire size。除运动、力反馈、PI、记录、相机和物理按钮字段外，末尾还包含 ADS 状态、定位臂五轴的上电/复位/点动状态和参数，以及 axis4 手动点动状态。
+`VisState` 是 pack(1) 的 883 字节二进制结构。C++ 有 `static_assert`，C# 启动时检查固定 wire size。除运动、力反馈、PI、记录、相机和物理按钮字段外，末尾还包含 ADS 状态、定位臂五轴的上电/复位/点动状态和参数，以及 axis4 手动点动状态。
 
 WPF 顶部把状态翻译为“ADS 正常 / 单拍软保持 / 重连中 / PLC 已重启”等文本，同时显示实时量和累计计数。只有本地管道连接、ADS 状态为 Running 且 PLC 主机看门狗未超时时才显示健康。
 
