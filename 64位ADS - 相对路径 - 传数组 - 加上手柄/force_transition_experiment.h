@@ -69,7 +69,6 @@ public:
         AppContext& ctx,
         std::uint32_t now_tick_ms,
         bool control_active,
-        bool freeze_active,
         bool estop_hold_active,
         bool cal_zeroed,
         GuidewireMode guidewire_mode);

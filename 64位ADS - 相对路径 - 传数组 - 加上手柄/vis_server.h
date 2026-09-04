@@ -19,7 +19,6 @@ struct VisState
 	int axis6_phase;
 	int startup_phase;
 	bool control_active;
-	bool freeze_active;
 	bool estop_hold;
 	bool axis1_fast_return;
 	bool axis6_fast_retract;
@@ -142,7 +141,7 @@ struct VisState
 	int force_feedback_hold_owner;
 };
 #pragma pack(pop)
-static_assert(sizeof(VisState) == 883, "VisState 管道布局发生变化，请同步更新 WPF 协议结构。");
+static_assert(sizeof(VisState) == 882, "VisState 管道布局发生变化，请同步更新 WPF 协议结构。");
 
 enum class VisCommandType : int
 {

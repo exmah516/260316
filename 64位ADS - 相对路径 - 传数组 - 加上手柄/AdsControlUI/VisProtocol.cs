@@ -16,7 +16,6 @@ namespace AdsControlUI
         public int axis6_phase;
         public int startup_phase;
         [MarshalAs(UnmanagedType.I1)] public bool control_active;
-        [MarshalAs(UnmanagedType.I1)] public bool freeze_active;
         [MarshalAs(UnmanagedType.I1)] public bool estop_hold;
         [MarshalAs(UnmanagedType.I1)] public bool axis1_fast_return;
         [MarshalAs(UnmanagedType.I1)] public bool axis6_fast_retract;

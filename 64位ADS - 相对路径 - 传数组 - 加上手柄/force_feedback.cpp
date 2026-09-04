@@ -7,7 +7,6 @@ void process_force_feedback(
 	Handle& guidewire_feedback_handle,
 	GuidewireMode guidewire_mode,
 	bool control_active,
-	bool freeze_active,
 	bool estop_hold_active,
 	bool axis1_fast_return,
 	bool axis6_fast_retract,
@@ -25,7 +24,6 @@ void process_force_feedback(
 	const bool output_enabled =
 		ff.enabled &&
 		control_active &&
-		!freeze_active &&
 		!estop_hold_active &&
 		cal_state.zeroed &&
 		sample.valid;
@@ -203,7 +201,6 @@ void process_force_feedback(
 	Handle& guidewire_feedback_handle,
 	GuidewireMode guidewire_mode,
 	bool control_active,
-	bool freeze_active,
 	bool estop_hold_active,
 	bool axis1_fast_return,
 	bool axis6_fast_retract,
@@ -219,7 +216,6 @@ void process_force_feedback(
 		guidewire_feedback_handle,
 		guidewire_mode,
 		control_active,
-		freeze_active,
 		estop_hold_active,
 		axis1_fast_return,
 		axis6_fast_retract,

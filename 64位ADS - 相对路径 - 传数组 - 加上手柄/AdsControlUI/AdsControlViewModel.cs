@@ -157,11 +157,6 @@ namespace AdsControlUI
                 OnPropertyChanged(nameof(ControlActive));
                 OnPropertyChanged(nameof(CooperativeModeEnabled));
             }
-            if (prev.freeze_active != state.freeze_active)
-            {
-                OnPropertyChanged(nameof(FreezeActive));
-                OnPropertyChanged(nameof(CooperativeModeEnabled));
-            }
             if (prev.estop_hold != state.estop_hold)
             {
                 OnPropertyChanged(nameof(EstopHold));
@@ -328,7 +323,6 @@ namespace AdsControlUI
             OnPropertyChanged(nameof(Axis6SoftLimitHold));
             OnPropertyChanged(nameof(Axis6SoftLimitText));
             OnPropertyChanged(nameof(ControlActive));
-            OnPropertyChanged(nameof(FreezeActive));
             OnPropertyChanged(nameof(EstopHold));
             OnPropertyChanged(nameof(FfEnabled));
 			OnPropertyChanged(nameof(PhysicalButtonNoticeText));
@@ -551,7 +545,7 @@ namespace AdsControlUI
 			}
 		}
 		public bool Axis4ManualControlAllowed =>
-			AdsHealthy && ControlActive && !FreezeActive && !EstopHold &&
+			AdsHealthy && ControlActive && !EstopHold &&
 			!StartupWaiting && !SpacingRecoveryActive;
 		public string Axis4ManualStatusText
 		{
@@ -657,7 +651,6 @@ namespace AdsControlUI
             ModeSwitchAllowed &&
             StartupCompleted &&
             ControlActive &&
-            !FreezeActive &&
             !EstopHold &&
             !FtExpActive &&
             !Axis6SoftLimitHold &&
@@ -687,7 +680,7 @@ namespace AdsControlUI
 			{
 				bool forwardMode = (_state.guidewire_mode == 0 && !_state.axis1_reverse) ||
 					(_state.guidewire_mode == 1 && !_state.axis6_reverse);
-				return ControlActive && !FreezeActive && !EstopHold &&
+				return ControlActive && !EstopHold &&
 					!SpacingRecoveryActive && !FtExpActive && forwardMode &&
 					_state.axis1_phase == 0 && _state.axis6_phase == 0;
 			}
@@ -719,7 +712,6 @@ namespace AdsControlUI
         }
 
         public bool ControlActive => _state.control_active;
-        public bool FreezeActive => _state.freeze_active;
         public bool EstopHold => _state.estop_hold;
         public bool FfEnabled => _state.ff_enabled;
         public bool ForceFeedbackHoldEnabled => _state.force_feedback_hold_enabled;

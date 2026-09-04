@@ -178,7 +178,6 @@ bool ForceTransitionExperiment::tick(
     AppContext& ctx,
     std::uint32_t now_tick_ms,
     bool control_active,
-    bool freeze_active,
     bool estop_hold_active,
     bool cal_zeroed,
     GuidewireMode guidewire_mode)
@@ -214,13 +213,6 @@ bool ForceTransitionExperiment::tick(
     if (guidewire_mode != GuidewireMode::None)
     {
         abort(ctx, "guidewire_mode changed (catheter required)");
-        return false;
-    }
-    // freeze_active 自身不是错误：实验自己会在 FastReturn 段触发它。
-    // 只有在 PushForward / ApproachStart 段意外冻结才算异常。
-    if (freeze_active && (phase_ == FtExpPhase::PushForward || phase_ == FtExpPhase::ApproachStart || phase_ == FtExpPhase::ArmWait))
-    {
-        abort(ctx, "external freeze during push");
         return false;
     }
 

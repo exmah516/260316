@@ -47,13 +47,6 @@
                     <Border Style="{StaticResource StatusPill}">
                         <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
                             <Ellipse Width="10" Height="10"
-                                     Fill="{Binding FreezeActive, Converter={StaticResource BoolToYellowGray}}"/>
-                            <TextBlock Text="暂停" Style="{StaticResource PillLabel}"/>
-                        </StackPanel>
-                    </Border>
-                    <Border Style="{StaticResource StatusPill}">
-                        <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                            <Ellipse Width="10" Height="10"
                                      Fill="{Binding EstopHold, Converter={StaticResource BoolToRedGray}}"/>
                             <TextBlock Text="急停" Style="{StaticResource PillLabel}"/>
                         </StackPanel>

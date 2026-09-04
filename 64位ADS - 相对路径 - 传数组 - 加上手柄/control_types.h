@@ -102,7 +102,7 @@ struct ControlConfig
 	// 基于左限位参考的爬行窗口。
 	double axis1_window_left_from_left_mm = 8.0;
 	double axis1_window_right_from_left_mm = 28.0;
-	double axis6_window_size_mm = 25.0;
+	double axis6_window_size_mm = 22.0;
 	// 轴6窗口以轴5当前位置为基准，左边界至少领先轴5该距离。
 	double axis6_window_min_gap_from_axis5_mm = 1.0;
 	// 协同模式双边换手目标分别从近端/远端窗口向内缩该距离。
@@ -142,7 +142,7 @@ struct ControlConfig
 	double reverse_switch_trigger_guard_mm = 2.0;
 
 	// PLC 规划快速回退参数：速度、加减速度和 jerk 均为原值的 2 倍。
-	double axis1_return_velocity_mm_s = 400.0; // 原值 200 mm/s
+	double axis1_return_velocity_mm_s = 110.0; // 原值 200 mm/s
 	double axis1_return_acc_mm_s2 = 4800.0; // 原值 2400 mm/s^2
 	double axis1_return_dec_mm_s2 = 4800.0; // 原值 2400 mm/s^2
 	double axis1_return_jerk_mm_s3 = 70000.0; // 原值 35000 mm/s^3
@@ -236,7 +236,8 @@ enum class CooperativeDirection
 	Retraction
 };
 
-// 协同模式中正在执行计划回退的链路。非拥有链路必须保持当前位置，
+// 协同模式中正在执行计划
+// 的链路。非拥有链路必须保持当前位置，
 // 直到拥有链路完成夹爪恢复和双手柄重同步。
 enum class CooperativeReturnOwner
 {

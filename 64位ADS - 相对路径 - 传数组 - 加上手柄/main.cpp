@@ -151,8 +151,6 @@ int main(int argc, char* argv[])
 	const CylinderPreset cyl;
 
 	// B7 选择当前物理手柄语义，选中后对应手柄的 B6 电平决定递送或撤出。
-	// 启动尚未完成时仍保留 main 原有的 B6 暂停安全语义；正式控制阶段 B6 只作为方向电平。
-	const unsigned char axis1_pause_button_mask = cfg.btn_b6;
 
 	// 长生命周期运行时对象。
 	Handle handle_axis1(serial_axis1_handle);
@@ -550,8 +548,6 @@ int main(int argc, char* argv[])
 	bool axis1_push_rearm_after_hold = false;
 	bool axis1_delivery_stop_latched = false;
 	bool axis1_delivery_stop_prompted = false;
-	bool freeze_active = false;
-	bool pause_pressed_prev = false;
 	bool axis1_reverse_pressed_prev = false;
 	bool axis6_effective_reverse_prev = false;
 	bool catheter_mode_button_pressed_prev =
@@ -894,7 +890,7 @@ int main(int argc, char* argv[])
 			return false;
 		}
 		if (!startup.completed || startup.phase != StartupPhase::Done || !control_active ||
-			freeze_active || estop_hold_active || return_ads_fault_hold || axis6_soft_limit_hold)
+			estop_hold_active || return_ads_fault_hold || axis6_soft_limit_hold)
 		{
 			std::cout << mode_name << "进入被拒绝：控制尚未处于可用状态。" << std::endl;
 			return false;
@@ -1684,7 +1680,6 @@ int main(int argc, char* argv[])
 
 		const unsigned char axis1_buttons = axis1_input_handle->buttons2;
 		const unsigned char axis6_buttons = axis6_input_handle->buttons2;
-		const bool pause_pressed = (axis1_buttons & axis1_pause_button_mask) != 0;
 		const bool catheter_b6_pressed = (axis1_buttons & cfg.btn_b6) != 0;
 		const bool guidewire_b6_pressed = (axis6_buttons & cfg.btn_b6) != 0;
 		const bool catheter_b7_pressed = (axis1_buttons & cfg.btn_b7) != 0;
@@ -1710,7 +1705,6 @@ int main(int argc, char* argv[])
 			!connection_hold_active &&
 			!return_ads_fault_hold &&
 			!single_handle_mode &&
-			!freeze_active &&
 			!estop_hold_active &&
 			startup.completed &&
 			startup.phase == StartupPhase::Done &&
@@ -1827,7 +1821,6 @@ int main(int argc, char* argv[])
 			connection_hold_active ||
 			ads_soft_hold_active ||
 			return_ads_fault_hold ||
-			freeze_active ||
 			estop_hold_active ||
 			startup_sequence_active ||
 			emergency_retract_active ||
@@ -1839,10 +1832,10 @@ int main(int argc, char* argv[])
 		{
 			clear_axis1_delivery_mapping();
 		}
-		// 统一回退任务不能穿越暂停、急停、通信保持或其它接管状态。
+		// 统一回退任务不能穿越急停、通信保持或其它接管状态。
 		if (planned_return.active() && planned_return.phase != PlannedReturnPhase::CancelWait &&
 			(!control_active || connection_hold_active ||
-			freeze_active || estop_hold_active || return_ads_fault_hold ||
+			estop_hold_active || return_ads_fault_hold ||
 			spacing_recovery.active() || spacing_recovery.requested || ft_exp.active() ||
 			startup_sequence_active || axis6_soft_limit_hold))
 		{
@@ -1868,7 +1861,7 @@ int main(int argc, char* argv[])
 				injector_ui_jog_deadline_ms[injector_index] = 0;
 			}
 		}
-		const bool axis4_jog_allowed = ads_motion_cycle_valid && !freeze_active && !estop_hold_active && !startup_sequence_active &&
+		const bool axis4_jog_allowed = ads_motion_cycle_valid && !estop_hold_active && !startup_sequence_active &&
 			!emergency_retract_active &&
 			!spacing_recovery.active() && !spacing_recovery.requested;
 		// 轴4只保留UI点动，物理手柄按键不再映射到轴4。
@@ -1887,62 +1880,8 @@ int main(int argc, char* argv[])
 				axis4_jog_allowed && injector_ui_direction[injector_index] < 0;
 		}
 
-		if (!formal_control_stage)
-		{
-			if (pause_pressed && !pause_pressed_prev)
-			{
-				freeze_active = true;
-				control_active = false;
-				cancel_cooperative_delivery(true);
-				clear_force_output();
-				std::cout << "582 暂停：开启。" << std::endl;
-			}
-			else if (!pause_pressed && pause_pressed_prev)
-			{
-				freeze_active = false;
-				if (startup_sequence_active)
-				{
-					std::cout << "582 暂停：关闭，启动流程继续。" << std::endl;
-				}
-				else if (!startup.completed)
-				{
-					if (!estop_hold_active && sync_all(20))
-					{
-						control_active = false;
-						if (!startup.prompted && (!has_self_check_flag || self_check_done))
-						{
-							prompt_startup_mode();
-						}
-						std::cout << "582 暂停：关闭，等待选择启动方式。" << std::endl;
-					}
-					else if (estop_hold_active)
-					{
-						std::cout << "582 暂停已释放，等待 PLC 保持解除。" << std::endl;
-					}
-					else
-					{
-						std::cout << "582 暂停已释放，等待重同步完成。" << std::endl;
-					}
-				}
-				else if (!estop_hold_active && sync_all(20))
-				{
-					control_active = true;
-					std::cout << "582 暂停：关闭，控制已恢复。" << std::endl;
-				}
-				else if (estop_hold_active)
-				{
-					std::cout << "582 暂停已释放，等待 PLC 保持解除。" << std::endl;
-				}
-				else
-				{
-					std::cout << "582 暂停已释放，等待重同步完成。" << std::endl;
-				}
-			}
-		}
-		pause_pressed_prev = pause_pressed;
-
 		// 2) 正反键切换：启用一次性触发保护，不再执行线性重同步。
-		if (!freeze_active && !estop_hold_active && !startup_sequence_active && control_active &&
+		if (!estop_hold_active && !startup_sequence_active && control_active &&
 			!spacing_recovery.active())
 		{
 			if (guidewire_mode == GuidewireMode::None && axis1_reverse_pressed != axis1_reverse_pressed_prev)
@@ -2016,19 +1955,14 @@ int main(int argc, char* argv[])
 			}
 		}
 
-		if (freeze_active)
-		{
-			ff.clear_output();
-			clear_force_output();
-		}
-		if ((freeze_active || estop_hold_active || return_ads_fault_hold) &&
+		if ((estop_hold_active || return_ads_fault_hold) &&
 			(spacing_recovery.active() || spacing_recovery.requested))
 		{
 			spacing_recovery.reset();
 			pending_mode_selection = ModeSelection::None;
 			pending_physical_mode_source = PhysicalModeSource::None;
 			clear_force_output();
-			std::cout << "屈曲恢复已由暂停、急停或 ADS 故障终止。" << std::endl;
+			std::cout << "屈曲恢复已由急停或 ADS 故障终止。" << std::endl;
 		}
 
 		// 4) 键盘侧通道：选择直接控制 / 启动准备 / 力反馈开关。
@@ -2039,11 +1973,7 @@ int main(int argc, char* argv[])
 			{
 				if (!startup.completed && startup.phase == StartupPhase::WaitForEnter)
 				{
-					if (freeze_active)
-					{
-						std::cout << "直接控制启动已忽略：582 暂停处于开启状态。" << std::endl;
-					}
-					else if (estop_hold_active)
+					if (estop_hold_active)
 					{
 						std::cout << "直接控制启动已忽略：PLC 保持处于开启状态。" << std::endl;
 					}
@@ -2088,11 +2018,7 @@ int main(int argc, char* argv[])
 			{
 				if (!startup.completed && startup.phase == StartupPhase::WaitForEnter)
 				{
-					if (freeze_active)
-					{
-						std::cout << "启动准备已忽略：582 暂停处于开启状态。" << std::endl;
-					}
-					else if (estop_hold_active)
+					if (estop_hold_active)
 					{
 						std::cout << "启动准备已忽略：PLC 保持处于开启状态。" << std::endl;
 					}
@@ -2222,7 +2148,7 @@ int main(int argc, char* argv[])
 				cooperative_direction_requested = CooperativeDirection::None;
 				if (guidewire_mode != GuidewireMode::None)
 				{
-					if (!freeze_active && !estop_hold_active && !startup_sequence_active)
+					if (!estop_hold_active && !startup_sequence_active)
 					{
 						if (exit_guidewire_mode_to_normal())
 						{
@@ -2261,12 +2187,6 @@ int main(int argc, char* argv[])
 					(vis_reverse_override_active && vis_reverse_override_target == 0)
 					? vis_reverse_override_value
 					: false;
-			}
-			else if (freeze_active)
-			{
-				std::cout << "导丝模式切换已忽略：582 暂停处于开启状态。" << std::endl;
-				cooperative_transition_failed = (requested_guidewire_mode == GuidewireMode::Cooperative);
-				physical_mode_transition_rejected = physical_mode_request_pending;
 			}
 			else if (estop_hold_active)
 			{
@@ -2468,7 +2388,7 @@ int main(int argc, char* argv[])
 				startup.phase = StartupPhase::WaitForEnter;
 				startup.completed = false;
 				startup.prompted = false;
-				if (coordinates_refreshed && !freeze_active && !estop_hold_active &&
+				if (coordinates_refreshed && !estop_hold_active &&
 					!ads_soft_hold_active && sync_all(30))
 				{
 					control_active = false;
@@ -2489,7 +2409,7 @@ int main(int argc, char* argv[])
 			cancel_cooperative_delivery(true);
 			const bool coordinates_refreshed = ads_communication.refresh_coordinates();
 			if (!coordinates_refreshed) ads_communication.request_coordinate_refresh();
-			if (coordinates_refreshed && !freeze_active && !estop_hold_active &&
+			if (coordinates_refreshed && !estop_hold_active &&
 				!ads_soft_hold_active && !startup.is_active() &&
 				sync_all(30))
 			{
@@ -2506,7 +2426,7 @@ int main(int argc, char* argv[])
 		const bool motion_startup_active = startup.is_active();
 		startup_smoothing_bypass = motion_startup_active || emergency_retract_active;
 		if (!control_active && !return_ads_fault_hold && !motion_startup_active &&
-			!freeze_active && !estop_hold_active && !ads_soft_hold_active && startup.completed)
+			!estop_hold_active && !ads_soft_hold_active && startup.completed)
 		{
 			if (sync_all(20))
 			{
@@ -2515,7 +2435,6 @@ int main(int argc, char* argv[])
 		}
 		else if (!startup.completed &&
 				 !motion_startup_active &&
-				 !freeze_active &&
 				 !estop_hold_active &&
 				 !ads_soft_hold_active &&
 				 !startup.prompted &&
@@ -2542,7 +2461,7 @@ int main(int argc, char* argv[])
 		}
 
 		// 9) 根据当前顶层模式构建一帧 refer 和一组气缸指令。
-		if (!ads_soft_hold_active && !return_ads_fault_hold && !freeze_active && !estop_hold_active &&
+		if (!ads_soft_hold_active && !return_ads_fault_hold && !estop_hold_active &&
 			(control_active || motion_startup_active || emergency_retract_active) && read_plc_state())
 		{
 			load_pos_from_actual();
@@ -2611,7 +2530,6 @@ int main(int argc, char* argv[])
 				if (!forward_mode) return TrackingInvalidReason::NotForwardDelivery;
 				if (!control_active) return TrackingInvalidReason::ControlInactive;
 				if (motion_startup_active) return TrackingInvalidReason::StartupActive;
-				if (freeze_active) return TrackingInvalidReason::Paused;
 				if (estop_hold_active) return TrackingInvalidReason::PlcHold;
 				if (return_ads_fault_hold) return TrackingInvalidReason::AdsReturnFault;
 				if (spacing_recovery.active() || spacing_recovery.requested) return TrackingInvalidReason::SpacingRecovery;
@@ -4528,7 +4446,6 @@ int main(int argc, char* argv[])
 			TrackingInvalidReason inactive_reason = TrackingInvalidReason::NotForwardDelivery;
 			if (return_ads_fault_hold) inactive_reason = TrackingInvalidReason::AdsReturnFault;
 			else if (motion_startup_active) inactive_reason = TrackingInvalidReason::StartupActive;
-			else if (freeze_active) inactive_reason = TrackingInvalidReason::Paused;
 			else if (estop_hold_active) inactive_reason = TrackingInvalidReason::PlcHold;
 			else if (spacing_recovery.active() || spacing_recovery.requested) inactive_reason = TrackingInvalidReason::SpacingRecovery;
 			else if (ft_exp.active()) inactive_reason = TrackingInvalidReason::ForceTransitionExperiment;
@@ -4552,7 +4469,7 @@ int main(int argc, char* argv[])
 			(spacing_recovery_targets_settled ||
 				spacing_recovery_exit_elapsed_ms >= cfg.spacing_recovery_exit_timeout_ms);
 		if (spacing_recovery.phase == SpacingRecoveryPhase::ExitSync && spacing_recovery_exit_ready &&
-			!freeze_active && !estop_hold_active && !return_ads_fault_hold)
+			!estop_hold_active && !return_ads_fault_hold)
 		{
 			if (!spacing_recovery_targets_settled)
 			{
@@ -4597,7 +4514,7 @@ int main(int argc, char* argv[])
 
 		// 10) 构建本拍离散输出；与 refer 一起交给 100 Hz 通信线程。
 		bool cylinder5_req = emergency_retract_active || y_valve_open;
-		const bool cylinder_output_enabled = !connection_hold_active && !freeze_active &&
+		const bool cylinder_output_enabled = !connection_hold_active &&
 			!estop_hold_active && (control_active || motion_startup_active || emergency_retract_active);
 		if (cylinder_output_enabled)
 		{
@@ -4811,7 +4728,6 @@ int main(int argc, char* argv[])
 			if (!cal_state.zeroed) current_force_feedback_reason = "力反馈等待：尚未完成力传感器零点采集。";
 			else if (!force_sample.valid) current_force_feedback_reason = "力反馈等待：当前没有有效力采样。";
 			else if (!control_active) current_force_feedback_reason = "力反馈等待：控制尚未激活。";
-			else if (freeze_active) current_force_feedback_reason = "力反馈等待：582 暂停处于开启状态。";
 			else if (estop_hold_active) current_force_feedback_reason = "力反馈等待：PLC 保持处于开启状态。";
 			else if (spacing_recovery.active()) current_force_feedback_reason = "力反馈等待：当前为屈曲恢复模式。";
 		}
@@ -4831,7 +4747,6 @@ int main(int argc, char* argv[])
 				ctx,
 				now_tick_ms,
 				control_active,
-				freeze_active,
 				estop_hold_active,
 				cal_state.zeroed,
 				guidewire_mode);
@@ -4879,7 +4794,7 @@ int main(int argc, char* argv[])
 			planned_return.cancel_rebased && ads_motion_cycle_valid && !estop_hold_active;
 		if (cancel_hold_output_enabled)
 		{
-			// 暂停或回退故障时常规motion_enabled会关闭；取消链仍需单独发送一次
+			// 回退故障时常规motion_enabled会关闭；取消链仍需单独发送一次
 			// “当前实际位置＋关闭快退旁路”，并等待该代次真正写入后才允许Follow。
 			load_pos_from_actual();
 			axis1_fast_return = false;
@@ -4887,7 +4802,7 @@ int main(int argc, char* argv[])
 		}
 		AdsOutputCommand ads_output{};
 		const bool normal_motion_output_enabled = ads_motion_cycle_valid && !connection_hold_active &&
-			!return_ads_fault_hold && !freeze_active && !estop_hold_active &&
+			!return_ads_fault_hold && !estop_hold_active &&
 			(control_active || motion_startup_active || emergency_retract_active);
 		ads_output.motion_enabled = normal_motion_output_enabled || cancel_hold_output_enabled;
 		for (int axis = 0; axis < 7; ++axis) ads_output.refer[axis] = pos[axis];
@@ -4994,7 +4909,6 @@ int main(int argc, char* argv[])
 			guidewire_mode,
 			control_active && !spacing_recovery.active() &&
 				!ads_soft_hold_active && !return_ads_fault_hold,
-			freeze_active,
 			estop_hold_active,
 			axis1_fast_return,
 			axis6_fast_retract,
@@ -5030,7 +4944,7 @@ int main(int argc, char* argv[])
 			experiment_recorder.enqueue_force_transition(r);
 		}
 
-		// 无论本拍是否进入控制分支，都更新线性差分基准，避免暂停/等待期间累积大跳变。
+		// 无论本拍是否进入控制分支，都更新线性差分基准，避免等待期间累积大跳变。
 		axis1_prev_linear_filtered = axis1_handle_filter.axis0_filtered;
 		axis6_prev_linear_filtered = axis6_handle_filter.axis0_filtered;
 		axis1_prev_rot_filtered = axis1_handle_filter.axis1_filtered;
@@ -5064,7 +4978,6 @@ int main(int argc, char* argv[])
 			vs.axis6_phase = planned_return_phase_for_axis(5);
 			vs.startup_phase = static_cast<int>(startup.phase);
 			vs.control_active = control_active;
-			vs.freeze_active = freeze_active;
 			vs.estop_hold = estop_hold_active;
 			vs.axis1_fast_return = axis1_fast_return;
 			vs.axis6_fast_retract = axis6_fast_retract;
@@ -5542,7 +5455,7 @@ int main(int argc, char* argv[])
 						break;
 					}
 					if (!startup.completed && startup.phase == StartupPhase::WaitForEnter &&
-						!freeze_active && !estop_hold_active && !ads_soft_hold_active &&
+						!estop_hold_active && !ads_soft_hold_active &&
 						(!has_self_check_flag || self_check_done))
 					{
 						startup.final_axis1_from_left_mm = pending_startup.axis1_from_left_mm;
@@ -5570,7 +5483,6 @@ int main(int argc, char* argv[])
 					}
 					if (!startup.completed &&
 						startup.phase == StartupPhase::WaitForEnter &&
-						!freeze_active &&
 						!estop_hold_active &&
 						!ads_soft_hold_active &&
 						(!has_self_check_flag || self_check_done))
@@ -5695,7 +5607,6 @@ int main(int argc, char* argv[])
 						const bool prerequisites_ok =
 							control_active &&
 							cal_state.zeroed &&
-							!freeze_active &&
 							!estop_hold_active &&
 							!ads_soft_hold_active &&
 							!axis6_soft_limit_hold &&
@@ -5705,7 +5616,7 @@ int main(int argc, char* argv[])
 							startup.completed;
 						if (!prerequisites_ok)
 						{
-							std::cout << "UI：力过渡实验启动被拒绝：前置条件未满足（需 控制激活 + 已标零 + ADS新鲜 + 非暂停 + 非急停 + 导管Follow + 无换手任务 + 启动完成）。" << std::endl;
+							std::cout << "UI：力过渡实验启动被拒绝：前置条件未满足（需 控制激活 + 已标零 + ADS新鲜 + 非急停 + 导管Follow + 无换手任务 + 启动完成）。" << std::endl;
 						}
 						else
 						{

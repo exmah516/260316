@@ -175,7 +175,6 @@ namespace AdsControlUI
             if (!_vm.CalZeroed) { ErrorText.Text = "请先完成力传感器零点采集。"; return; }
             if (!_vm.ControlActive) { ErrorText.Text = "请先进入控制模式 (启动准备完成或直接控制)。"; return; }
             if (_vm.EstopHold) { ErrorText.Text = "急停保持中，无法启动。"; return; }
-            if (_vm.FreezeActive) { ErrorText.Text = "当前处于暂停状态，无法启动。"; return; }
 
             _vm.SendFtExpConfig(
                 cfg.NumLevels, cfg.VRatios, cfg.Repeats,

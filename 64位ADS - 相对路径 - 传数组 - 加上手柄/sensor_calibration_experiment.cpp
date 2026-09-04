@@ -854,7 +854,7 @@ namespace
 			routing_ff, routing_sample,
 			unopened_catheter_handle, unopened_guidewire_handle,
 			GuidewireMode::None,
-			true, false, false, false, false, 0,
+			true, false, false, false, 0,
 			routing_cfg, direct_cfg, direct_zero);
 		check(nearly_equal(routing_ff.force_582_f, expected_axial_n, 1e-12) &&
 			nearly_equal(routing_ff.force_587_f, 0.0, 1e-15),
@@ -865,7 +865,7 @@ namespace
 			routing_ff, routing_sample,
 			unopened_catheter_handle, unopened_guidewire_handle,
 			GuidewireMode::Independent,
-			true, false, false, false, false, 0,
+			true, false, false, false, 0,
 			routing_cfg, direct_cfg, direct_zero);
 		check(nearly_equal(routing_ff.force_582_f, 0.0, 1e-15) &&
 			nearly_equal(routing_ff.force_587_f, expected_guidewire_axial_n, 1e-12),
@@ -876,7 +876,7 @@ namespace
 			routing_ff, routing_sample,
 			unopened_catheter_handle, unopened_guidewire_handle,
 			GuidewireMode::Cooperative,
-			true, false, false, false, false, 0,
+			true, false, false, false, 0,
 			routing_cfg, direct_cfg, direct_zero);
 		check(nearly_equal(routing_ff.force_582_f, expected_axial_n, 1e-12) &&
 			nearly_equal(routing_ff.force_587_f, expected_guidewire_axial_n, 1e-12),
@@ -887,7 +887,7 @@ namespace
 			routing_ff, routing_sample,
 			unopened_catheter_handle, unopened_catheter_handle,
 			GuidewireMode::Independent,
-			true, false, false, false, false, 0,
+			true, false, false, false, 0,
 			routing_cfg, direct_cfg, direct_zero);
 		check(nearly_equal(routing_ff.force_582_f, 0.0, 1e-15) &&
 			nearly_equal(routing_ff.force_587_f, expected_guidewire_axial_n, 1e-12),
@@ -898,7 +898,7 @@ namespace
 			routing_ff, routing_sample,
 			unopened_catheter_handle, unopened_guidewire_handle,
 			GuidewireMode::Cooperative,
-			true, false, false, true, false, 0,
+			true, false, true, false, 0,
 			routing_cfg, direct_cfg, direct_zero);
 		const double frozen_582_f = routing_ff.force_582_f;
 		const double frozen_587_f = routing_ff.force_587_f;
@@ -909,7 +909,7 @@ namespace
 			routing_ff, changed_routing_sample,
 			unopened_catheter_handle, unopened_guidewire_handle,
 			GuidewireMode::Cooperative,
-			true, false, false, true, false, 0,
+			true, false, true, false, 0,
 			routing_cfg, direct_cfg, direct_zero);
 		check(nearly_equal(routing_ff.force_582_f, frozen_582_f, 1e-12) &&
 			nearly_equal(routing_ff.force_587_f, frozen_587_f, 1e-12),
@@ -918,7 +918,7 @@ namespace
 			routing_ff, changed_routing_sample,
 			unopened_catheter_handle, unopened_guidewire_handle,
 			GuidewireMode::Cooperative,
-			true, false, false, false, false, 0,
+			true, false, false, false, 0,
 			routing_cfg, direct_cfg, direct_zero);
 		check(!nearly_equal(routing_ff.force_582_f, frozen_582_f, 1e-12) &&
 			!nearly_equal(routing_ff.force_587_f, frozen_587_f, 1e-12),
