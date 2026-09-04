@@ -122,8 +122,6 @@
                                         <RowDefinition Height="Auto"/>
                                         <RowDefinition Height="Auto"/>
                                         <RowDefinition Height="Auto"/>
-                                        <RowDefinition Height="Auto"/>
-                                        <RowDefinition Height="Auto"/>
                                     </Grid.RowDefinitions>
                                     <TextBlock Grid.Row="0" Text="轴1距左限位 (mm)" VerticalAlignment="Center" Foreground="#475569" FontSize="12.5" Margin="0,3"/>
                                     <TextBox x:Name="Axis1Pos" Grid.Row="0" Grid.Column="1" Text="96" Margin="0,3" Height="28"/>
@@ -324,6 +322,8 @@
                                         <RowDefinition Height="Auto"/>
                                         <RowDefinition Height="Auto"/>
                                         <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="Auto"/>
                                     </Grid.RowDefinitions>
                                     <TextBlock x:Name="CatheterAxis1PrepareLabel" Grid.Row="0" Text="轴1准备位置 (mm)" VerticalAlignment="Center" Foreground="#475569" FontSize="12.5" Margin="0,3"/>
                                     <TextBox x:Name="ProgramAxis1PreparePos" Grid.Row="0" Grid.Column="1" Text="23" Margin="0,3" Height="28"/>
@@ -371,13 +371,13 @@
                                     <TextBlock Grid.Row="16" Text="回退Jerk (mm/s³)" VerticalAlignment="Center" Foreground="#475569" FontSize="12.5" Margin="0,3"/>
                                     <TextBox x:Name="ProgramReturnJerk" Grid.Row="16" Grid.Column="1" Text="1000" Margin="0,3" Height="28"/>
                                     <TextBlock Grid.Row="17" Text="释放先行时间 (ms)" VerticalAlignment="Center" Foreground="#475569" FontSize="12.5" Margin="0,3"/>
-                                    <TextBox x:Name="ProgramReleaseLead" Grid.Row="17" Grid.Column="1" Text="50" Margin="0,3" Height="28" ToolTip="触发回退时，电缸1/3先释放后，等待该时间再释放电缸2/4"/>
-                                    <TextBlock Grid.Row="18" Text="重新夹紧先行时间 (ms)" VerticalAlignment="Center" Foreground="#475569" FontSize="12.5" Margin="0,3"/>
-                                    <TextBox x:Name="ProgramReclampLead" Grid.Row="18" Grid.Column="1" Text="50" Margin="0,3" Height="28" ToolTip="回退到位时，电缸2/4先夹紧后，等待该时间再夹紧电缸1/3"/>
+                                    <TextBox x:Name="ProgramReleaseLead" Grid.Row="17" Grid.Column="1" Text="50" Margin="0,3" Height="28" ToolTip="触发回退时，配合电缸1/3先闭合夹持，等待该时间后再释放运动端电缸2/4"/>
+                                    <TextBlock Grid.Row="18" Text="夹持先行时间 (ms)" VerticalAlignment="Center" Foreground="#475569" FontSize="12.5" Margin="0,3"/>
+                                    <TextBox x:Name="ProgramReclampLead" Grid.Row="18" Grid.Column="1" Text="50" Margin="0,3" Height="28" ToolTip="回退到位时，运动端电缸2/4先闭合夹紧，等待该时间后再松开配合电缸1/3"/>
                                     <TextBlock Grid.Row="19" Text="释放后等待 (ms)" VerticalAlignment="Center" Foreground="#475569" FontSize="12.5" Margin="0,3"/>
                                     <TextBox x:Name="ProgramReleaseWait" Grid.Row="19" Grid.Column="1" Text="150" Margin="0,3" Height="28" ToolTip="运动端电缸释放后，开始回退前的稳定等待"/>
                                     <TextBlock Grid.Row="20" Text="重新夹紧后等待 (ms)" VerticalAlignment="Center" Foreground="#475569" FontSize="12.5" Margin="0,3"/>
-                                    <TextBox x:Name="ProgramReclampWait" Grid.Row="20" Grid.Column="1" Text="150" Margin="0,3" Height="28" ToolTip="配合电缸重新夹紧后，进入下一阶段前的稳定等待"/>
+                                    <TextBox x:Name="ProgramReclampWait" Grid.Row="20" Grid.Column="1" Text="150" Margin="0,3" Height="28" ToolTip="配合电缸恢复后，进入下一阶段前的稳定等待"/>
                                 </Grid>
                                 <Border Background="#F0FDF4" BorderBrush="#BBF7D0" BorderThickness="1" CornerRadius="6" Padding="10,8" Margin="0,10,0,0">
                                     <TextBlock Text="PLC上电后自动自检；界面只等待自检完成，不发送自检请求。未勾选配合时，对应电缸1或电缸3保持正常输送值400。" TextWrapping="Wrap" Foreground="#166534" FontSize="12" LineHeight="16"/>
