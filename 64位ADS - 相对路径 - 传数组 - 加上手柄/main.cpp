@@ -718,10 +718,6 @@ int main(int argc, char* argv[])
 		const bool had_active_return = planned_return.active();
 		if (!had_active_return) return true;
 		clear_axis1_delivery_mapping();
-		if (planned_return.phase == PlannedReturnPhase::CancelWait)
-		{
-			return planned_return.cancel_clear_confirmed;
-		}
 
 		const PlannedReturnPhase interrupted_phase = planned_return.phase;
 		const bool handoff_clear_already_applied =
@@ -740,30 +736,12 @@ int main(int argc, char* argv[])
 			interrupted_phase != PlannedReturnPhase::ClampSettle &&
 			interrupted_phase != PlannedReturnPhase::PostHandoffClampSettle &&
 			!planned_return.completion_clear_confirmed;
-		const AdsEventState cancel_events = ads_communication.event_state();
-		for (int leg_index = 0; leg_index < planned_return.leg_count; ++leg_index)
-		{
-			PlannedReturnLeg& leg = planned_return.legs[leg_index];
-			const bool axis1 = leg.axis_index == 0;
-			const bool busy = axis1
-				? cancel_events.axis1_return_busy : cancel_events.axis6_return_busy;
-			leg.cancel_event_sequence = axis1
-				? cancel_events.axis1_return_event_sequence
-				: cancel_events.axis6_return_event_sequence;
-			leg.cancel_event_required = plc_request_can_be_active && (leg.started || busy);
-		}
+
 		axis6_coop_ff_inited = false;
 		axis6_coop_prev_axis1_cmd_abs = 0.0;
 		axis1_fast_return = false;
 		axis6_fast_retract = false;
 		load_pos_from_actual();
-		planned_return.phase = PlannedReturnPhase::CancelWait;
-		planned_return.cancel_t0_ms = GetTickCount64();
-		planned_return.cancel_timeout_reported = false;
-		planned_return.cancel_rebased = false;
-		planned_return.cancel_hold_generation = 0;
-		planned_return.cancel_clear_confirmed = !plc_request_can_be_active;
-		planned_return.cancel_snapshot_sequence = ads_snapshot_sequence;
 		clear_planned_return_ads_command_tracking();
 		bool clear_submitted = true;
 		if (plc_request_can_be_active)
@@ -772,13 +750,8 @@ int main(int argc, char* argv[])
 				AdsPlannedReturnOperation::Clear,
 				PlannedReturnAdsCommandPurpose::CancelClear,
 				true);
-			if (!clear_submitted)
-			{
-				planned_return.cancel_clear_retry_after_ms = GetTickCount64() + 250;
-				std::cout << "自动换手取消：清Req命令暂未进入通信队列，将在ADS可用后重试。"
-					<< std::endl;
-			}
 		}
+		planned_return.reset();
 		return clear_submitted;
 	};
 	auto cancel_cooperative_delivery = [&](bool leave_active_mode)
@@ -1229,7 +1202,7 @@ int main(int argc, char* argv[])
 		}
 		self_check_done = ads_events.self_check_done;
 		handle_reinit_req = ads_events.handle_reinit_req;
-		estop_hold_req = ads_events.estop_hold_req || ads_events.host_comm_timeout;
+		estop_hold_req = ads_events.estop_hold_req;
 		if (ads_stats.reconnect_count != handled_reconnect_count)
 		{
 			handled_reconnect_count = ads_stats.reconnect_count;
@@ -1252,61 +1225,6 @@ int main(int argc, char* argv[])
 			last_self_check_done = self_check_done;
 			startup.loading_ready_symbol_available = true;
 			startup.loading_ready_plc = ads_events.startup_loading_ready;
-		}
-		if (planned_return.phase == PlannedReturnPhase::CancelWait)
-		{
-			const ULONGLONG cancel_now_ms = GetTickCount64();
-			if (planned_return.ads_command_purpose == PlannedReturnAdsCommandPurpose::CancelClear)
-			{
-				const PlannedReturnAdsPoll poll = poll_planned_return_ads_command();
-				if (poll == PlannedReturnAdsPoll::Success)
-				{
-					clear_planned_return_ads_command_tracking();
-					planned_return.cancel_clear_confirmed = true;
-					planned_return.cancel_snapshot_sequence = ads_snapshot_sequence;
-					planned_return.cancel_clear_retry_after_ms = 0;
-				}
-				else if (poll == PlannedReturnAdsPoll::Failure)
-				{
-					clear_planned_return_ads_command_tracking();
-					planned_return.cancel_clear_retry_after_ms = cancel_now_ms + 250;
-					std::cout << "PLC计划回退Req清除失败，将按250 ms间隔继续重试。"
-						<< std::endl;
-				}
-				else if (planned_return_ads_command_timed_out(cancel_now_ms))
-				{
-					// ADS调用本身有短超时；这里再限制队列结果等待，防止通信线程异常时
-					// CancelWait永久卡在一个Pending序号。旧Clear即使稍后执行也仍是幂等的。
-					clear_planned_return_ads_command_tracking();
-					planned_return.cancel_clear_retry_after_ms = cancel_now_ms + 250;
-					std::cout << "PLC计划回退Req清除等待超过250 ms，将继续异步重试。"
-						<< std::endl;
-				}
-			}
-			if (!planned_return.cancel_clear_confirmed &&
-				planned_return.ads_command_purpose == PlannedReturnAdsCommandPurpose::None &&
-				ads_motion_cycle_valid && cancel_now_ms >= planned_return.cancel_clear_retry_after_ms)
-			{
-				if (!submit_planned_return_ads_command(
-					AdsPlannedReturnOperation::Clear,
-					PlannedReturnAdsCommandPurpose::CancelClear,
-					false))
-				{
-					planned_return.cancel_clear_retry_after_ms = cancel_now_ms + 250;
-				}
-			}
-			if (!planned_return.cancel_timeout_reported && ads_motion_cycle_valid &&
-				planned_return.cancel_t0_ms != 0 &&
-				(cancel_now_ms - planned_return.cancel_t0_ms) >=
-				cfg.planned_return_execution_timeout_ms)
-			{
-				planned_return.cancel_timeout_reported = true;
-				return_ads_fault_hold = true;
-				control_active = false;
-				clear_force_output();
-				std::cout << "计划回退取消等待超过5 s，继续保持实际位置并要求人工重新启动。"
-					<< std::endl;
-			}
 		}
 		const ULONGLONG loop_now_ms = GetTickCount64();
 
@@ -1463,7 +1381,7 @@ int main(int argc, char* argv[])
 			}
 			load_pos_from_actual();
 			bool baseline_rebuilt = true;
-			if (!plc_restart_recovery_latched && !handle_soft_hold_active)
+			if (!handle_soft_hold_active)
 			{
 				if (guidewire_mode == GuidewireMode::Cooperative)
 				{
@@ -1509,6 +1427,9 @@ int main(int argc, char* argv[])
 			load_pos_from_actual();
 			axis1_fast_return = false;
 			axis6_fast_retract = false;
+			axis2_hold_rel = plc_act_pos[1];
+			axis7_hold_rel = plc_act_pos[6];
+			independent_axis2_hold_rel = plc_act_pos[1];
 			std::cout << "连接保持解除：实际位置已重新加载并恢复控制。" << std::endl;
 		}
 
@@ -1524,6 +1445,9 @@ int main(int argc, char* argv[])
 					startup.phase = StartupPhase::WaitForEnter;
 					startup.completed = false;
 					startup.prompted = false;
+					axis2_hold_rel = plc_act_pos[1];
+					axis7_hold_rel = plc_act_pos[6];
+					independent_axis2_hold_rel = plc_act_pos[1];
 					prompt_startup_mode();
 					std::cout << "系统初始同步完成，进入就绪状态。" << std::endl;
 				}
@@ -1544,8 +1468,7 @@ int main(int argc, char* argv[])
 		if (ads_stats.plc_restart_count != handled_plc_restart_count)
 		{
 			handled_plc_restart_count = ads_stats.plc_restart_count;
-			plc_restart_recovery_latched = true;
-			cal_state.zeroed = false;
+			plc_restart_recovery_latched = false;
 			ff.enabled = false;
 			tracking_controller.disable_compensation();
 			spacing_recovery.reset();
@@ -1555,7 +1478,7 @@ int main(int argc, char* argv[])
 			startup.completed = false;
 			startup.phase = StartupPhase::WaitForEnter;
 			clear_force_output();
-			std::cout << "检测到 PLC 重启或应用重载：已清除力零点并锁定控制，必须重新自检、调零和人工启动。" << std::endl;
+			std::cout << "检测到 PLC 重启或应用重载：已重置运行状态，进入待机准备。" << std::endl;
 		}
 		// 1) 采样逻辑手柄输入，并生成按键边沿触发状态。
 		if (!handle_soft_hold_active)
@@ -1591,74 +1514,6 @@ int main(int argc, char* argv[])
 			handle_record.qpc_ticks - handle_record_history.front().qpc_ticks > handle_history_ticks)
 		{
 			handle_record_history.pop_front();
-		}
-
-		if (planned_return.phase == PlannedReturnPhase::CancelWait &&
-			!planned_return.cancel_rebased && planned_return.cancel_clear_confirmed &&
-			ads_motion_cycle_valid && ads_snapshot_sequence > planned_return.cancel_snapshot_sequence)
-		{
-			bool plc_return_idle = true;
-			for (int leg_index = 0; leg_index < planned_return.leg_count; ++leg_index)
-			{
-				const PlannedReturnLeg& leg = planned_return.legs[leg_index];
-				if (!leg.active) continue;
-				if (leg.axis_index == 0)
-				{
-					plc_return_idle = plc_return_idle &&
-						!ads_events.axis1_return_busy && !ads_events.axis1_return_error &&
-						(!leg.cancel_event_required ||
-							ads_events.axis1_return_event_sequence > leg.cancel_event_sequence);
-				}
-				else if (leg.axis_index == 5)
-				{
-					plc_return_idle = plc_return_idle &&
-						!ads_events.axis6_return_busy && !ads_events.axis6_return_error &&
-						(!leg.cancel_event_required ||
-							ads_events.axis6_return_event_sequence > leg.cancel_event_sequence);
-				}
-			}
-			if (plc_return_idle)
-			{
-				// 只使用已经发布到内存的同一份新鲜快照和本拍滤波手柄值；
-				// 不轮询外设、不Sleep，也不在取消链中追加同步ADS读取。
-				bool rebased = false;
-				switch (planned_return.rebase_scope)
-				{
-				case PlannedReturnRebaseScope::Axis1:
-					rebased = motion_sync::rebase_axis1_after_return(ctx);
-					break;
-				case PlannedReturnRebaseScope::Axis6:
-					rebased = motion_sync::rebase_axis6_after_return(ctx);
-					break;
-				case PlannedReturnRebaseScope::Cooperative:
-					rebased = motion_sync::rebase_cooperative_after_return(ctx);
-					break;
-				}
-				if (!rebased)
-				{
-					load_pos_from_actual();
-					return_ads_fault_hold = true;
-					control_active = false;
-					clear_force_output();
-					std::cout << "计划回退取消后基准重建失败，继续保持上位机运动控制锁止。"
-						<< std::endl;
-				}
-				planned_return.cancel_rebased = true;
-				planned_return.cancel_hold_generation = 0;
-			}
-		}
-		if (planned_return.phase == PlannedReturnPhase::CancelWait &&
-			planned_return.cancel_rebased && planned_return.cancel_hold_generation != 0 &&
-			ads_communication.applied_motion_output_generation() >=
-			planned_return.cancel_hold_generation)
-		{
-			const bool fault_hold_remains = return_ads_fault_hold;
-			reset_planned_return();
-			if (fault_hold_remains)
-			{
-				std::cout << "实际位置保持已写入；回退故障保持继续生效，需人工重新启动。"
-					<< std::endl;
-			}
 		}
 
 		++loop_count;
@@ -1729,7 +1584,7 @@ int main(int argc, char* argv[])
 		else if (physical_mode_switch_allowed && catheter_b7_press_edge)
 		{
 			const ModeSelection selection = catheter_b6_pressed
-				? ModeSelection::CatheterDelivery : ModeSelection::CatheterRetraction;
+				? ModeSelection::CatheterRetraction : ModeSelection::CatheterDelivery;
 			physical_mode_source_before_request = physical_mode_source;
 			vis_reverse_override_active_before_request = vis_reverse_override_active;
 			vis_reverse_override_value_before_request = vis_reverse_override_value;
@@ -1742,7 +1597,7 @@ int main(int argc, char* argv[])
 		else if (physical_mode_switch_allowed && guidewire_b7_press_edge)
 		{
 			const ModeSelection selection = guidewire_b6_pressed
-				? ModeSelection::GuidewireDelivery : ModeSelection::GuidewireRetraction;
+				? ModeSelection::GuidewireRetraction : ModeSelection::GuidewireDelivery;
 			physical_mode_source_before_request = physical_mode_source;
 			vis_reverse_override_active_before_request = vis_reverse_override_active;
 			vis_reverse_override_value_before_request = vis_reverse_override_value;
@@ -1766,7 +1621,7 @@ int main(int argc, char* argv[])
 		bool axis1_reverse_pressed = cooperative_mode_active
 			? cooperative_retraction_active
 			: (physical_mode_source == PhysicalModeSource::Catheter
-				? !catheter_b6_pressed
+				? catheter_b6_pressed
 				: ((vis_reverse_override_active && vis_reverse_override_target == 0)
 					? vis_reverse_override_value
 					: false));
@@ -1805,7 +1660,7 @@ int main(int argc, char* argv[])
 		bool axis6_effective_reverse_pressed = cooperative_mode_active
 			? cooperative_retraction_active
 			: (physical_mode_source == PhysicalModeSource::Guidewire
-				? !guidewire_b6_pressed
+				? guidewire_b6_pressed
 				: ((vis_reverse_override_active && vis_reverse_override_target == 1)
 					? vis_reverse_override_value
 					: (single_handle_mode ? axis1_reverse_pressed : false)));
@@ -1833,7 +1688,7 @@ int main(int argc, char* argv[])
 			clear_axis1_delivery_mapping();
 		}
 		// 统一回退任务不能穿越急停、通信保持或其它接管状态。
-		if (planned_return.active() && planned_return.phase != PlannedReturnPhase::CancelWait &&
+		if (planned_return.active() &&
 			(!control_active || connection_hold_active ||
 			estop_hold_active || return_ads_fault_hold ||
 			spacing_recovery.active() || spacing_recovery.requested || ft_exp.active() ||
@@ -1932,12 +1787,12 @@ int main(int argc, char* argv[])
 		axis1_reverse_pressed_prev = axis1_reverse_pressed;
 		axis6_effective_reverse_prev = axis6_effective_reverse_pressed;
 
-		// 3) 保持状态由 ADS Notification 更新，只在状态边沿执行安全处理。
+		// 3) 急停状态由 ADS Notification 更新，只在状态边沿执行安全处理。
 		if (estop_hold_req != estop_hold_active)
 		{
 			if (estop_hold_req)
 			{
-				std::cout << "PLC 保持：开启。" << std::endl;
+				std::cout << "PLC 急停状态：开启。" << std::endl;
 				estop_hold_active = true;
 				control_active = false;
 				cancel_cooperative_delivery(true);
@@ -1945,13 +1800,22 @@ int main(int argc, char* argv[])
 			}
 			else
 			{
-				std::cout << "PLC 保持：关闭。" << std::endl;
-				if (formal_control_stage)
-				{
-					axis1_push_rearm_after_hold = true;
-					std::cout << "轴1推送已锁定，请先反向回拉手柄完成重接管。" << std::endl;
-				}
+				std::cout << "PLC 急停状态：解除。" << std::endl;
 				estop_hold_active = false;
+				axis2_hold_rel = plc_act_pos[1];
+				axis7_hold_rel = plc_act_pos[6];
+				independent_axis2_hold_rel = plc_act_pos[1];
+			}
+		}
+
+		if (estop_hold_active)
+		{
+			static ULONGLONG next_estop_recover_req_ms = 0;
+			const ULONGLONG now_recover_ms = GetTickCount64();
+			if (now_recover_ms >= next_estop_recover_req_ms)
+			{
+				next_estop_recover_req_ms = now_recover_ms + 1000;
+				ads_communication.request_watchdog_recovery();
 			}
 		}
 
@@ -1975,7 +1839,7 @@ int main(int argc, char* argv[])
 				{
 					if (estop_hold_active)
 					{
-						std::cout << "直接控制启动已忽略：PLC 保持处于开启状态。" << std::endl;
+						std::cout << "直接控制启动已忽略：处于 PLC 急停状态。" << std::endl;
 					}
 					else if (ads_soft_hold_active)
 					{
@@ -1984,10 +1848,6 @@ int main(int argc, char* argv[])
 					else if (has_self_check_flag && !self_check_done)
 					{
 						std::cout << "直接控制启动已忽略：PLC 自检尚未完成。" << std::endl;
-					}
-					else if (plc_restart_recovery_latched && !cal_state.zeroed)
-					{
-						std::cout << "直接控制启动已忽略：PLC 重启后必须先重新力感调零。" << std::endl;
 					}
 					else if (!restore_startup_v_limit())
 					{
@@ -2020,7 +1880,7 @@ int main(int argc, char* argv[])
 				{
 					if (estop_hold_active)
 					{
-						std::cout << "启动准备已忽略：PLC 保持处于开启状态。" << std::endl;
+						std::cout << "启动准备已忽略：处于 PLC 急停状态。" << std::endl;
 					}
 					else if (ads_soft_hold_active)
 					{
@@ -2029,10 +1889,6 @@ int main(int argc, char* argv[])
 					else if (has_self_check_flag && !self_check_done)
 					{
 						std::cout << "启动准备已忽略：PLC 自检尚未完成。" << std::endl;
-					}
-					else if (plc_restart_recovery_latched && !cal_state.zeroed)
-					{
-						std::cout << "启动准备已忽略：PLC 重启后必须先重新力感调零。" << std::endl;
 					}
 					else if (start_startup_sequence())
 					{
@@ -2190,7 +2046,7 @@ int main(int argc, char* argv[])
 			}
 			else if (estop_hold_active)
 			{
-				std::cout << "导丝模式切换已忽略：PLC 保持处于开启状态。" << std::endl;
+				std::cout << "导丝模式切换已忽略：处于 PLC 急停状态。" << std::endl;
 				cooperative_transition_failed = (requested_guidewire_mode == GuidewireMode::Cooperative);
 				physical_mode_transition_rejected = physical_mode_request_pending;
 			}
@@ -2912,7 +2768,6 @@ int main(int argc, char* argv[])
 				const bool axis1_leg_active = planned_return.contains_axis(0);
 				const bool axis6_leg_active = planned_return.contains_axis(5);
 				const bool restore_clamps =
-					planned_return.phase == PlannedReturnPhase::CancelWait ||
 					planned_return.phase == PlannedReturnPhase::AwaitFreshSnapshot ||
 					planned_return.phase == PlannedReturnPhase::PublishHandoff ||
 					planned_return.phase == PlannedReturnPhase::AwaitHandoffApplied ||
@@ -3025,10 +2880,6 @@ int main(int argc, char* argv[])
 					refresh_planned_return_leg(planned_return.legs[leg_index]);
 				}
 				apply_planned_return_outputs();
-				if (planned_return.phase == PlannedReturnPhase::CancelWait)
-				{
-					return;
-				}
 
 				if (planned_return.phase == PlannedReturnPhase::ClampSettle)
 				{
@@ -4058,19 +3909,13 @@ int main(int argc, char* argv[])
 				else
 				{
 					const double axis1_raw_cmd_abs = axis1_follow_cmd_abs + axis1_directional_increment_mm;
-					const bool axis1_follow_enabled = axis1_reverse_pressed || (!axis1_push_rearm_after_hold && !axis1_delivery_stop_latched);
+					const bool axis1_follow_enabled = axis1_reverse_pressed || !axis1_delivery_stop_latched;
 					if (axis3_from_left_mm >
 						(cfg.axis3_delivery_stop_from_left_mm + cfg.axis3_delivery_release_hysteresis_mm))
 					{
 						axis1_delivery_stop_prompted = false;
 					}
 
-					if (axis1_push_rearm_after_hold && axis1_linear_increment_mm > 0.0)
-					{
-						axis1_push_rearm_after_hold = false;
-						capture_axis1_follow_baseline();
-						std::cout << "PLC 保持解除后，轴1推送已重接管。" << std::endl;
-					}
 					if (axis1_delivery_stop_latched && axis1_reverse_pressed && axis1_directional_increment_active)
 					{
 						axis1_delivery_stop_latched = false;
@@ -4728,7 +4573,7 @@ int main(int argc, char* argv[])
 			if (!cal_state.zeroed) current_force_feedback_reason = "力反馈等待：尚未完成力传感器零点采集。";
 			else if (!force_sample.valid) current_force_feedback_reason = "力反馈等待：当前没有有效力采样。";
 			else if (!control_active) current_force_feedback_reason = "力反馈等待：控制尚未激活。";
-			else if (estop_hold_active) current_force_feedback_reason = "力反馈等待：PLC 保持处于开启状态。";
+			else if (estop_hold_active) current_force_feedback_reason = "力反馈等待：处于 PLC 急停状态。";
 			else if (spacing_recovery.active()) current_force_feedback_reason = "力反馈等待：当前为屈曲恢复模式。";
 		}
 		if (!current_force_feedback_reason.empty() && current_force_feedback_reason != force_feedback_diag_reason)
@@ -4789,22 +4634,11 @@ int main(int argc, char* argv[])
 
 		// refer、快退、气缸、axis4 与平滑旁路由同一份命令快照发布。
 		// 放在力过渡 tick 之后，确保实验本拍产生的 refer/快退请求能够实际下发。
-		const bool cancel_hold_output_enabled =
-			planned_return.phase == PlannedReturnPhase::CancelWait &&
-			planned_return.cancel_rebased && ads_motion_cycle_valid && !estop_hold_active;
-		if (cancel_hold_output_enabled)
-		{
-			// 回退故障时常规motion_enabled会关闭；取消链仍需单独发送一次
-			// “当前实际位置＋关闭快退旁路”，并等待该代次真正写入后才允许Follow。
-			load_pos_from_actual();
-			axis1_fast_return = false;
-			axis6_fast_retract = false;
-		}
 		AdsOutputCommand ads_output{};
 		const bool normal_motion_output_enabled = ads_motion_cycle_valid && !connection_hold_active &&
 			!return_ads_fault_hold && !estop_hold_active &&
 			(control_active || motion_startup_active || emergency_retract_active);
-		ads_output.motion_enabled = normal_motion_output_enabled || cancel_hold_output_enabled;
+		ads_output.motion_enabled = normal_motion_output_enabled;
 		for (int axis = 0; axis < 7; ++axis) ads_output.refer[axis] = pos[axis];
 		ads_output.axis1_fast_return = ads_output.motion_enabled && axis1_fast_return;
 		ads_output.axis6_fast_retract = ads_output.motion_enabled && axis6_fast_retract;
@@ -4895,10 +4729,6 @@ int main(int argc, char* argv[])
 			clamp_hold_587_trigger = planned_return.contains_axis(5);
 			planned_return.handoff_generation = output_generation;
 			planned_return.phase = PlannedReturnPhase::AwaitHandoffApplied;
-		}
-		if (cancel_hold_output_enabled && planned_return.cancel_hold_generation == 0)
-		{
-			planned_return.cancel_hold_generation = output_generation;
 		}
 
 		process_force_feedback(
@@ -5433,11 +5263,6 @@ int main(int argc, char* argv[])
 					break;
 				case VisCommandType::ExecuteStartup:
 				{
-					if (plc_restart_recovery_latched && !cal_state.zeroed)
-					{
-						std::cout << "UI：PLC 重启后必须先重新力感调零，启动准备已忽略。" << std::endl;
-						break;
-					}
 					bool valid = true;
 					if (pending_startup.axis1_from_left_mm < 5.0 || pending_startup.axis1_from_left_mm > 95.0) valid = false;
 					if (pending_startup.axis3_from_left_mm < 10.0 || pending_startup.axis3_from_left_mm > 650.0) valid = false;
@@ -5476,11 +5301,6 @@ int main(int argc, char* argv[])
 				}
 				case VisCommandType::SelectDirectControl:
 				{
-					if (plc_restart_recovery_latched && !cal_state.zeroed)
-					{
-						std::cout << "UI：PLC 重启后必须先重新力感调零，直接控制已忽略。" << std::endl;
-						break;
-					}
 					if (!startup.completed &&
 						startup.phase == StartupPhase::WaitForEnter &&
 						!estop_hold_active &&

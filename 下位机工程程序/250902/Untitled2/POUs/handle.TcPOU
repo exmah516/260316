@@ -124,7 +124,6 @@ IF G.handle_reinit_req THEN
 	init_done := FALSE;
 	G.handle_reinit_done := FALSE;
 	G.handle_reinit_req := FALSE;
-	G.estop_hold_req := TRUE;
 
 	FOR i:=1 TO 7 DO
 		ext_setpoint_enabled[i] := FALSE;
@@ -164,7 +163,6 @@ IF G.handle_reinit_req THEN
 END_IF
 
 IF NOT init_done THEN
-	G.estop_hold_req := TRUE;
 	all_enabled := TRUE;
 	FOR i:=1 TO 7 DO
 		G.SetPointGenEnable[i](Axis:=G.axis[i], Execute:=TRUE);
@@ -228,9 +226,8 @@ FOR i:=1 TO 7 DO
 	END_IF
 END_FOR
 
-IF NOT all_powered THEN
+IF (NOT all_powered) OR has_axis_error THEN
 	G.estop_hold_req := TRUE;
-	hold_active := TRUE;
 	FOR j:=1 TO 7 DO
 		G.Act_pos[j] := G.axis[j].NcToPlc.ActPos - G.init_pos[j];
 		G.act_pos_from_left[j] := G.axis[j].NcToPlc.ActPos - G.leftlimit[j];
@@ -247,30 +244,12 @@ IF NOT all_powered THEN
 		traj_vel[j] := 0.0;
 		traj_acc[j] := 0.0;
 	END_FOR
-	IF has_axis_error THEN
-		G.gen_state := _err;
-	END_IF
-	RETURN;
-END_IF
 
-IF hold_active THEN
-	hold_active := FALSE;
-	G.handle_reinit_req := TRUE;
-	G.estop_hold_req := TRUE;
-	IF has_axis_error THEN
-		G.gen_state := _err;
-	END_IF
-	RETURN;
-END_IF
-
-IF has_axis_error THEN
-	G.estop_hold_req := TRUE;
 	G.gen_state := _err;
 	RETURN;
 END_IF
 
 IF G.host_comm_timeout THEN
-	G.estop_hold_req := TRUE;
 	G.handle_reinit_done := FALSE;
 
 	IF (NOT host_timeout_prev) OR (NOT host_hold_captured) THEN
@@ -365,8 +344,8 @@ IF G.host_comm_timeout THEN
 		fb_host_return_stop[i](
 			Axis:=G.axis[i],
 			Execute:=host_return_stop_exec[i],
-			Deceleration:=100.0,
-			Jerk:=500.0
+			Deceleration:=4000.0,
+			Jerk:=10000.0
 		);
 	END_FOR
 

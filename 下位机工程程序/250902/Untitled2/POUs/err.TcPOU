@@ -37,18 +37,27 @@ FOR i:=1 TO 7 DO
 		all_powered := FALSE;
 	END_IF
 
-	IF G.axis[i].Status.Error OR G.power_output[i].Error OR G.reset_output[i].Error THEN
+	IF G.axis[i].Status.Error OR G.axis[i].Status.DriveDeviceError OR G.power_output[i].Error OR G.reset_output[i].Error THEN
 		has_err := TRUE;
 
-		IF G.power_output[i].Error AND (G.power_output[i].ErrorID = power_not_ready_errid) THEN
+		IF (G.power_output[i].Error AND (G.power_output[i].ErrorID = power_not_ready_errid))
+		   OR (G.axis[i].Status.Error AND (G.axis[i].Status.ErrorID = power_not_ready_errid)) THEN
 			has_power_not_ready := TRUE;
 		END_IF
 
-		IF G.axis[i].Status.Error OR G.reset_output[i].Error OR (G.power_output[i].Error AND (G.power_output[i].ErrorID <> power_not_ready_errid)) THEN
+		IF (G.axis[i].Status.Error AND (G.axis[i].Status.ErrorID <> power_not_ready_errid))
+		   OR G.axis[i].Status.DriveDeviceError
+		   OR G.reset_output[i].Error
+		   OR (G.power_output[i].Error AND (G.power_output[i].ErrorID <> power_not_ready_errid)) THEN
 			has_other_error := TRUE;
 		END_IF
 	END_IF
 END_FOR
+
+IF G.axis2_sync_axis.Status.Error OR G.axis2_sync_axis.Status.DriveDeviceError THEN
+	has_err := TRUE;
+	has_other_error := TRUE;
+END_IF
 
 G.estop_hold_req := TRUE;
 
@@ -77,10 +86,10 @@ CASE step OF
 	IF NOT has_err THEN
 		FOR i:=1 TO 7 DO
 			G.axis_Reset[i].Execute := FALSE;
-			G.power_[i].Enable := TRUE;
+			G.power_[i].Enable := FALSE;
 		END_FOR
-		retry_timer(IN:=TRUE, PT:=T#2S);
-		step := 11;
+		pulse_timer(IN:=TRUE, PT:=T#200MS);
+		step := 10;
 		RETURN;
 	END_IF
 
@@ -92,7 +101,7 @@ CASE step OF
 	END_IF
 
 	FOR i:=1 TO 7 DO
-		IF G.axis[i].Status.Error OR G.power_output[i].Error OR G.reset_output[i].Error THEN
+		IF G.axis[i].Status.Error OR G.axis[i].Status.DriveDeviceError OR G.power_output[i].Error OR G.reset_output[i].Error THEN
 			G.axis_Reset[i].Execute := TRUE;
 		END_IF
 	END_FOR
@@ -127,11 +136,14 @@ CASE step OF
 
 10:
 	FOR i:=1 TO 7 DO
-		G.axis_Reset[i].Execute := FALSE;
-		IF G.power_output[i].Error AND (G.power_output[i].ErrorID = power_not_ready_errid) THEN
+		IF (G.power_output[i].Error AND (G.power_output[i].ErrorID = power_not_ready_errid))
+		   OR (G.axis[i].Status.Error AND (G.axis[i].Status.ErrorID = power_not_ready_errid))
+		   OR G.axis[i].Status.DriveDeviceError THEN
 			G.power_[i].Enable := FALSE;
+			G.axis_Reset[i].Execute := TRUE;
 		ELSE
 			G.power_[i].Enable := TRUE;
+			G.axis_Reset[i].Execute := FALSE;
 		END_IF
 	END_FOR
 
@@ -139,6 +151,7 @@ CASE step OF
 	IF pulse_timer.Q THEN
 		pulse_timer(IN:=FALSE);
 		FOR i:=1 TO 7 DO
+			G.axis_Reset[i].Execute := FALSE;
 			G.power_[i].Enable := TRUE;
 		END_FOR
 		retry_timer(IN:=TRUE, PT:=T#3S);

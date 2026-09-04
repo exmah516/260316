@@ -1965,9 +1965,9 @@ void AdsCommunicationService::clear_runtime_connection_state()
 	{
 		std::lock_guard<std::mutex> lock(event_mutex_);
 		event_state_ = AdsEventState{};
-		// 断连时安全状态未知，按保持/超时有效处理，避免其他消费者误判为安全解除。
-		event_state_.estop_hold_req = true;
-		event_state_.host_comm_timeout = true;
+		// 断连时不主动伪造急停保持，仅重置事件状态
+		event_state_.estop_hold_req = false;
+		event_state_.host_comm_timeout = false;
 		++axis1_return_event_sequence_counter_;
 		if (axis1_return_event_sequence_counter_ == 0) ++axis1_return_event_sequence_counter_;
 		++axis6_return_event_sequence_counter_;

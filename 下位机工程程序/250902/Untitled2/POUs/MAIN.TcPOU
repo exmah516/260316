@@ -1,4 +1,4 @@
-﻿<?xml version="1.0" encoding="utf-8"?>
+<?xml version="1.0" encoding="utf-8"?>
 <TcPlcObject Version="1.1.0.1" ProductVersion="3.1.4024.15">
   <POU Name="MAIN" Id="{0f7d3262-e451-4dc7-838c-99daae61b3ae}" SpecialFunc="None">
     <Declaration><![CDATA[PROGRAM MAIN
@@ -30,7 +30,7 @@ IF TwinCAT_SystemInfoVarList._TaskInfo[1].FirstCycle THEN
 	G.self_check_done := FALSE;
 	G.handle_reinit_req := FALSE;
 	G.handle_reinit_done := FALSE;
-	G.estop_hold_req := TRUE;
+	G.estop_hold_req := FALSE;
 	G.selfcheck_reset_req := TRUE;
 	FOR i:=1 TO 7 DO
 		G.SetPointGenEnable[i].Execute := FALSE;

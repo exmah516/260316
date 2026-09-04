@@ -180,8 +180,8 @@ struct ControlConfig
 	unsigned short startup_cyl4_clamp = 1000;
 	// PLC 自检完成后的器械装卸等待姿态；旧 PLC 无就绪标志时也用于兼容判定。
 	double startup_loading_axis1_from_left_mm = 96.0;
-	double startup_loading_axis3_from_left_mm = 400.0;
-	double startup_loading_axis5_from_left_mm = 430.0;
+	double startup_loading_axis3_from_left_mm = 500.0;
+	double startup_loading_axis5_from_left_mm = 530.0;
 	double startup_loading_axis6_from_left_mm = 580.0;
 	double startup_loading_pose_tolerance_mm = 2.0;
 	// 标准装卸启动的中间移动目标。
@@ -256,7 +256,6 @@ enum class PlannedReturnPhase : unsigned char
 	AwaitAccepted,
 	AwaitDone,
 	RetryClear,
-	CancelWait,
 	AwaitFreshSnapshot,
 	PublishHandoff,
 	AwaitHandoffApplied,
