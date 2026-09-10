@@ -37,6 +37,8 @@ public:
 
 	bool begin(const std::string& mode, const std::string& suffix, std::string& error);
 	bool begin_standalone(const std::string& suffix, std::uint64_t field_mask, std::string& error);
+	// 仅在创建记录前设置；本次记录始终使用同一份模型配置快照。
+	void set_dynamics_config(const clampdynamics::Config& config) { dynamics_config_ = config; }
 	// 记录程序递送本次实际使用的配合开关，供最终 experiment.json 追溯。
 	void set_program_coupling(bool cylinder1_enabled, bool cylinder3_enabled);
 	// 保存程序递送运动端电缸本次使用的开闭量，便于复现实验参数。
@@ -84,13 +86,14 @@ private:
 
 	struct PendingWrite
 	{
-		int kind = 0; // 0=样本，1=事件，2=取零数据
+		int kind = 0; // 0=样本，1=事件，2=取零数据，3=因果模型结果
 		std::string data;
 	};
 
 	bool active_ = false;
 	bool archived_ = false;
 	bool program_mode_ = false;
+	clampdynamics::Config dynamics_config_{};
 	bool standalone_mode_ = false;
 	std::uint64_t standalone_field_mask_ = 0;
 	bool program_cylinder1_coupling_enabled_ = true;
@@ -121,6 +124,8 @@ private:
 	std::ofstream samples_;
 	std::ofstream events_;
 	std::ofstream zero_file_;
+	std::ofstream model_file_;
+	std::ofstream illustration_file_;
 	std::thread writer_thread_;
 	mutable std::mutex writer_mutex_;
 	std::condition_variable writer_cv_;

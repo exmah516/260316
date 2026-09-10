@@ -1,4 +1,6 @@
 #include "ExperimentStreamRecorder.h"
+#include "ClampCurveBuffer.h"
+#include "ClampDynamics.h"
 #include "ExperimentStreamAds.h"
 #include "ForceCalibration.h"
 
@@ -200,6 +202,10 @@ bool ExperimentStreamRecorder::begin(const std::string& mode, const std::string&
 			writer_finished_ = false;
 			writer_error_.clear();
 		}
+		model_file_.close();
+		model_file_.clear();
+		illustration_file_.close();
+		illustration_file_.clear();
 		mode_name_ = mode;
 		start_time_local_ = now_iso();
 		end_time_local_.clear();
@@ -229,6 +235,30 @@ bool ExperimentStreamRecorder::begin(const std::string& mode, const std::string&
 		samples_.open(path / L"samples_1khz.csv", std::ios::out | std::ios::trunc);
 		events_.open(path / L"events.csv", std::ios::out | std::ios::trunc);
 		zero_file_.open(path / L"zero_calibration.csv", std::ios::out | std::ios::trunc);
+		if (program_mode_) {
+			illustration_file_.open(path / L"model2_illustration.csv");
+			std::ofstream illustration_params(path / L"model2_illustration.json");
+			illustration_params << clampillustration::snapshot();
+			illustration_params.flush();
+			if (!illustration_file_ || !illustration_params)
+				throw std::runtime_error("Cannot create target illustration sidecar");
+			illustration_file_ << "sample_index,plc_time_us,cycle_index,phase,mode,fn_original_N,ft_original_N,"
+				"fn_reference_N,ft_reference_N,gate,weight,fn_illustration_N,ft_illustration_N,"
+				"fn_valid,ft_valid,purpose\n";
+			model_file_.open(path / L"causal_force.csv", std::ios::out | std::ios::trunc);
+			std::ofstream params(path / L"causal_model.json");
+			params << clampdynamics::snapshot(mode == "guidewire", dynamics_config_);
+			params.flush();
+			if (!model_file_ || !params) {
+				throw std::runtime_error("无法创建因果模型记录");
+			}
+			model_file_ << "sample_index,plc_time_us,cycle_index,phase,fn_original_N,ft_original_N,"
+				"fn_prediction_N,ft_prediction_N,fn_corrected_N,ft_corrected_N,model_valid,compute_us,"
+				"model_gate,velocity_mm_s,acceleration_mm_s2,inertia_N,viscous_N,"
+				"model_version,mass_kg,axial_sign,sign_verified,validation_mode,conditions_confirmed,"
+				"feedback_acceleration_mm_s2,used_acceleration_m_s2,sensor_prediction_N,display_prediction_N,"
+				"installation_axial_gain,acceleration_processing,model_status,reset_reason,physics_verified\n";
+		}
 		if (!samples_ || !events_ || !zero_file_)
 		{
 			error = "无法创建实验记录文件";
@@ -269,6 +299,8 @@ bool ExperimentStreamRecorder::begin(const std::string& mode, const std::string&
 		samples_.close();
 		events_.close();
 		zero_file_.close();
+		model_file_.close();
+		illustration_file_.close();
 		return false;
 	}
 }
@@ -372,7 +404,8 @@ void ExperimentStreamRecorder::writer_loop()
 			writer_busy_ = true;
 		}
 
-		std::ofstream* output = pending.kind == 0 ? &samples_ : pending.kind == 1 ? &events_ : &zero_file_;
+		std::ofstream* output = pending.kind == 0 ? &samples_ : pending.kind == 1 ? &events_ :
+			pending.kind == 3 ? &model_file_ : pending.kind == 4 ? &illustration_file_ : &zero_file_;
 		(*output) << pending.data;
 		if (!(*output))
 		{
@@ -380,7 +413,9 @@ void ExperimentStreamRecorder::writer_loop()
 			writer_busy_ = false;
 			if (writer_error_.empty())
 			{
-				writer_error_ = pending.kind == 0 ? "实时写入samples_1khz.csv失败" : pending.kind == 1 ? "实时写入events.csv失败" : "实时写入zero_calibration.csv失败";
+				writer_error_ = pending.kind == 0 ? "实时写入samples_1khz.csv失败" : pending.kind == 1 ? "实时写入events.csv失败" :
+					pending.kind == 3 ? "实时写入causal_force.csv失败" :
+					pending.kind == 4 ? "model2_illustration.csv write failed" : "实时写入zero_calibration.csv失败";
 				last_error_ = writer_error_;
 			}
 			writer_cv_.notify_all();
@@ -582,11 +617,46 @@ bool ExperimentStreamRecorder::append_program(const std::vector<ProgrammedDelive
 {
 	if (!active_) return true;
 	std::ostringstream rows;
+	std::ostringstream model_rows;
+	std::ostringstream illustration_rows;
+	illustration_rows << std::setprecision(17);
+	model_rows << std::setprecision(17);
 	rows << std::setprecision(12);
 	for (std::size_t i = begin_index; i < samples.size(); ++i)
 	{
 		const auto& s = samples[i];
 		const forcecal::Result cal = forcecal::calculate(s.fn1, s.ft1, s.fn2, s.ft2, zero.value, zero.valid);
+		const auto& side = mode == ProgrammedDeliveryMode::Guidewire ? cal.side2 : cal.side1;
+		const auto& m2 = s.illustration;
+		illustration_rows << s.sample_index << ',' << s.plc_time_us << ',' << s.cycle_index << ','
+			<< unsigned(s.phase) << ',' << (mode == ProgrammedDeliveryMode::Guidewire ? "guidewire" : "catheter") << ',';
+		if (cal.valid) illustration_rows << side.force_cal_delta_n << ',' << side.ft_cal_delta_n;
+		else illustration_rows << ',';
+		illustration_rows << ',';
+		if (cal.valid && std::isfinite(m2.reference_fn)) illustration_rows << m2.reference_fn;
+		illustration_rows << ',';
+		if (cal.valid && std::isfinite(m2.reference_ft)) illustration_rows << m2.reference_ft;
+		illustration_rows << ',' << m2.gate << ',' << m2.weight << ',';
+		if (cal.valid) illustration_rows << m2.fn << ',' << m2.ft;
+		else illustration_rows << ',';
+		illustration_rows << ',' << (cal.valid && m2.valid_fn) << ',' << (cal.valid && m2.valid_ft)
+			<< ",target_illustration\n";
+		model_rows << s.sample_index << ',' << s.plc_time_us << ',' << s.cycle_index << ',' << unsigned(s.phase) << ',';
+		if (cal.valid) {
+			model_rows << side.force_cal_delta_n << ',' << side.ft_cal_delta_n << ',' << s.model_fn << ',' << s.model_ft
+				<< ',' << side.force_cal_delta_n - s.model_fn << ',' << side.ft_cal_delta_n - s.model_ft;
+		} else model_rows << ",,,,,";
+		model_rows << ',' << (s.model_valid && cal.valid) << ',' << s.model_compute_us << ','
+			<< s.model_gate << ',' << (mode == ProgrammedDeliveryMode::Guidewire ? s.axis6_vel : s.axis1_vel)
+			<< ',' << s.model_acceleration << ',' << s.model_inertia << ',' << s.model_viscous
+			<< ',' << clampdynamics::kVersion << ',' << dynamics_config_.mass_kg
+			<< ',' << dynamics_config_.axial_sign << ",0," << dynamics_config_.validation_mode
+			<< ',' << dynamics_config_.conditions_confirmed
+			<< ',' << (mode == ProgrammedDeliveryMode::Guidewire ? s.axis6_acc : s.axis1_acc)
+			<< ',' << s.dynamics.acceleration_m_s2 << ',' << s.dynamics.sensor_prediction_N
+			<< ',' << s.dynamics.display_prediction_N << ',' << dynamics_config_.installation_gain
+			<< ",direct_feedback_no_added_filter," << s.dynamics.status
+			<< ',' << s.dynamics.reset_reason << ",0\n";
 		if (last_event_sequence_ == static_cast<std::uint32_t>(-1) && s.phase == 3)
 		{
 			if (!write_event("BaselineStart", s.plc_time_us, s.cycle_index, s.phase, s.event_sequence, error)) return false;
@@ -629,7 +699,8 @@ bool ExperimentStreamRecorder::append_program(const std::vector<ProgrammedDelive
 	}
 	if (rows.str().empty()) return true;
 	++block_count_;
-	return enqueue_write(0, rows.str(), error);
+	return enqueue_write(0, rows.str(), error) && enqueue_write(3, model_rows.str(), error)
+		&& enqueue_write(4, illustration_rows.str(), error);
 }
 
 bool ExperimentStreamRecorder::append_standalone(const std::vector<ExperimentStreamSample>& samples,
@@ -872,11 +943,21 @@ bool ExperimentStreamRecorder::finalize(const std::string& status, const std::st
 		samples_.flush();
 		events_.flush();
 		zero_file_.flush();
+		if (model_file_.is_open()) {
+			model_file_.flush();
+			if (!model_file_ && error.empty()) error = "因果模型记录刷新失败";
+		}
 		const bool json_ok = write_json(status, reason, zero, event_error);
+		if (illustration_file_.is_open()) {
+			illustration_file_.flush();
+			if (!illustration_file_ && error.empty()) error = "Target illustration flush failed";
+			illustration_file_.close();
+		}
 		if (!json_ok && error.empty()) error = event_error;
 		samples_.close();
 		events_.close();
 		zero_file_.close();
+		model_file_.close();
 		active_ = false;
 		const bool ok = event_ok && json_ok && error.empty();
 		archived_ = ok;
@@ -904,6 +985,8 @@ bool ExperimentStreamRecorder::finalize(const std::string& status, const std::st
 		samples_.close();
 		events_.close();
 		zero_file_.close();
+		model_file_.close();
+		illustration_file_.close();
 		return false;
 	}
 }

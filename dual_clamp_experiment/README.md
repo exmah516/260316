@@ -27,6 +27,9 @@ PLC任务周期为1 ms；长时间记录使用2个512点分块交替传输，327
 
 ## 编译
 
+当前“模型处理”为25 g轴向反馈惯性试算，完整公式、验证模式边界和硬件无关测试见
+`tools/INERTIA_25G.md`。模型只处理显示与派生记录，`ft`不补偿；无器械验证选项不会自动打开夹爪。
+
 ```powershell
 $msbuild = 'D:\Work_software\VS2022\MSBuild\Current\Bin\MSBuild.exe'
 & $msbuild '.\dual_clamp_experiment\DualClampExperiment.vcxproj' /p:Configuration=Debug /p:Platform=x64 /m

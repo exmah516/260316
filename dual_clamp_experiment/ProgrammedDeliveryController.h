@@ -3,6 +3,8 @@
 #include "ProgrammedDeliveryAds.h"
 #include "ExperimentStreamAds.h"
 #include "ExperimentStreamRecorder.h"
+#include "ClampCurveBuffer.h"
+#include "ClampDynamics.h"
 
 #include <mutex>
 #include <string>
@@ -33,6 +35,7 @@ public:
 	std::string last_error() const;
 	std::string recording_directory() const;
 	bool recording_archived() const;
+	std::string curve_response(std::uint64_t after, std::uint64_t generation) const;
 
 private:
 	bool validate_config(const ProgrammedDeliveryConfig& config, std::string& error) const;
@@ -56,4 +59,14 @@ private:
 	bool shared_selfcheck_busy_ = false;
 	bool shared_selfcheck_valid_ = false;
 	void poll_stream_locked();
+	void reset_model_locked(const char* reason = "restart");
+	clampdynamics::Predictor predictor_;
+	clampdynamics::OperationGate illustration_gate_;
+	clampdynamics::Result last_prediction_;
+	std::array<clampdynamics::Config, 3> mode_dynamics_{};
+	clampillustration::Generator illustration_;
+	clampmodel::CurveBuffer curves_;
+	double model_compute_us_ = 0.0;
+	double model_block_span_ms_ = 0.0;
+	bool model_zero_valid_ = false;
 };

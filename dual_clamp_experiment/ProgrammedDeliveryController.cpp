@@ -6,6 +6,30 @@
 #include <fstream>
 #include <iomanip>
 #include <sstream>
+#include <chrono>
+
+void ProgrammedDeliveryController::reset_model_locked(const char* reason)
+{
+	illustration_.reset();
+	illustration_gate_.reset();
+	predictor_.reset(reason);
+	last_prediction_ = {};
+	curves_.reset();
+	model_compute_us_ = model_block_span_ms_ = 0.0;
+	model_zero_valid_ = false;
+}
+
+std::string ProgrammedDeliveryController::curve_response(std::uint64_t after, std::uint64_t generation) const
+{
+	std::lock_guard<std::mutex> lock(mutex_);
+	const bool valid = clampdynamics::valid_config(config_.dynamics);
+	return curves_.response(after, generation, static_cast<int>(config_.mode), valid,
+		stream_status_.zero.valid, !recorder_.failed(), model_compute_us_, model_block_span_ms_, clampdynamics::kVersion)
+		+ "|dynamics_25g|" + std::to_string(config_.dynamics.axial_sign)
+		+ "|" + (config_.dynamics.validation_mode ? "1" : "0")
+		+ "|" + last_prediction_.status + "|" + last_prediction_.reset_reason
+		+ "|" + std::to_string(config_.dynamics.installation_gain);
+}
 
 ProgrammedDeliveryController::ProgrammedDeliveryController()
 {
@@ -29,6 +53,7 @@ bool ProgrammedDeliveryController::open_ads()
 void ProgrammedDeliveryController::close_ads()
 {
 	std::lock_guard<std::mutex> lock(mutex_);
+	reset_model_locked("connection_closed");
 	if (recorder_.active())
 	{
 		ads_.request_abort();
@@ -100,13 +125,23 @@ bool ProgrammedDeliveryController::select_mode(ProgrammedDeliveryMode mode)
 		return false;
 	}
 	stream_status_.zero = {};
+	mode_dynamics_[static_cast<unsigned>(config_.mode)] = config_.dynamics;
 	config_.mode = mode;
+	config_.dynamics = mode_dynamics_[static_cast<unsigned>(mode)];
+	// 切换侧别后必须重新确认实际实验条件，不能沿用上次人工确认。
+	config_.dynamics.conditions_confirmed = false;
+	reset_model_locked("mode_changed");
 	last_error_.clear();
 	return true;
 }
 
 bool ProgrammedDeliveryController::validate_config(const ProgrammedDeliveryConfig& config, std::string& error) const
 {
+	if (!clampdynamics::valid_config(config.dynamics))
+	{
+		error = "惯性模型配置无效；验证模式须人工确认无器械、夹爪张开、仅轴向运动";
+		return false;
+	}
 	const auto finite_positive = [](double value) { return std::isfinite(value) && value > 0.0; };
 	if (config.mode != ProgrammedDeliveryMode::Catheter && config.mode != ProgrammedDeliveryMode::Guidewire)
 	{
@@ -248,6 +283,9 @@ bool ProgrammedDeliveryController::prepare(const ProgrammedDeliveryConfig& confi
 		return false;
 	}
 	config_ = config;
+	mode_dynamics_[static_cast<unsigned>(config_.mode)] = config_.dynamics;
+	reset_model_locked("prepared");
+	recorder_.set_dynamics_config(config_.dynamics);
 	recorder_.set_program_coupling(config_.cylinder1_coupling_enabled, config_.cylinder3_coupling_enabled);
 	recorder_.set_program_cylinder_words(config_.cylinder2_open_word, config_.cylinder2_close_word,
 		config_.cylinder4_open_word, config_.cylinder4_close_word);
@@ -295,6 +333,7 @@ bool ProgrammedDeliveryController::start()
 		last_error_ = "下发程序递送开始请求失败：" + ads_.last_error();
 		return false;
 	}
+	reset_model_locked("started");
 	started_ = true;
 	last_error_.clear();
 	return true;
@@ -314,6 +353,7 @@ void ProgrammedDeliveryController::tick()
 	ProgrammedDeliveryLiveFrame frame{};
 	if (!ads_.read_live(frame))
 	{
+		reset_model_locked("live_read_failed");
 		last_error_ = "读取程序递送实时状态失败：" + ads_.last_error();
 		if (started_)
 		{
@@ -394,6 +434,7 @@ void ProgrammedDeliveryController::poll_stream_locked()
 	}
 	if (!stream_ads_.read_status(stream_status_))
 	{
+		reset_model_locked("stream_read_failed");
 		if (started_)
 		{
 			last_error_ = "实时记录状态读取失败：" + stream_ads_.last_error();
@@ -403,6 +444,8 @@ void ProgrammedDeliveryController::poll_stream_locked()
 		}
 		return;
 	}
+	if (!stream_status_.zero.valid && model_zero_valid_) reset_model_locked("zero_invalidated");
+	model_zero_valid_ = stream_status_.zero.valid;
 	if (stream_status_.zero.done)
 	{
 		if (zero_file_written_)
@@ -465,6 +508,7 @@ void ProgrammedDeliveryController::poll_stream_locked()
 			bool any_ready = stream_status_.block_ready[0] || stream_status_.block_ready[1];
 			if (any_ready)
 			{
+				reset_model_locked("block_gap");
 				last_error_ = "实时记录分块序号不连续";
 				ads_.request_abort();
 				started_ = false;
@@ -475,6 +519,7 @@ void ProgrammedDeliveryController::poll_stream_locked()
 		std::uint32_t sequence = 0;
 		if (!stream_ads_.read_block(slot, raw, sequence))
 		{
+			reset_model_locked("block_read_failed");
 			last_error_ = "实时记录分块读取失败：" + stream_ads_.last_error();
 			ads_.request_abort();
 			started_ = false;
@@ -482,6 +527,7 @@ void ProgrammedDeliveryController::poll_stream_locked()
 		}
 		if (sequence != expected_block_sequence_)
 		{
+			reset_model_locked("block_gap");
 			last_error_ = "实时记录分块序号不连续";
 			ads_.request_abort();
 			started_ = false;
@@ -489,10 +535,14 @@ void ProgrammedDeliveryController::poll_stream_locked()
 		}
 		std::vector<ProgrammedDeliverySample> converted;
 		converted.reserve(raw.size());
+		model_block_span_ms_ = raw.empty() ? 0.0 :
+			static_cast<double>(raw.back().time_us - raw.front().time_us) / 1000.0;
+		model_compute_us_ = 0.0;
 		for (const auto& r : raw)
 		{
 			if (r.index != expected_sample_index_)
 			{
+				reset_model_locked("sample_gap");
 				last_error_ = "实时记录样本序号不连续";
 				ads_.request_abort();
 				started_ = false;
@@ -506,6 +556,41 @@ void ProgrammedDeliveryController::poll_stream_locked()
 			s.axis7_pos = r.axis7_pos; s.axis7_vel = r.axis7_vel; s.axis7_acc = r.axis7_acc;
 			s.cylinder1 = r.cylinder1; s.cylinder2 = r.cylinder2; s.cylinder3 = r.cylinder3; s.cylinder4 = r.cylinder4;
 			s.fn1 = r.fn1; s.ft1 = r.ft1; s.fn2 = r.fn2; s.ft2 = r.ft2;
+			const bool guidewire = config_.mode == ProgrammedDeliveryMode::Guidewire;
+			const auto& params = config_.dynamics;
+			const auto cal = forcecal::calculate(s.fn1, s.ft1, s.fn2, s.ft2,
+				stream_status_.zero.value, stream_status_.zero.valid);
+			const auto& side = guidewire ? cal.side2 : cal.side1;
+			const bool force_valid = cal.valid && std::isfinite(side.force_cal_delta_n) &&
+				std::isfinite(side.ft_cal_delta_n);
+			const auto begin = std::chrono::steady_clock::now();
+			const clampdynamics::Input input{s.plc_time_us * 1e-6,
+				guidewire ? s.axis6_vel : s.axis1_vel,
+				double(guidewire ? s.cylinder4 : s.cylinder2),
+				double(guidewire ? s.cylinder3 : s.cylinder1),
+				s.phase, s.cycle_index, guidewire ? s.axis6_acc : s.axis1_acc, force_valid, s.sample_index};
+			const auto prediction = predictor_.update(input, params);
+			last_prediction_ = prediction;
+			s.dynamics = prediction;
+			s.model_compute_us = std::chrono::duration<double, std::micro>(
+				std::chrono::steady_clock::now() - begin).count();
+			model_compute_us_ = std::max(model_compute_us_, s.model_compute_us);
+			s.model_valid = prediction.valid;
+			s.model_fn = prediction.fn_N;
+			s.model_ft = prediction.ft_N;
+			s.model_gate = prediction.gate;
+			s.model_acceleration = prediction.acceleration_mm_s2;
+			// 旧列保留兼容；inertia_N为实际应用的显示层增量，viscous_N恒为零。
+			s.model_inertia = prediction.fn_N;
+			s.model_viscous = 0;
+			if (force_valid) {
+				s.illustration = illustration_.update(s.plc_time_us * 1e-6,
+					side.force_cal_delta_n, side.ft_cal_delta_n, illustration_gate_.update(input));
+				curves_.push({0, s.plc_time_us * 1e-6, side.force_cal_delta_n, side.ft_cal_delta_n,
+					side.force_cal_delta_n - s.model_fn, side.ft_cal_delta_n - s.model_ft,
+					s.model_valid, s.phase, s.illustration.fn, s.illustration.ft,
+					s.illustration.valid_fn, s.illustration.valid_ft});
+			} else { illustration_.reset(); illustration_gate_.reset(); }
 			converted.push_back(s);
 		}
 		std::string error;
@@ -564,6 +649,7 @@ bool ProgrammedDeliveryController::request_zero()
 			last_error_ = "下发力感取零请求失败：" + stream_ads_.last_error();
 			return false;
 		}
+		reset_model_locked("zero_requested");
 		return true;
 	}
 	catch (const std::exception& ex)
@@ -588,6 +674,7 @@ bool ProgrammedDeliveryController::set_record_suffix(const std::string& suffix)
 void ProgrammedDeliveryController::invalidate_zero()
 {
 	std::lock_guard<std::mutex> lock(mutex_);
+	reset_model_locked("zero_invalidated");
 	if (stream_ads_.is_open()) stream_ads_.invalidate_zero();
 	stream_status_.zero = {};
 }

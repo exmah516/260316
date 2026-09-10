@@ -1,6 +1,8 @@
 #pragma once
 
 #include <array>
+#include "ClampIllustration.h"
+#include "ClampDynamics.h"
 #include <cstdint>
 #include <string>
 
@@ -61,6 +63,8 @@ struct ProgrammedDeliveryConfig
 	double return_deceleration_mm_s2 = 100.0;
 	double return_jerk_mm_s3 = 1000.0;
 	std::string record_suffix = "program_test";
+	// 仅上位机处理配置，ProgrammedDeliveryAds不向PLC写入这些字段。
+	clampdynamics::Config dynamics{};
 };
 
 struct ProgrammedDeliveryLiveFrame
@@ -110,6 +114,14 @@ struct ProgrammedDeliveryLiveFrame
 
 struct ProgrammedDeliverySample
 {
+	// 仅上位机派生数据，不属于PLC传输结构。
+	double model_fn = 0.0, model_ft = 0.0;
+	bool model_valid = false;
+	double model_compute_us = 0.0;
+	bool model_gate = false;
+	clampillustration::Result illustration;
+	double model_acceleration = 0.0, model_inertia = 0.0, model_viscous = 0.0;
+	clampdynamics::Result dynamics;
 	std::uint32_t sample_index = 0;
 	std::uint64_t plc_time_us = 0;
 	std::uint8_t phase = 0;

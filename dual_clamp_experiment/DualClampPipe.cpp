@@ -119,6 +119,19 @@ namespace
 			config.record_suffix = text;
 			continue;
 		}
+		if (key == "model_sign")
+		{
+			if (text != "1" && text != "-1") { error = "model_sign必须为1或-1"; return false; }
+			config.dynamics.axial_sign = text == "1" ? 1.0 : -1.0;
+			continue;
+		}
+		if (key == "model_validation" || key == "model_conditions_confirmed")
+		{
+			if (text != "0" && text != "1") { error = key + "必须为0或1"; return false; }
+			if (key == "model_validation") config.dynamics.validation_mode = text == "1";
+			else config.dynamics.conditions_confirmed = text == "1";
+			continue;
+		}
 		if (key == "cylinder1_coupling" || key == "cylinder3_coupling")
 		{
 			if (text != "0" && text != "1")
@@ -343,6 +356,20 @@ std::string DualClampPipeServer::handle_command(DualClampController& controller,
 
 std::string DualClampPipeServer::handle_program_command(ProgrammedDeliveryController& controller, const std::string& command)
 {
+	if (command.rfind("PROGRAM_CURVES|", 0) == 0)
+	{
+		std::uint64_t after = 0, generation = 0;
+		std::istringstream fields(command.substr(15));
+		std::string first, second;
+		if (!std::getline(fields, first, '|') || !std::getline(fields, second, '|'))
+			return "ERROR|invalid curve cursor";
+		try {
+			if (first.empty() || second.empty() || first.find_first_not_of("0123456789") != std::string::npos ||
+				second.find_first_not_of("0123456789") != std::string::npos) return "ERROR|invalid curve cursor";
+			after = std::stoull(first); generation = std::stoull(second);
+		} catch (...) { return "ERROR|invalid curve cursor"; }
+		return controller.curve_response(after, generation);
+	}
 	if (command == "GET_PROGRAM")
 	{
 		const ProgrammedDeliveryLiveFrame live = controller.live();

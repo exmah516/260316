@@ -294,6 +294,22 @@
 
                             <!-- 程序递送参数面板 -->
                             <StackPanel x:Name="ProgramPanel" Visibility="Collapsed">
+                                <StackPanel x:Name="DynamicsOptions" Margin="0,0,0,12">
+                                    <DockPanel Margin="0,0,0,6">
+                                        <TextBlock Text="25 g 惯性符号" VerticalAlignment="Center"/>
+                                        <ComboBox x:Name="DynamicsSign" SelectedIndex="0" Width="155" HorizontalAlignment="Right"
+                                                  SelectionChanged="DynamicsOption_Changed">
+                                            <ComboBoxItem Content="+1（未验证）"/>
+                                            <ComboBoxItem Content="-1（未验证）"/>
+                                        </ComboBox>
+                                    </DockPanel>
+                                    <CheckBox x:Name="DynamicsValidation" Content="无器械验证（全程模型）"
+                                              Checked="DynamicsOption_Changed" Unchecked="DynamicsOption_Changed"/>
+                                    <CheckBox x:Name="DynamicsConditions" Margin="0,5,0,0" IsEnabled="False"
+                                              ToolTip="人工确认，仅作记录；此选项不控制夹爪、运动轴或电缸。">
+                                        <TextBlock Text="已确认无器械、夹爪张开、仅轴向运动" TextWrapping="Wrap"/>
+                                    </CheckBox>
+                                </StackPanel>
                                 <DockPanel Margin="0,0,0,10">
                                     <TextBlock x:Name="ProgramPanelTitle" Text="程序递送参数配置" FontSize="15" FontWeight="Bold" Foreground="{StaticResource Ink}"/>
                                 </DockPanel>
@@ -451,11 +467,19 @@
                                 <Border Width="3" Height="14" Background="#0D9488" CornerRadius="1.5" Margin="0,0,8,0"/>
                                 <StackPanel>
                                     <TextBlock x:Name="ForceTitle" Text="实时轴向力 (N)" FontSize="15" FontWeight="Bold" Foreground="{StaticResource Ink}"/>
-                                    <TextBlock x:Name="ForceValueText" Text="未取零" FontSize="11" Foreground="{StaticResource Muted}" Margin="0,2,0,0"/>
+                                    <TextBlock x:Name="ForceValueText" Text="未取零" FontSize="11" Foreground="{StaticResource Muted}" Margin="0,2,0,0" TextWrapping="Wrap" MaxWidth="250" HorizontalAlignment="Left"/>
+                                    <TextBlock x:Name="CausalStatusText" Text="模型：等待数据" FontSize="10" Foreground="{StaticResource Muted}" TextWrapping="Wrap" MaxWidth="250" HorizontalAlignment="Left"/>
                                 </StackPanel>
                             </StackPanel>
 
-                            <StackPanel Orientation="Horizontal" DockPanel.Dock="Right" VerticalAlignment="Center">
+                            <StackPanel DockPanel.Dock="Right" VerticalAlignment="Center" Margin="12,0,0,0">
+                                <CheckBox x:Name="Model2ForceToggle" IsChecked="False" Foreground="#B45309"
+                                          Checked="Model2Visibility_Changed" Unchecked="Model2Visibility_Changed"
+                                          ToolTip="目标效果示意：假设削弱80%，非动力学辨识结果；可能同时压缩真实外力变化。">
+                                    <StackPanel Orientation="Horizontal"><Line X2="18" Stroke="#B45309" StrokeDashArray="2,2" VerticalAlignment="Center" Margin="0,0,5,0"/><TextBlock Text="模型2 · 目标效果示意"/></StackPanel>
+                                </CheckBox>
+                                <CheckBox x:Name="CausalForceToggle" Content="25 g 惯性试算" Foreground="#E11D48" IsChecked="True"
+                                          Checked="CausalVisibility_Changed" Unchecked="CausalVisibility_Changed" Margin="0,0,10,0"/>
                                 <Border x:Name="Force1Legend" Background="#F0FDFA" BorderBrush="#CCFBF1" BorderThickness="1" CornerRadius="4" Padding="8,2" Margin="0,0,8,0">
                                     <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
                                         <Ellipse Width="8" Height="8" Fill="#0D9488" Margin="0,0,6,0"/>
@@ -484,6 +508,8 @@
                                 <Canvas x:Name="ForceCanvas" Background="Transparent">
                                     <Polyline x:Name="Force1Line" Stroke="#0D9488" StrokeThickness="2.2" StrokeLineJoin="Round"/>
                                     <Polyline x:Name="Force2Line" Stroke="#EA580C" StrokeThickness="2.2" StrokeLineJoin="Round"/>
+                                    <Polyline x:Name="CausalForceLine" Stroke="#E11D48" StrokeThickness="1.5" StrokeLineJoin="Round" StrokeDashArray="4,2"/>
+                                    <Polyline x:Name="Model2ForceLine" Stroke="#B45309" StrokeThickness="1.5" StrokeDashArray="2,2" Visibility="Collapsed"/>
                                 </Canvas>
                             </Grid>
                         </Border>
@@ -504,11 +530,18 @@
                                 <Border Width="3" Height="14" Background="#2563EB" CornerRadius="1.5" Margin="0,0,8,0"/>
                                 <StackPanel>
                                     <TextBlock x:Name="TorqueTitle" Text="实时 ft 力 (N)" FontSize="15" FontWeight="Bold" Foreground="{StaticResource Ink}"/>
-                                    <TextBlock x:Name="TorqueValueText" Text="未取零" FontSize="11" Foreground="{StaticResource Muted}" Margin="0,2,0,0"/>
+                                    <TextBlock x:Name="TorqueValueText" Text="未取零" FontSize="11" Foreground="{StaticResource Muted}" Margin="0,2,0,0" TextWrapping="Wrap" MaxWidth="250" HorizontalAlignment="Left"/>
                                 </StackPanel>
                             </StackPanel>
 
-                            <StackPanel Orientation="Horizontal" DockPanel.Dock="Right" VerticalAlignment="Center">
+                            <StackPanel DockPanel.Dock="Right" VerticalAlignment="Center" Margin="12,0,0,0">
+                                <CheckBox x:Name="Model2TorqueToggle" IsChecked="False" Foreground="#B45309"
+                                          Checked="Model2Visibility_Changed" Unchecked="Model2Visibility_Changed"
+                                          ToolTip="目标效果示意：假设削弱80%，非动力学辨识结果；可能同时压缩真实外力变化。">
+                                    <StackPanel Orientation="Horizontal"><Line X2="18" Stroke="#B45309" StrokeDashArray="2,2" VerticalAlignment="Center" Margin="0,0,5,0"/><TextBlock Text="模型2 · 目标效果示意"/></StackPanel>
+                                </CheckBox>
+                                <CheckBox x:Name="CausalTorqueToggle" Content="ft 原值（未补偿）" Foreground="#E11D48" IsChecked="True"
+                                          Checked="CausalVisibility_Changed" Unchecked="CausalVisibility_Changed" Margin="0,0,10,0"/>
                                 <Border x:Name="Torque1Legend" Background="#EFF6FF" BorderBrush="#DBEAFE" BorderThickness="1" CornerRadius="4" Padding="8,2" Margin="0,0,8,0">
                                     <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
                                         <Ellipse Width="8" Height="8" Fill="#2563EB" Margin="0,0,6,0"/>
@@ -537,6 +570,8 @@
                                 <Canvas x:Name="TorqueCanvas" Background="Transparent">
                                     <Polyline x:Name="Torque1Line" Stroke="#2563EB" StrokeThickness="2.2" StrokeLineJoin="Round"/>
                                     <Polyline x:Name="Torque2Line" Stroke="#9333EA" StrokeThickness="2.2" StrokeLineJoin="Round"/>
+                                    <Polyline x:Name="CausalTorqueLine" Stroke="#E11D48" StrokeThickness="1.5" StrokeLineJoin="Round" StrokeDashArray="4,2"/>
+                                    <Polyline x:Name="Model2TorqueLine" Stroke="#B45309" StrokeThickness="1.5" StrokeDashArray="2,2" Visibility="Collapsed"/>
                                 </Canvas>
                             </Grid>
                         </Border>

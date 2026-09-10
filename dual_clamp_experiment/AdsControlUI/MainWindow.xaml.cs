@@ -41,18 +41,22 @@ namespace DualClampExperimentUI
         public MainWindow()
         {
             InitializeComponent();
-            _pollTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(100) };
+            ForceCanvas.SizeChanged += (_, _) => DrawCausalCurves();
+            TorqueCanvas.SizeChanged += (_, _) => DrawCausalCurves();
+            _pollTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(33) };
             _pollTimer.Tick += async (_, _) => await PollAsync();
             Loaded += async (_, _) =>
             {
                 _loaded = true;
                 UpdateModeView();
+                if (IsCurveReplay) { LoadCurveReplay(); return; }
                 await ConnectAsync();
                 _pollTimer.Start();
             };
             Closed += async (_, _) =>
             {
                 _pollTimer.Stop();
+                if (IsCurveReplay) return;
                 try { await SendAsync("QUIT"); } catch { }
                 DisconnectPipe();
             };
@@ -92,6 +96,7 @@ namespace DualClampExperimentUI
 
         private void DisconnectPipe()
         {
+            ResetCurveView();
             try
             {
                 _writer?.Dispose(); _writer = null;
@@ -161,7 +166,10 @@ namespace DualClampExperimentUI
 
         private void UpdateModeView()
         {
+            RestoreModel2Visibility();
+            RestoreDynamicsOptions();
             bool legacy = CurrentMode == "legacy";
+            _pollTimer.Interval = TimeSpan.FromMilliseconds(legacy ? 100 : 33);
             LegacyToolbar.Visibility = legacy ? Visibility.Visible : Visibility.Collapsed;
             LegacyPanel.Visibility = legacy ? Visibility.Visible : Visibility.Collapsed;
             ProgramPanel.Visibility = legacy ? Visibility.Collapsed : Visibility.Visible;
@@ -201,6 +209,10 @@ namespace DualClampExperimentUI
             Force2Legend.Visibility = legacy ? Visibility.Visible : Visibility.Collapsed;
             Torque2Legend.Visibility = legacy ? Visibility.Visible : Visibility.Collapsed;
             _force1.Clear(); _force2.Clear(); _torque1.Clear(); _torque2.Clear();
+            CausalForceToggle.Visibility = CausalTorqueToggle.Visibility =
+                Model2ForceToggle.Visibility = Model2TorqueToggle.Visibility =
+                CausalStatusText.Visibility = legacy ? Visibility.Collapsed : Visibility.Visible;
+            ResetCurveView();
         }
 
         private async void Prepare_Click(object sender, RoutedEventArgs e)
@@ -217,6 +229,8 @@ namespace DualClampExperimentUI
                     return;
                 }
                 string mode = CurrentMode;
+                if (DynamicsValidation.IsChecked == true && DynamicsConditions.IsChecked != true)
+                    throw new InvalidOperationException("请先人工确认无器械、夹爪张开、仅轴向运动");
                 string angleKey = mode == "guidewire" ? "axis7_angle" : "axis2_angle";
                 string positionFields = mode == "guidewire"
                     ? "axis5_from_left=" + Number(ProgramAxis5Pos) + "|axis6_prepare_from_left=" + Number(ProgramAxis6PreparePos) + "|axis6_trigger_from_left=" + Number(ProgramAxis6TriggerPos)
@@ -229,6 +243,9 @@ namespace DualClampExperimentUI
                     Int(ProgramReleaseWait), Int(ProgramReclampWait), Number(ProgramForwardVelocity), Number(ProgramForwardAcceleration),
                     Number(ProgramForwardDeceleration), Number(ProgramForwardJerk), Number(ProgramReturnVelocity), Number(ProgramReturnAcceleration),
                     Number(ProgramReturnDeceleration), Number(ProgramReturnJerk), Int(ProgramReleaseLead), Int(ProgramReclampLead), RecordSuffix());
+                commandText += "|model_sign=" + (DynamicsSign.SelectedIndex == 1 ? "-1" : "1")
+                    + "|model_validation=" + (DynamicsValidation.IsChecked == true ? "1" : "0")
+                    + "|model_conditions_confirmed=" + (DynamicsConditions.IsChecked == true ? "1" : "0");
                 await SendAsync(commandText);
             }
             catch (Exception ex) { ErrorText.Text = "准备定位参数无效：" + ex.Message; }
@@ -242,6 +259,8 @@ namespace DualClampExperimentUI
             {
                 await SendAsync(CurrentMode == "legacy" ? "GET" : "GET_PROGRAM");
                 if (CurrentMode == "legacy") await SendAsync("GET_STANDALONE_RECORD");
+                else await SendAsync("PROGRAM_CURVES|" + _curveCursor.ToString(CultureInfo.InvariantCulture)
+                    + "|" + _curveGeneration.ToString(CultureInfo.InvariantCulture));
             }
             finally { _isPolling = false; }
         }
@@ -249,6 +268,11 @@ namespace DualClampExperimentUI
         private async void Start_Click(object sender, RoutedEventArgs e)
         {
             if (!_setupDone) { ErrorText.Text = "请等待PLC自动自检完成并完成准备定位"; return; }
+            if (CurrentMode != "legacy" && _appliedValidation &&
+                MessageBox.Show("请确认本次全程无器械、夹爪保持张开、机构仅轴向运动。\n"
+                    + "模型选项不会改变电缸或运动指令；不满足条件请取消。",
+                    "无器械验证条件", MessageBoxButton.OKCancel, MessageBoxImage.Warning) != MessageBoxResult.OK)
+                return;
             await SendAsync(CurrentMode == "legacy" ? "START" : "PROGRAM_START");
         }
 
@@ -342,6 +366,7 @@ namespace DualClampExperimentUI
         {
             if (response.StartsWith("STATE|", StringComparison.Ordinal)) ParseLegacyState(response);
             else if (response.StartsWith("PROGRAM_STATE|", StringComparison.Ordinal)) ParseProgramState(response);
+            else if (response.StartsWith("PROGRAM_CURVES|", StringComparison.Ordinal)) ParseCurveResponse(response);
             else if (response.StartsWith("STANDALONE_STATE|", StringComparison.Ordinal)) ParseStandaloneState(response);
             else if (response.StartsWith("OK|CONNECT_ADS", StringComparison.Ordinal)) SetAdsStatus(true, "ADS: 正常 (Port 851)");
             else if (response.StartsWith("ERROR|", StringComparison.Ordinal)) ErrorText.Text = response.Substring(6);
@@ -430,13 +455,11 @@ namespace DualClampExperimentUI
                 double fn1 = D(p[60]), ft1 = D(p[61]), fn2 = D(p[62]), ft2 = D(p[63]);
                 if (guidewire)
                 {
-                    Add(_force1, fn2); Add(_torque1, ft2);
                     ForceValueText.Text = string.Format(CultureInfo.InvariantCulture, "fn2: {0:F3} N", fn2);
 					TorqueValueText.Text = string.Format(CultureInfo.InvariantCulture, "ft2: {0:F6} N", ft2);
                 }
                 else
                 {
-                    Add(_force1, fn1); Add(_torque1, ft1);
                     ForceValueText.Text = string.Format(CultureInfo.InvariantCulture, "fn1: {0:F3} N", fn1);
 					TorqueValueText.Text = string.Format(CultureInfo.InvariantCulture, "ft1: {0:F6} N", ft1);
                 }
@@ -450,6 +473,7 @@ namespace DualClampExperimentUI
             SetAdsStatus(ads, ads ? "ADS: 正常 (Port 851)" : "ADS: 未连接");
             PrepareButton.IsEnabled = ads && _selfcheckDone && !_selfcheckBusy && !_setupBusy; StartButton.IsEnabled = ads && _setupDone && phase == 2 && p.Length > programZeroDone && p[programZeroDone] == "1" && !_selfcheckBusy && !_setupBusy; ZeroButton.IsEnabled = ads && _selfcheckDone && _setupDone && !_selfcheckBusy && !_setupBusy && phase == 2;
             bool programCouplingEditable = ads && !_setupBusy && (phase == 0 || phase >= 10);
+            DynamicsOptions.IsEnabled = programCouplingEditable;
             ProgramCylinder1Coupling.IsEnabled = programCouplingEditable;
             ProgramCylinder3Coupling.IsEnabled = programCouplingEditable;
             ProgramCylinder2OpenValue.IsEnabled = programCouplingEditable;
@@ -460,7 +484,6 @@ namespace DualClampExperimentUI
             ProgramReclampLead.IsEnabled = programCouplingEditable;
             ProgramReleaseWait.IsEnabled = programCouplingEditable;
             ProgramReclampWait.IsEnabled = programCouplingEditable;
-            Draw(ForceCanvas, Force1Line, _force1, Force2Line, _force2); Draw(TorqueCanvas, Torque1Line, _torque1, Torque2Line, _torque2);
         }
 
         private void ParseStandaloneState(string response)
