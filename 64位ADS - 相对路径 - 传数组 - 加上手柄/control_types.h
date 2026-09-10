@@ -146,13 +146,13 @@ struct ControlConfig
 	double axis1_return_acc_mm_s2 = 4800.0; // 原值 2400 mm/s^2
 	double axis1_return_dec_mm_s2 = 4800.0; // 原值 2400 mm/s^2
 	double axis1_return_jerk_mm_s3 = 70000.0; // 原值 35000 mm/s^3
-	// 自动换手在回退前切缸、回退后恢复夹爪时，均从输出成功写入 PLC 后稳定 50 ms。
-	DWORD axis1_pre_move_cylinder_wait_ms = 50;
+	// 自动换手在回退前切缸、回退后恢复夹爪时，均从输出成功写入 PLC 后稳定 100 ms。
+	DWORD axis1_pre_move_cylinder_wait_ms = 100;
 	double axis6_return_velocity_mm_s = 400.0; // 原值 200 mm/s
 	double axis6_return_acc_mm_s2 = 4800.0; // 原值 2400 mm/s^2
 	double axis6_return_dec_mm_s2 = 4800.0; // 原值 2400 mm/s^2
 	double axis6_return_jerk_mm_s3 = 70000.0; // 原值 35000 mm/s^3
-	DWORD axis6_pre_move_cylinder_wait_ms = 50;
+	DWORD axis6_pre_move_cylinder_wait_ms = 100;
 	// 统一计划回退握手：只允许在PLC尚未启动动作时自动重试一次。
 	DWORD planned_return_ack_timeout_ms = 250;
 	DWORD planned_return_retry_clear_timeout_ms = 500;

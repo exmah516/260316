@@ -400,6 +400,11 @@ namespace AdsControlUI
 
 		private void NotifyManualControlProperties()
 		{
+			OnPropertyChanged(nameof(CylinderManualAllowed));
+			OnPropertyChanged(nameof(Cyl1Manual));
+			OnPropertyChanged(nameof(Cyl2Manual));
+			OnPropertyChanged(nameof(Cyl3Manual));
+			OnPropertyChanged(nameof(Cyl4Manual));
 			OnPropertyChanged(nameof(ArmManualEnabled));
 			OnPropertyChanged(nameof(ArmManualAvailable));
 			OnPropertyChanged(nameof(ArmAxisControlsEnabled));
@@ -595,6 +600,14 @@ namespace AdsControlUI
         public bool Cyl2Open => (_state.cylinder_cmd?[1] ?? 0) < 200;
         public bool Cyl3Open => (_state.cylinder_cmd?[2] ?? 0) > 200;
         public bool Cyl4Open => (_state.cylinder_cmd?[3] ?? 0) < 200;
+		public bool CylinderManualAllowed => AdsHealthy && _state.cylinder_manual_allowed;
+		public bool Cyl1Manual => (_state.cylinder_manual_mask & 1) != 0;
+		public bool Cyl2Manual => (_state.cylinder_manual_mask & 2) != 0;
+		public bool Cyl3Manual => (_state.cylinder_manual_mask & 4) != 0;
+		public bool Cyl4Manual => (_state.cylinder_manual_mask & 8) != 0;
+
+		public bool IsCylinderManual(int index) =>
+			index >= 0 && index < 4 && (_state.cylinder_manual_mask & (1 << index)) != 0;
 
         public string ModeText
         {
@@ -947,10 +960,14 @@ namespace AdsControlUI
             return $"{axisName} ({description}): {angle:F2}°";
         }
 
-        public void SetCylinderManualState(int index, bool open) =>
-            _client.SendCommand(open
-                ? VisCommandType.SetCylinderManualOpen
-                : VisCommandType.SetCylinderManualClosed, index);
+		public bool SetCylinderManualPosition(int index, int position) =>
+			index >= 0 && index < 4 && position >= 0 && position <= 2000 &&
+			CylinderManualAllowed &&
+			_client.SendCommand(VisCommandType.SetCylinderManualPosition, index, position);
+
+		public bool ResetCylinderManual(int index) =>
+			index >= 0 && index < 4 &&
+			_client.SendCommand(VisCommandType.ResetCylinderManual, index);
 
         public void SetMode(int guidewireMode, int reverse) =>
             _client.SendCommand(VisCommandType.SetReverseMode, guidewireMode, reverse);

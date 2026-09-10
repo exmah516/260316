@@ -1264,6 +1264,8 @@ bool AdsCommunicationService::resolve_fast_handles()
 	unsigned long cycle = 0;
 	unsigned long dc_time = 0;
 	unsigned long act_pos = 0;
+	unsigned long init_pos = 0;
+	unsigned long leftlimit = 0;
 	unsigned long axis1_act_velocity = 0;
 	unsigned long ft_1 = 0;
 	unsigned long fn_1 = 0;
@@ -1274,6 +1276,8 @@ bool AdsCommunicationService::resolve_fast_handles()
 	if (!required_handle("TwinCAT_SystemInfoVarList._TaskInfo[1].CycleCount", cycle) ||
 		!required_handle("TwinCAT_SystemInfoVarList._TaskInfo[1].DcTaskTime", dc_time) ||
 		!required_handle(AdsSymbol::act_pos, act_pos) ||
+		!required_handle(AdsSymbol::init_pos, init_pos) ||
+		!required_handle(AdsSymbol::leftlimit, leftlimit) ||
 		!required_handle("G.axis[1].NcToPlc.ActVelo", axis1_act_velocity) ||
 		!required_handle(AdsSymbol::ft_1_value, ft_1) ||
 		!required_handle(AdsSymbol::fn_1_value, fn_1) ||
@@ -1288,7 +1292,7 @@ bool AdsCommunicationService::resolve_fast_handles()
 
 	fast_fallback_read_handles_ = {
 		cycle, dc_time, act_pos, axis1_act_velocity,
-		ft_1, fn_1, fn_2, ft_2, estop, host_timeout, cycle
+		ft_1, fn_1, fn_2, ft_2, estop, host_timeout, init_pos, leftlimit, cycle
 	};
 	fast_direct_read_handles_[0] = cycle;
 	fast_direct_read_handles_[1] = dc_time;
@@ -1299,7 +1303,9 @@ bool AdsCommunicationService::resolve_fast_handles()
 	fast_direct_read_handles_[13] = ft_2;
 	fast_direct_read_handles_[14] = estop;
 	fast_direct_read_handles_[15] = host_timeout;
-	fast_direct_read_handles_[16] = cycle;
+	fast_direct_read_handles_[16] = init_pos;
+	fast_direct_read_handles_[17] = leftlimit;
+	fast_direct_read_handles_[18] = cycle;
 	use_direct_nc_position_ = true;
 	for (int axis = 0; axis < 7; ++axis)
 	{
@@ -1404,8 +1410,8 @@ bool AdsCommunicationService::read_fast_snapshot(AdsFastSnapshot& snapshot, bool
 	QueryPerformanceCounter(&before);
 	double nc_absolute[7] = {};
 	double relative_fallback[7] = {};
-	std::array<unsigned long, 17> lengths{};
-	std::array<void*, 17> outputs{};
+	std::array<unsigned long, 19> lengths{};
+	std::array<void*, 19> outputs{};
 	auto read_snapshot = [&](const unsigned long* handles, bool direct_nc_position)
 	{
 		std::size_t count = 0;
@@ -1435,6 +1441,8 @@ bool AdsCommunicationService::read_fast_snapshot(AdsFastSnapshot& snapshot, bool
 		append(sizeof(snapshot.ft_2_value), &snapshot.ft_2_value);
 		append(sizeof(snapshot.estop_hold_req), &snapshot.estop_hold_req);
 		append(sizeof(snapshot.host_comm_timeout), &snapshot.host_comm_timeout);
+		append(sizeof(snapshot.init_pos), snapshot.init_pos);
+		append(sizeof(snapshot.leftlimit), snapshot.leftlimit);
 		append(sizeof(snapshot.plc_cycle_end), &snapshot.plc_cycle_end);
 		return ads_.ADSReadSumByHandle(
 			handles, lengths.data(), outputs.data(), static_cast<unsigned long>(count));
@@ -1454,26 +1462,26 @@ bool AdsCommunicationService::read_fast_snapshot(AdsFastSnapshot& snapshot, bool
 	}
 	snapshot.plc_cycle_span = snapshot.plc_cycle_end - snapshot.plc_cycle_begin;
 
-	bool coordinate_valid = false;
-	double init_pos[7] = {};
-	double leftlimit[7] = {};
-	{
-		std::lock_guard<std::mutex> lock(coordinate_mutex_);
-		coordinate_valid = coordinate_cache_valid_;
-		std::copy(init_pos_, init_pos_ + 7, init_pos);
-		std::copy(leftlimit_, leftlimit_ + 7, leftlimit);
-	}
-	bool positions_finite = coordinate_valid;
+	bool positions_finite = true;
 	for (int axis = 0; axis < 7; ++axis)
 	{
 		snapshot.act_pos_rel[axis] = use_direct_nc_position_
-			? nc_absolute[axis] - init_pos[axis]
+			? nc_absolute[axis] - snapshot.init_pos[axis]
 			: relative_fallback[axis];
 		snapshot.act_pos_from_left[axis] =
-			snapshot.act_pos_rel[axis] + init_pos[axis] - leftlimit[axis];
+			snapshot.act_pos_rel[axis] + snapshot.init_pos[axis] - snapshot.leftlimit[axis];
 		positions_finite = positions_finite &&
+			std::isfinite(snapshot.init_pos[axis]) &&
+			std::isfinite(snapshot.leftlimit[axis]) &&
 			std::isfinite(snapshot.act_pos_rel[axis]) &&
 			std::isfinite(snapshot.act_pos_from_left[axis]);
+	}
+	if (positions_finite)
+	{
+		std::lock_guard<std::mutex> lock(coordinate_mutex_);
+		std::copy(snapshot.init_pos, snapshot.init_pos + 7, init_pos_);
+		std::copy(snapshot.leftlimit, snapshot.leftlimit + 7, leftlimit_);
+		coordinate_cache_valid_ = true;
 	}
 	// PLC 侧环形锁存允许首尾周期不同，因此 plc_cycle_span 只保留作诊断。
 	// 力数据只要本次 Sum Read 成功且四路数值有限即可使用。

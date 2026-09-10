@@ -999,7 +999,8 @@ int main(int argc, char* argv[])
 	{
 		Automatic,
 		Open,
-		Closed
+		Closed,
+		Position
 	};
 	CylinderManualMode cylinder_manual_mode[4] = {
 		CylinderManualMode::Automatic,
@@ -1007,6 +1008,7 @@ int main(int argc, char* argv[])
 		CylinderManualMode::Automatic,
 		CylinderManualMode::Automatic
 	};
+	unsigned short cylinder_manual_position[4] = {};
 	// 手动电缸只用于调试。自动运动开始接管时必须撤销全部覆盖，避免末尾写入压住换手状态机命令。
 	auto clear_cylinder_manual_overrides = [&]()
 	{
@@ -1216,7 +1218,9 @@ int main(int argc, char* argv[])
 		}
 		// 运动控制只依赖位置快照；力数据质量单独由 force_valid 传给力反馈和记录器。
 		const bool ads_motion_cycle_valid = has_new_ads_snapshot && ads_snapshot.position_valid &&
-			ads_stats.state == AdsConnectionState::Running;
+			ads_stats.state == AdsConnectionState::Running &&
+			self_check_done && ads_events.handle_reinit_done &&
+			!ads_snapshot.host_comm_timeout && !ads_events.host_comm_timeout;
 		if (ads_motion_cycle_valid && !has_self_check_flag)
 		{
 			// ADS 服务的连接初始化已完成这些符号的解析和初值读取，
@@ -1368,7 +1372,8 @@ int main(int argc, char* argv[])
 				std::cout << "ADS 快照中断：保持最后参考并丢弃故障期间手柄增量。" << std::endl;
 			}
 		}
-		else if (ads_soft_hold_active && !planned_return.active())
+		else if ((ads_soft_hold_active || (connection_hold_active_prev && initial_sync_done)) &&
+			!planned_return.active())
 		{
 			if (!handle_soft_hold_active)
 			{
@@ -1381,19 +1386,21 @@ int main(int argc, char* argv[])
 			}
 			load_pos_from_actual();
 			bool baseline_rebuilt = true;
-			if (!handle_soft_hold_active)
+			// 首次连接只走下方 sync_all，禁止先用尚未初始化的旋转保持值写 refer。
+			// ADS 或手柄恢复时重建当前反馈基准，不追赶中断前的旋转目标。
+			if (!handle_soft_hold_active && initial_sync_done)
 			{
 				if (guidewire_mode == GuidewireMode::Cooperative)
 				{
-					baseline_rebuilt = sync_cooperative_guidewire(1, false);
+					baseline_rebuilt = motion_sync::sync_cooperative_guidewire(ctx, 1, false, false);
 				}
 				else if (guidewire_mode == GuidewireMode::Independent)
 				{
-					baseline_rebuilt = sync_axis6(1, false, false);
+					baseline_rebuilt = motion_sync::sync_axis6(ctx, 1, false, false, false);
 				}
 				else
 				{
-					baseline_rebuilt = sync_axis1(1);
+					baseline_rebuilt = motion_sync::sync_axis1(ctx, 1, false);
 				}
 			}
 			ads_soft_hold_active = !baseline_rebuilt;
@@ -1412,6 +1419,7 @@ int main(int argc, char* argv[])
 
 		if (connection_hold_enter_edge)
 		{
+			clear_cylinder_manual_overrides();
 			if (planned_return.active())
 			{
 				(void)cancel_active_return_motion(true);
@@ -1430,7 +1438,8 @@ int main(int argc, char* argv[])
 			axis2_hold_rel = plc_act_pos[1];
 			axis7_hold_rel = plc_act_pos[6];
 			independent_axis2_hold_rel = plc_act_pos[1];
-			std::cout << "连接保持解除：实际位置已重新加载并恢复控制。" << std::endl;
+			std::cout << "连接就绪：保持 PLC 当前反馈位置，不恢复历史目标。axis2="
+				<< plc_act_pos[1] << "，axis7=" << plc_act_pos[6] << "（相对角度）" << std::endl;
 		}
 
 		if (!initial_sync_done)
@@ -4359,22 +4368,34 @@ int main(int argc, char* argv[])
 
 		// 10) 构建本拍离散输出；与 refer 一起交给 100 Hz 通信线程。
 		bool cylinder5_req = emergency_retract_active || y_valve_open;
+		const bool cylinder_manual_allowed = ads_motion_cycle_valid && !connection_hold_active &&
+			control_active && !estop_hold_active && !return_ads_fault_hold &&
+			!motion_startup_active && !emergency_retract_active &&
+			!spacing_recovery.active() && !spacing_recovery.requested &&
+			!axis6_soft_limit_hold && !planned_return.active() && !ft_exp.active();
+		if (!cylinder_manual_allowed)
+		{
+			// 被安全条件或自动流程接管后不保留待执行的手动目标。
+			clear_cylinder_manual_overrides();
+		}
 		const bool cylinder_output_enabled = !connection_hold_active &&
 			!estop_hold_active && (control_active || motion_startup_active || emergency_retract_active);
 		if (cylinder_output_enabled)
 		{
 			if (!emergency_retract_active && !spacing_recovery.active() && !axis6_soft_limit_hold)
 			{
-				auto apply_cylinder_manual_mode = [](CylinderManualMode mode, unsigned short& command,
+				auto apply_cylinder_manual_mode = [&](int index, unsigned short& command,
 					unsigned short open_value, unsigned short closed_value)
 				{
+					const CylinderManualMode mode = cylinder_manual_mode[index];
 					if (mode == CylinderManualMode::Open) command = open_value;
 					else if (mode == CylinderManualMode::Closed) command = closed_value;
+					else if (mode == CylinderManualMode::Position) command = cylinder_manual_position[index];
 				};
-				apply_cylinder_manual_mode(cylinder_manual_mode[0], cylinder1_cmd, cyl.cyl1_open, cyl.cyl1_clamp);
-				apply_cylinder_manual_mode(cylinder_manual_mode[1], cylinder2_cmd, cyl.cyl2_open, cyl.cyl2_clamp);
-				apply_cylinder_manual_mode(cylinder_manual_mode[2], cylinder3_cmd, cyl.cyl3_open, cyl.cyl3_clamp);
-				apply_cylinder_manual_mode(cylinder_manual_mode[3], cylinder4_cmd, cyl.cyl4_open, cyl.cyl4_clamp);
+				apply_cylinder_manual_mode(0, cylinder1_cmd, cyl.cyl1_open, cyl.cyl1_clamp);
+				apply_cylinder_manual_mode(1, cylinder2_cmd, cyl.cyl2_open, cyl.cyl2_clamp);
+				apply_cylinder_manual_mode(2, cylinder3_cmd, cyl.cyl3_open, cyl.cyl3_clamp);
+				apply_cylinder_manual_mode(3, cylinder4_cmd, cyl.cyl4_open, cyl.cyl4_clamp);
 			}
 		}
 
@@ -4922,6 +4943,12 @@ int main(int argc, char* argv[])
 			vs.force_feedback_hold_enabled = ff.clamp_hold_enabled;
 			vs.force_feedback_hold_active = ff.clamp_hold_enabled && ff.clamp_hold_owner() != 0;
 			vs.force_feedback_hold_owner = ff.clamp_hold_owner();
+			vs.cylinder_manual_allowed = cylinder_manual_allowed;
+			for (int index = 0; index < 4; ++index)
+			{
+				if (cylinder_manual_mode[index] != CylinderManualMode::Automatic)
+					vs.cylinder_manual_mask |= static_cast<std::uint8_t>(1u << index);
+			}
 			vis_server.push_state(vs);
 		}
 
@@ -4931,6 +4958,33 @@ int main(int argc, char* argv[])
 			{
 				switch (vcmd.type)
 				{
+				case VisCommandType::SetCylinderManualPosition:
+				case VisCommandType::ResetCylinderManual:
+				{
+					if (vcmd.param1 < 0 || vcmd.param1 >= 4) break;
+					if (vcmd.type == VisCommandType::ResetCylinderManual)
+					{
+						// 恢复命令不依赖输入框，也不锁存旧输出；下一拍按当前流程重新生成目标。
+						cylinder_manual_mode[vcmd.param1] = CylinderManualMode::Automatic;
+						std::cout << "电缸" << vcmd.param1 + 1 << "：已恢复当前流程位置。" << std::endl;
+					}
+					else if (vcmd.param2 < 0 || vcmd.param2 > 2000)
+					{
+						std::cout << "电缸位置请求已拒绝：数值必须为 0 到 2000。" << std::endl;
+					}
+					else if (cylinder_manual_allowed)
+					{
+						cylinder_manual_position[vcmd.param1] = static_cast<unsigned short>(vcmd.param2);
+						cylinder_manual_mode[vcmd.param1] = CylinderManualMode::Position;
+						std::cout << "电缸" << vcmd.param1 + 1 << "：手动目标 "
+							<< vcmd.param2 << "。" << std::endl;
+					}
+					else
+					{
+						std::cout << "电缸位置请求已拒绝：当前未就绪或自动流程正在接管。" << std::endl;
+					}
+					break;
+				}
 				case VisCommandType::SetCylinderManualOpen:
 				case VisCommandType::SetCylinderManualClosed:
 				{

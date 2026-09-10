@@ -135,6 +135,9 @@ namespace AdsControlUI
 		[MarshalAs(UnmanagedType.I1)] public bool force_feedback_hold_enabled;
 		[MarshalAs(UnmanagedType.I1)] public bool force_feedback_hold_active;
 		public int force_feedback_hold_owner;
+		// 与 C++ 状态末尾一致：位0..3分别表示四个电缸的手动覆盖。
+		public byte cylinder_manual_mask;
+		[MarshalAs(UnmanagedType.I1)] public bool cylinder_manual_allowed;
 	}
 
     public enum VisCommandType : int
@@ -179,5 +182,7 @@ namespace AdsControlUI
 		SetYValveOpen = 36,
 		SetInjectorManualJog = 37,
 		EmergencyRetractDevice = 38,
+		SetCylinderManualPosition = 39,
+		ResetCylinderManual = 40,
 	}
 }

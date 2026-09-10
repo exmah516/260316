@@ -139,9 +139,12 @@ struct VisState
 	bool force_feedback_hold_enabled;
 	bool force_feedback_hold_active;
 	int force_feedback_hold_owner;
+	// 电缸选中状态表示手动覆盖，不再由开合阈值推断。
+	std::uint8_t cylinder_manual_mask;
+	bool cylinder_manual_allowed;
 };
 #pragma pack(pop)
-static_assert(sizeof(VisState) == 882, "VisState 管道布局发生变化，请同步更新 WPF 协议结构。");
+static_assert(sizeof(VisState) == 884, "VisState 管道布局发生变化，请同步更新 WPF 协议结构。");
 
 enum class VisCommandType : int
 {
@@ -185,6 +188,8 @@ enum class VisCommandType : int
 	SetYValveOpen = 36, // param1: 0=关闭，1=打开
 	SetInjectorManualJog = 37, // param1: 注射器1..2，param2: -1=拉，0=停止，1=推
 	EmergencyRetractDevice = 38, // 极简器械撤出：固定夹爪组合，轴3/5/6退回启动准备完成位
+	SetCylinderManualPosition = 39, // param1: 电缸下标0..3，param2: 位置0..2000
+	ResetCylinderManual = 40, // param1: 电缸下标0..3，撤销覆盖并恢复当前流程位置
 };
 
 #pragma pack(push, 1)

@@ -26,7 +26,8 @@ namespace motion_sync
 	void apply_locked_axis6_window(AppContext& ctx);
 	bool rebuild_axis6_window_from_axis5(AppContext& ctx, bool log_result);
 
-	bool sync_axis1(AppContext& ctx, int samples);
+	// 连接恢复时必须传 false，使用当前反馈重建旋转基准；业务换手保持默认语义。
+	bool sync_axis1(AppContext& ctx, int samples, bool preserve_rotation_targets = true);
 	// 计划回退交接专用：使用当前100 Hz位置快照和已滤波手柄值重建内存基准，
 	// 不轮询手柄、不等待、不直接写ADS。
 	bool rebase_axis1_after_return(AppContext& ctx);
@@ -40,11 +41,13 @@ namespace motion_sync
 		AppContext& ctx,
 		int samples,
 		bool rebuild_window,
-		bool log_window_rebuild);
+		bool log_window_rebuild,
+		bool preserve_rotation_targets = true);
 	bool sync_cooperative_guidewire(
 		AppContext& ctx,
 		int samples,
-		bool log_window_rebuild);
+		bool log_window_rebuild,
+		bool preserve_rotation_targets = true);
 	bool sync_all(AppContext& ctx, int samples);
 
 	void capture_axis1_follow_baseline(AppContext& ctx);

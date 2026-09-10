@@ -532,6 +532,11 @@ IF all_done THEN
 	G.startup_loading_ready := TRUE;
     G.handle_reinit_req := TRUE;
     FOR i:=1 TO 7 DO
+        // 旋转轴已回到绝对零位，参考坐标必须同样采用绝对零点。
+        // 不能保留 init 阶段采集的自检前角度，否则相对 0 会重新指向旧位置。
+        IF NOT target_axes[i] THEN
+            G.init_pos[i] := 0.0;
+        END_IF
         // 统一刷新相对坐标/参考，避免切换到 handle 后出现参考突变
         G.Act_pos[i] := G.axis[i].NcToPlc.ActPos - G.init_pos[i];
         G.act_pos_from_left[i] := G.axis[i].NcToPlc.ActPos - G.leftlimit[i];

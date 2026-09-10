@@ -552,13 +552,32 @@
                     </GroupBox>
 
                     <!-- 电缸 -->
-                    <GroupBox Grid.Row="4" Header="电缸控制" IsEnabled="{Binding SpacingRecoveryInactive}">
-                        <UniformGrid Columns="2" Margin="2">
-                            <ToggleButton Content="电缸 1" IsChecked="{Binding Cyl1Open, Mode=OneWay}" Click="Cyl1_Click" Margin="3" MinHeight="40"/>
-                            <ToggleButton Content="电缸 2" IsChecked="{Binding Cyl2Open, Mode=OneWay}" Click="Cyl2_Click" Margin="3" MinHeight="40"/>
-                            <ToggleButton Content="电缸 3" IsChecked="{Binding Cyl3Open, Mode=OneWay}" Click="Cyl3_Click" Margin="3" MinHeight="40"/>
-                            <ToggleButton Content="电缸 4" IsChecked="{Binding Cyl4Open, Mode=OneWay}" Click="Cyl4_Click" Margin="3" MinHeight="40"/>
-                        </UniformGrid>
+                    <GroupBox Grid.Row="4" Header="电缸控制">
+                        <StackPanel Margin="2">
+                            <UniformGrid Columns="2" IsEnabled="{Binding CylinderManualAllowed}">
+                                <Grid Margin="3">
+                                    <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="68"/></Grid.ColumnDefinitions>
+                                    <ToggleButton Content="电缸 1" IsChecked="{Binding Cyl1Manual, Mode=OneWay}" Click="Cyl1_Click" MinHeight="40" Margin="0,0,6,0"/>
+                                    <TextBox Grid.Column="1" x:Name="TbCyl1Position" Text="400" VerticalContentAlignment="Center" HorizontalContentAlignment="Center" ToolTip="电缸1目标位置（0–2000）"/>
+                                </Grid>
+                                <Grid Margin="3">
+                                    <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="68"/></Grid.ColumnDefinitions>
+                                    <ToggleButton Content="电缸 2" IsChecked="{Binding Cyl2Manual, Mode=OneWay}" Click="Cyl2_Click" MinHeight="40" Margin="0,0,6,0"/>
+                                    <TextBox Grid.Column="1" x:Name="TbCyl2Position" Text="0" VerticalContentAlignment="Center" HorizontalContentAlignment="Center" ToolTip="电缸2目标位置（0–2000）"/>
+                                </Grid>
+                                <Grid Margin="3">
+                                    <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="68"/></Grid.ColumnDefinitions>
+                                    <ToggleButton Content="电缸 3" IsChecked="{Binding Cyl3Manual, Mode=OneWay}" Click="Cyl3_Click" MinHeight="40" Margin="0,0,6,0"/>
+                                    <TextBox Grid.Column="1" x:Name="TbCyl3Position" Text="250" VerticalContentAlignment="Center" HorizontalContentAlignment="Center" ToolTip="电缸3目标位置（0–2000）"/>
+                                </Grid>
+                                <Grid Margin="3">
+                                    <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="68"/></Grid.ColumnDefinitions>
+                                    <ToggleButton Content="电缸 4" IsChecked="{Binding Cyl4Manual, Mode=OneWay}" Click="Cyl4_Click" MinHeight="40" Margin="0,0,6,0"/>
+                                    <TextBox Grid.Column="1" x:Name="TbCyl4Position" Text="0" VerticalContentAlignment="Center" HorizontalContentAlignment="Center" ToolTip="电缸4目标位置（0–2000）"/>
+                                </Grid>
+                            </UniformGrid>
+                            <TextBlock x:Name="CylinderError" Style="{StaticResource ErrorText}" TextWrapping="Wrap" Margin="3,2,3,0"/>
+                        </StackPanel>
                     </GroupBox>
 
                     <!-- 辅助执行器：Y阀和双注射器手动点动 -->

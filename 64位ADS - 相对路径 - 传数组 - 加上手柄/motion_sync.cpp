@@ -97,9 +97,8 @@ namespace motion_sync
 		return true;
 	}
 
-	bool sync_axis1(AppContext& ctx, int samples)
+	bool sync_axis1(AppContext& ctx, int samples, bool preserve_rotation_targets)
 	{
-		const double preserved_axis2_hold_rel = *ctx.axis2_hold_rel;
 		plc_io::clear_axis1_group_return_requests(ctx);
 
 		if (!plc_io::read_plc_state(ctx))
@@ -107,6 +106,13 @@ namespace motion_sync
 			return false;
 		}
 
+		if (!preserve_rotation_targets)
+		{
+			*ctx.axis2_hold_rel = ctx.plc_act_pos[1];
+			*ctx.axis7_hold_rel = ctx.plc_act_pos[6];
+			*ctx.independent_axis2_hold_rel = ctx.plc_act_pos[1];
+		}
+		const double preserved_axis2_hold_rel = *ctx.axis2_hold_rel;
 		plc_io::load_pos_from_actual(ctx);
 		ctx.pos[1] = preserved_axis2_hold_rel;
 		ctx.pos[6] = *ctx.axis7_hold_rel;
@@ -350,9 +356,9 @@ namespace motion_sync
 		AppContext& ctx,
 		int samples,
 		bool rebuild_window,
-		bool log_window_rebuild)
+		bool log_window_rebuild,
+		bool preserve_rotation_targets)
 	{
-		const double preserved_axis7_hold_rel = *ctx.axis7_hold_rel;
 		plc_io::clear_axis_return_request(ctx, AdsSymbol::axis6_return);
 
 		if (!plc_io::read_plc_state(ctx))
@@ -360,6 +366,16 @@ namespace motion_sync
 			return false;
 		}
 
+		if (!preserve_rotation_targets)
+		{
+			*ctx.axis2_hold_rel = ctx.plc_act_pos[1];
+			*ctx.axis7_hold_rel = ctx.plc_act_pos[6];
+			*ctx.independent_axis1_hold_rel = ctx.plc_act_pos[0];
+			*ctx.independent_axis2_hold_rel = ctx.plc_act_pos[1];
+			*ctx.independent_axis3_hold_rel = ctx.plc_act_pos[2];
+			*ctx.independent_axis5_hold_rel = ctx.plc_act_pos[4];
+		}
+		const double preserved_axis7_hold_rel = *ctx.axis7_hold_rel;
 		plc_io::load_pos_from_actual(ctx);
 		ctx.pos[1] = *ctx.axis2_hold_rel;
 		ctx.pos[6] = preserved_axis7_hold_rel;
@@ -402,15 +418,16 @@ namespace motion_sync
 	bool sync_cooperative_guidewire(
 		AppContext& ctx,
 		int samples,
-		bool log_window_rebuild)
+		bool log_window_rebuild,
+		bool preserve_rotation_targets)
 	{
 		// 协同模式需要同时重建两只手柄的差分基准。仅同步其中一轴会让
 		// 另一只手柄在回退结束后继续使用旧基准，造成下一拍目标跳变。
-		if (!sync_axis1(ctx, samples))
+		if (!sync_axis1(ctx, samples, preserve_rotation_targets))
 		{
 			return false;
 		}
-		if (!sync_axis6(ctx, samples, true, log_window_rebuild))
+		if (!sync_axis6(ctx, samples, true, log_window_rebuild, preserve_rotation_targets))
 		{
 			return false;
 		}

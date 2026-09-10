@@ -57,8 +57,32 @@ namespace AdsControlUI
 
         private void SetCylinderState(object sender, int index)
         {
-            if (sender is ToggleButton button)
-                _vm.SetCylinderManualState(index, button.IsChecked == true);
+			if (!(sender is ToggleButton button)) return;
+			CylinderError.Text = "";
+			// 选中状态只认后台回报，不能把自动夹爪的开合值当作手动覆盖状态。
+			bool manual = _vm.IsCylinderManual(index);
+			bool sent;
+			if (manual)
+			{
+				sent = _vm.ResetCylinderManual(index);
+			}
+			else
+			{
+				TextBox[] inputs = { TbCyl1Position, TbCyl2Position, TbCyl3Position, TbCyl4Position };
+				if (!int.TryParse(inputs[index].Text, System.Globalization.NumberStyles.None,
+					System.Globalization.CultureInfo.InvariantCulture, out int position) ||
+					position < 0 || position > 2000)
+				{
+					CylinderError.Text = $"电缸{index + 1}位置必须为 0 到 2000 的整数。";
+					button.SetCurrentValue(ToggleButton.IsCheckedProperty, manual);
+					inputs[index].Focus();
+					inputs[index].SelectAll();
+					return;
+				}
+				sent = _vm.SetCylinderManualPosition(index, position);
+			}
+			if (!sent) CylinderError.Text = "命令未发送：请检查连接和当前控制状态。";
+			button.SetCurrentValue(ToggleButton.IsCheckedProperty, manual);
         }
 
         private void ModeCathFwd_Click(object sender, RoutedEventArgs e) => _vm.SetMode(0, 0);

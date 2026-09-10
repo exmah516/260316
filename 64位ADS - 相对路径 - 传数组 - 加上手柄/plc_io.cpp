@@ -205,10 +205,8 @@ namespace plc_io
 			}
 			copy_positions(snapshot.act_pos_rel, ctx.plc_act_pos, 7);
 			copy_positions(snapshot.act_pos_from_left, ctx.plc_act_pos_from_left, 7);
-			if (!ctx.ads_service->coordinate_cache(ctx.plc_init_pos, ctx.plc_leftlimit))
-			{
-				return false;
-			}
+			copy_positions(snapshot.init_pos, ctx.plc_init_pos, 7);
+			copy_positions(snapshot.leftlimit, ctx.plc_leftlimit, 7);
 			ctx.plc_snapshot_qpc_ticks = snapshot.qpc_ticks;
 			ctx.plc_snapshot_sequence = snapshot.attempt_sequence;
 			return true;

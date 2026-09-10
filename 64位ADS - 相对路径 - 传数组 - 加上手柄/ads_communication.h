@@ -35,6 +35,9 @@ struct AdsFastSnapshot
 	std::uint64_t rtt_us = 0;
 	double act_pos_rel[7] = {};
 	double act_pos_from_left[7] = {};
+	// 与本帧位置同批读取，避免自检后把新位置与旧零点缓存混合换算。
+	double init_pos[7] = {};
+	double leftlimit[7] = {};
 	double axis1_act_velocity_mm_s = 0.0;
 	short ft_1_value = 0;
 	short fn_1_value = 0;
@@ -336,8 +339,8 @@ private:
 	bool coordinate_cache_valid_ = false;
 	std::atomic<bool> coordinate_refresh_pending_{ false };
 	bool use_direct_nc_position_ = true;
-	std::array<unsigned long, 17> fast_direct_read_handles_{};
-	std::array<unsigned long, 11> fast_fallback_read_handles_{};
+	std::array<unsigned long, 19> fast_direct_read_handles_{};
+	std::array<unsigned long, 13> fast_fallback_read_handles_{};
 	std::array<unsigned long, 16> fast_write_handles_{};
 	// 每行依次为 Req、TargetAbs、Velocity、Acc、Dec、Jerk；第0/1行为axis1/axis6。
 	std::array<std::array<unsigned long, kPlannedReturnFieldsPerAxis>, 2>
