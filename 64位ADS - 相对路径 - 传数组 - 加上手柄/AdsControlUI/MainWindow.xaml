@@ -143,7 +143,7 @@
                                                VerticalAlignment="Center"
                                                ToolTip="导管轴1完成回退后，正常递送前10 mm按比例增加该值，范围 0~5 mm"/>
                                     <TextBox x:Name="TbAxis1PostReturnLead"
-                                             Text="1.00" Width="72" Margin="8,2,0,2"
+                                             Text="4.00" Width="72" Margin="8,2,0,2"
                                              VerticalContentAlignment="Center"
                                              ToolTip="单位 mm，允许范围 0~5；输入 0 可关闭映射"/>
                                     <Button Content="应用" Click="ApplyAxis1PostReturnLead_Click"
