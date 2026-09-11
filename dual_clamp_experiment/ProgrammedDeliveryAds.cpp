@@ -77,6 +77,7 @@ bool ProgrammedDeliveryAds::read_live(ProgrammedDeliveryLiveFrame& frame)
 	std::uint8_t mode = 0, phase = 0;
 	std::uint16_t cycle_index = 0, cycle_total = 0;
 	bool setup_busy = false, setup_done = false, selfcheck_done = false, selfcheck_busy = false;
+	bool leftlimit_valid = false;
 	std::uint32_t status_error_id = 0;
 	std::uint8_t wait_action = 0, error_source = 0, error_axis = 0, error_phase = 0;
 	double error_target_abs = 0.0;
@@ -103,7 +104,8 @@ bool ProgrammedDeliveryAds::read_live(ProgrammedDeliveryLiveFrame& frame)
 		"G.axis[6].NcToPlc.ActPos", "G.axis[6].NcToPlc.ActVelo", "G.axis[6].NcToPlc.ActAcc",
 		"G.axis[7].NcToPlc.ActPos", "G.axis[7].NcToPlc.ActVelo", "G.axis[7].NcToPlc.ActAcc",
 		"G.fn_1_value", "G.ft_1_value", "G.fn_2_value", "G.ft_2_value",
-		"G.cylinder1_value", "G.cylinder2_value", "G.cylinder3_value", "G.cylinder4_value"
+		"G.cylinder1_value", "G.cylinder2_value", "G.cylinder3_value", "G.cylinder4_value",
+		"G.dual_clamp_leftlimit_valid"
 	};
 	const unsigned long lengths[] = {
 		sizeof(mode), sizeof(phase), sizeof(cycle_index), sizeof(cycle_total),
@@ -115,7 +117,8 @@ bool ProgrammedDeliveryAds::read_live(ProgrammedDeliveryLiveFrame& frame)
 		sizeof(a1p), sizeof(a1v), sizeof(a1a), sizeof(a2p), sizeof(a2v), sizeof(a2a),
 		sizeof(a5p), sizeof(a5v), sizeof(a5a), sizeof(a6p), sizeof(a6v), sizeof(a6a),
 		sizeof(a7p), sizeof(a7v), sizeof(a7a),
-		sizeof(fn1), sizeof(ft1), sizeof(fn2), sizeof(ft2), sizeof(c1), sizeof(c2), sizeof(c3), sizeof(c4)
+		sizeof(fn1), sizeof(ft1), sizeof(fn2), sizeof(ft2), sizeof(c1), sizeof(c2), sizeof(c3), sizeof(c4),
+		sizeof(leftlimit_valid)
 	};
 	void* outputs[] = {
 		&mode, &phase, &cycle_index, &cycle_total,
@@ -125,7 +128,7 @@ bool ProgrammedDeliveryAds::read_live(ProgrammedDeliveryLiveFrame& frame)
 		&target1, &target5, &target6, &target2, &target7, &trigger, &return_target, &final_target,
 		&a1p, &a1v, &a1a, &a2p, &a2v, &a2a,
 		&a5p, &a5v, &a5a, &a6p, &a6v, &a6a, &a7p, &a7v, &a7a,
-		&fn1, &ft1, &fn2, &ft2, &c1, &c2, &c3, &c4
+		&fn1, &ft1, &fn2, &ft2, &c1, &c2, &c3, &c4, &leftlimit_valid
 	};
 	static_assert(std::size(symbols) == std::size(lengths) && std::size(symbols) == std::size(outputs));
 	if (!comm_.ADSReadSum(symbols, lengths, outputs, static_cast<unsigned long>(std::size(symbols)))) return false;
@@ -138,6 +141,7 @@ bool ProgrammedDeliveryAds::read_live(ProgrammedDeliveryLiveFrame& frame)
 	frame.setup_done = setup_done;
 	frame.selfcheck_done = selfcheck_done;
 	frame.selfcheck_busy = selfcheck_busy;
+	frame.leftlimit_valid = leftlimit_valid;
 	frame.status_error_id = status_error_id;
 	frame.wait_action = wait_action;
 	frame.error_source = error_source;
@@ -166,6 +170,8 @@ bool ProgrammedDeliveryAds::read_live(ProgrammedDeliveryLiveFrame& frame)
 	frame.axis7_pos = a7p; frame.axis7_vel = a7v; frame.axis7_acc = a7a;
 	frame.fn1 = fn1; frame.ft1 = ft1; frame.fn2 = fn2; frame.ft2 = ft2;
 	frame.cylinder1 = c1; frame.cylinder2 = c2; frame.cylinder3 = c3; frame.cylinder4 = c4;
+	if (frame.mode == ProgrammedDeliveryMode::ExternalValidation &&
+		!comm_.ADSRead("G.program_test_sync_state", sizeof(frame.sync_state), &frame.sync_state)) return false;
 	frame.valid = true;
 	return true;
 }
@@ -249,7 +255,7 @@ bool ProgrammedDeliveryAds::read_all_samples(ProgrammedDeliveryMode mode, std::u
 		const std::uint32_t chunk = (std::min)(kSampleChunkSize, count - offset);
 		std::vector<std::uint32_t> index(chunk), event(chunk);
 		std::vector<std::uint64_t> time(chunk);
-		std::vector<std::uint8_t> phase(chunk);
+		std::vector<std::uint8_t> phase(chunk), sync(chunk);
 		std::vector<std::uint16_t> cycle(chunk), c1(chunk), c2(chunk), c3(chunk), c4(chunk);
 		std::vector<double> a1p(chunk), a1v(chunk), a1a(chunk), a2p(chunk), a2v(chunk), a2a(chunk);
 		std::vector<double> a5p(chunk), a5v(chunk), a5a(chunk), a6p(chunk), a6v(chunk), a6a(chunk);
@@ -262,7 +268,10 @@ bool ProgrammedDeliveryAds::read_all_samples(ProgrammedDeliveryMode mode, std::u
 			!read_chunk(comm_, "G.program_test_sample_event_sequence", offset, chunk, sizeof(event[0]), event.data()) ||
 			!read_chunk(comm_, "G.program_test_sample_cycle_index", offset, chunk, sizeof(cycle[0]), cycle.data())) return false;
 
-		if (mode == ProgrammedDeliveryMode::Catheter)
+		if (mode == ProgrammedDeliveryMode::ExternalValidation &&
+			!read_chunk(comm_, "G.program_test_sample_sync_state", offset, chunk, sizeof(sync[0]), sync.data())) return false;
+
+		if (is_catheter_motion(mode))
 		{
 			if (!read_chunk(comm_, "G.program_test_sample_axis1_pos", offset, chunk, sizeof(double), a1p.data()) ||
 				!read_chunk(comm_, "G.program_test_sample_axis1_vel", offset, chunk, sizeof(double), a1v.data()) ||
@@ -275,7 +284,7 @@ bool ProgrammedDeliveryAds::read_all_samples(ProgrammedDeliveryMode mode, std::u
 				!read_chunk(comm_, "G.program_test_sample_fn1", offset, chunk, sizeof(fn1[0]), fn1.data()) ||
 				!read_chunk(comm_, "G.program_test_sample_ft1", offset, chunk, sizeof(ft1[0]), ft1.data())) return false;
 		}
-		else
+		if (mode == ProgrammedDeliveryMode::Guidewire || mode == ProgrammedDeliveryMode::ExternalValidation)
 		{
 			if (!read_chunk(comm_, "G.program_test_sample_axis5_pos", offset, chunk, sizeof(double), a5p.data()) ||
 				!read_chunk(comm_, "G.program_test_sample_axis5_vel", offset, chunk, sizeof(double), a5v.data()) ||
@@ -297,6 +306,7 @@ bool ProgrammedDeliveryAds::read_all_samples(ProgrammedDeliveryMode mode, std::u
 			ProgrammedDeliverySample& s = samples[offset + i];
 			s.sample_index = index[i]; s.plc_time_us = time[i]; s.phase = phase[i];
 			s.event_sequence = event[i]; s.cycle_index = cycle[i];
+			s.sync_state = sync[i];
 			s.axis1_pos = a1p[i]; s.axis1_vel = a1v[i]; s.axis1_acc = a1a[i];
 			s.axis2_pos = a2p[i]; s.axis2_vel = a2v[i]; s.axis2_acc = a2a[i];
 			s.axis5_pos = a5p[i]; s.axis5_vel = a5v[i]; s.axis5_acc = a5a[i];

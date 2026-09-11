@@ -47,6 +47,7 @@ public:
 	// 导丝模式的三个直线位置需要写入实时记录元数据，便于复现实验条件。
 	void set_program_guidewire_positions(double axis5_from_left_mm, double axis6_prepare_from_left_mm,
 		double axis6_trigger_from_left_mm);
+	void set_program_context(const ProgrammedDeliveryConfig& config, const ProgrammedDeliveryLiveFrame& reference);
 	// 取零先于正式记录时，允许在尚未写入样本的情况下更新独立记录字段表头。
 	bool reconfigure_standalone(std::uint64_t field_mask, std::string& error);
 	bool append_dual(const std::vector<DualClampSample>& samples, std::size_t begin_index,
@@ -106,6 +107,10 @@ private:
 	double program_axis6_prepare_from_left_mm_ = 451.0;
 	double program_axis6_trigger_from_left_mm_ = 431.0;
 	ProgrammedDeliveryMode mode_ = ProgrammedDeliveryMode::Catheter;
+	ProgrammedDeliveryConfig program_config_{};
+	ProgrammedDeliveryLiveFrame program_reference_{};
+	std::uint64_t pulse_replaced_count_ = 0;
+	double pulse_compute_max_us_ = 0;
 	std::string directory_;
 	std::string mode_name_;
 	std::string last_error_;
@@ -113,6 +118,7 @@ private:
 	std::uint64_t zero_sample_count_ = 0;
 	std::uint32_t last_event_sequence_ = static_cast<std::uint32_t>(-1);
 	std::uint8_t last_phase_ = 0;
+	std::uint8_t last_sync_state_ = 0;
 	std::string start_time_local_;
 	std::string end_time_local_;
 	std::string zero_start_time_local_;

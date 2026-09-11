@@ -3,6 +3,7 @@
 #include "ClampDynamics.h"
 #include "ExperimentStreamAds.h"
 #include "ForceCalibration.h"
+#include "ExternalValidation.h"
 
 #include <algorithm>
 #include <chrono>
@@ -215,7 +216,11 @@ bool ExperimentStreamRecorder::begin(const std::string& mode, const std::string&
 		last_sample_time_us_ = 0;
 		has_sample_time_ = false;
 		block_count_ = 0;
-		program_mode_ = mode == "catheter" || mode == "guidewire";
+		pulse_replaced_count_ = 0;
+		pulse_compute_max_us_ = 0;
+		program_mode_ = mode == "catheter" || mode == "guidewire" || mode == "external_validation";
+		mode_ = mode == "external_validation" ? ProgrammedDeliveryMode::ExternalValidation
+			: mode == "guidewire" ? ProgrammedDeliveryMode::Guidewire : ProgrammedDeliveryMode::Catheter;
 		standalone_mode_ = mode == "standalone";
 		const std::filesystem::path root = executable_directory() / L"records";
 		std::error_code fs_error;
@@ -236,6 +241,7 @@ bool ExperimentStreamRecorder::begin(const std::string& mode, const std::string&
 		events_.open(path / L"events.csv", std::ios::out | std::ios::trunc);
 		zero_file_.open(path / L"zero_calibration.csv", std::ios::out | std::ios::trunc);
 		if (program_mode_) {
+			if (mode_ != ProgrammedDeliveryMode::ExternalValidation) {
 			illustration_file_.open(path / L"model2_illustration.csv");
 			std::ofstream illustration_params(path / L"model2_illustration.json");
 			illustration_params << clampillustration::snapshot();
@@ -244,10 +250,11 @@ bool ExperimentStreamRecorder::begin(const std::string& mode, const std::string&
 				throw std::runtime_error("Cannot create target illustration sidecar");
 			illustration_file_ << "sample_index,plc_time_us,cycle_index,phase,mode,fn_original_N,ft_original_N,"
 				"fn_reference_N,ft_reference_N,gate,weight,fn_illustration_N,ft_illustration_N,"
-				"fn_valid,ft_valid,purpose\n";
+				"fn_valid,ft_valid,purpose,fn_input_N,ft_input_N,pulse_replaced\n";
+			}
 			model_file_.open(path / L"causal_force.csv", std::ios::out | std::ios::trunc);
 			std::ofstream params(path / L"causal_model.json");
-			params << clampdynamics::snapshot(mode == "guidewire", dynamics_config_);
+			params << clampdynamics::snapshot(mode == "guidewire", dynamics_config_, mode_ == ProgrammedDeliveryMode::ExternalValidation);
 			params.flush();
 			if (!model_file_ || !params) {
 				throw std::runtime_error("无法创建因果模型记录");
@@ -268,13 +275,14 @@ bool ExperimentStreamRecorder::begin(const std::string& mode, const std::string&
 		events_ << "event_sequence,plc_time_us,cycle_index,phase,event_name\n";
 		if (!write_zero_header(error)) return false;
 		if (standalone_mode_ ? !write_standalone_header(standalone_field_mask_, error) :
-			(program_mode_ ? !write_program_header(mode == "catheter" ? ProgrammedDeliveryMode::Catheter : ProgrammedDeliveryMode::Guidewire, error) : !write_dual_header(error))) return false;
+			(program_mode_ ? !write_program_header(mode_, error) : !write_dual_header(error))) return false;
 		active_ = true;
 		archived_ = false;
 		sample_count_ = 0;
 		zero_sample_count_ = 0;
 		last_event_sequence_ = static_cast<std::uint32_t>(-1);
 		last_phase_ = 0;
+		last_sync_state_ = 0;
 		writer_thread_ = std::thread(&ExperimentStreamRecorder::writer_loop, this);
 		return write_event("RecordStart", 0, 0, 0, 0, error);
 	}
@@ -332,6 +340,14 @@ void ExperimentStreamRecorder::set_program_guidewire_positions(double axis5_from
 	program_axis5_from_left_mm_ = axis5_from_left_mm;
 	program_axis6_prepare_from_left_mm_ = axis6_prepare_from_left_mm;
 	program_axis6_trigger_from_left_mm_ = axis6_trigger_from_left_mm;
+}
+
+void ExperimentStreamRecorder::set_program_context(const ProgrammedDeliveryConfig& config,
+	const ProgrammedDeliveryLiveFrame& reference)
+{
+	if (sample_count_ != 0 && active_) return;
+	program_config_ = config;
+	program_reference_ = reference;
 }
 
 bool ExperimentStreamRecorder::reconfigure_standalone(std::uint64_t field_mask, std::string& error)
@@ -461,10 +477,19 @@ bool ExperimentStreamRecorder::write_dual_header(std::string& error)
 
 bool ExperimentStreamRecorder::write_program_header(ProgrammedDeliveryMode mode, std::string& error)
 {
+	if (mode == ProgrammedDeliveryMode::ExternalValidation) {
+		externalvalidation::write_header(samples_);
+		if (!samples_) { error = "写入外源模式CSV表头失败"; return false; }
+		return true;
+	}
 	if (mode == ProgrammedDeliveryMode::Catheter)
-		samples_ << "sample_index,plc_time_us,phase,event_sequence,cycle_index,axis1_pos_mm,axis1_vel_mm_s,axis1_acc_mm_s2,axis2_pos_deg,axis2_vel_deg_s,axis2_acc_deg_s2,cylinder1_cmd,cylinder2_cmd,fn1_raw,ft1_raw,fn1_zeroed,ft1_zeroed,fn1_sensor_N,ft1_sensor_N,fn1_cal_delta_N,fn1_cal_abs_N,ft1_cal_delta_N,ft1_cal_abs_N,torque1_cal_delta_Nmm,torque1_cal_abs_Nmm,fn1_decoupled_delta_N,torque1_decoupled_delta_Nmm,fn1_decoupled_abs_N,torque1_decoupled_abs_Nmm,axis2_angle_deg\n";
+		samples_ << "sample_index,plc_time_us,phase,event_sequence,cycle_index,axis1_pos_mm,axis1_vel_mm_s,axis1_acc_mm_s2,axis2_pos_deg,axis2_vel_deg_s,axis2_acc_deg_s2,cylinder1_cmd,cylinder2_cmd,fn1_raw,ft1_raw,fn1_zeroed,ft1_zeroed,fn1_sensor_N,ft1_sensor_N,fn1_cal_delta_N,fn1_cal_abs_N,ft1_cal_delta_N,ft1_cal_abs_N,torque1_cal_delta_Nmm,torque1_cal_abs_Nmm,fn1_decoupled_delta_N,torque1_decoupled_delta_Nmm,fn1_decoupled_abs_N,torque1_decoupled_abs_Nmm,axis2_angle_deg";
 	else
-		samples_ << "sample_index,plc_time_us,phase,event_sequence,cycle_index,axis5_pos_mm,axis5_vel_mm_s,axis5_acc_mm_s2,axis6_pos_mm,axis6_vel_mm_s,axis6_acc_mm_s2,axis7_pos_deg,axis7_vel_deg_s,axis7_acc_deg_s2,cylinder3_cmd,cylinder4_cmd,fn2_raw,ft2_raw,fn2_zeroed,ft2_zeroed,fn2_sensor_N,ft2_sensor_N,fn2_cal_delta_N,fn2_cal_abs_N,ft2_cal_delta_N,ft2_cal_abs_N,torque2_cal_delta_Nmm,torque2_cal_abs_Nmm,fn2_decoupled_delta_N,torque2_decoupled_delta_Nmm,fn2_decoupled_abs_N,torque2_decoupled_abs_Nmm,axis7_angle_deg\n";
+		samples_ << "sample_index,plc_time_us,phase,event_sequence,cycle_index,axis5_pos_mm,axis5_vel_mm_s,axis5_acc_mm_s2,axis6_pos_mm,axis6_vel_mm_s,axis6_acc_mm_s2,axis7_pos_deg,axis7_vel_deg_s,axis7_acc_deg_s2,cylinder3_cmd,cylinder4_cmd,fn2_raw,ft2_raw,fn2_zeroed,ft2_zeroed,fn2_sensor_N,ft2_sensor_N,fn2_cal_delta_N,fn2_cal_abs_N,ft2_cal_delta_N,ft2_cal_abs_N,torque2_cal_delta_Nmm,torque2_cal_abs_Nmm,fn2_decoupled_delta_N,torque2_decoupled_delta_Nmm,fn2_decoupled_abs_N,torque2_decoupled_abs_Nmm,axis7_angle_deg";
+	samples_ << ",record_axis1_nc_mm,record_axis2_nc_deg,record_axis6_nc_mm,record_axis7_nc_deg,"
+		"axis1_from_left_mm,axis6_from_left_mm,position_reference_valid,"
+		"fn_despiked_N,ft_despiked_N,pulse_valid,pulse_replaced,pulse_source_index,pulse_age_us,"
+		"pulse_status,pulse_locked,pulse_compute_us\n";
 	if (!samples_) { error = "写入程序模式CSV表头失败"; return false; }
 	return true;
 }
@@ -628,6 +653,7 @@ bool ExperimentStreamRecorder::append_program(const std::vector<ProgrammedDelive
 		const forcecal::Result cal = forcecal::calculate(s.fn1, s.ft1, s.fn2, s.ft2, zero.value, zero.valid);
 		const auto& side = mode == ProgrammedDeliveryMode::Guidewire ? cal.side2 : cal.side1;
 		const auto& m2 = s.illustration;
+		if (mode != ProgrammedDeliveryMode::ExternalValidation) {
 		illustration_rows << s.sample_index << ',' << s.plc_time_us << ',' << s.cycle_index << ','
 			<< unsigned(s.phase) << ',' << (mode == ProgrammedDeliveryMode::Guidewire ? "guidewire" : "catheter") << ',';
 		if (cal.valid) illustration_rows << side.force_cal_delta_n << ',' << side.ft_cal_delta_n;
@@ -640,7 +666,11 @@ bool ExperimentStreamRecorder::append_program(const std::vector<ProgrammedDelive
 		if (cal.valid) illustration_rows << m2.fn << ',' << m2.ft;
 		else illustration_rows << ',';
 		illustration_rows << ',' << (cal.valid && m2.valid_fn) << ',' << (cal.valid && m2.valid_ft)
-			<< ",target_illustration\n";
+			<< ",target_illustration,";
+		if (s.pulse.valid) illustration_rows << s.pulse_fn_N << ',' << s.pulse_ft_N;
+		else illustration_rows << ',';
+		illustration_rows << ',' << s.pulse.replaced << '\n';
+		}
 		model_rows << s.sample_index << ',' << s.plc_time_us << ',' << s.cycle_index << ',' << unsigned(s.phase) << ',';
 		if (cal.valid) {
 			model_rows << side.force_cal_delta_n << ',' << side.ft_cal_delta_n << ',' << s.model_fn << ',' << s.model_ft
@@ -667,22 +697,33 @@ bool ExperimentStreamRecorder::append_program(const std::vector<ProgrammedDelive
 		}
 		if (s.event_sequence != last_event_sequence_ || s.phase != last_phase_)
 		{
-			if (last_event_sequence_ != static_cast<std::uint32_t>(-1) && !write_event(phase_event_name(true, s.phase), s.plc_time_us, s.cycle_index, s.phase, s.event_sequence, error)) return false;
+			if (last_event_sequence_ != static_cast<std::uint32_t>(-1) &&
+				(mode != ProgrammedDeliveryMode::ExternalValidation || s.phase != last_phase_) &&
+				!write_event(phase_event_name(true, s.phase), s.plc_time_us, s.cycle_index, s.phase, s.event_sequence, error)) return false;
 			last_event_sequence_ = s.event_sequence;
+		}
+		if (mode == ProgrammedDeliveryMode::ExternalValidation && s.sync_state != last_sync_state_) {
+			if (!write_event(externalvalidation::sync_name(s.sync_state), s.plc_time_us,
+				s.cycle_index, s.phase, s.event_sequence, error)) return false;
+			last_sync_state_ = s.sync_state;
 		}
 		last_phase_ = s.phase;
 		if (!has_sample_time_) { first_sample_time_us_ = s.plc_time_us; has_sample_time_ = true; }
 		last_sample_time_us_ = s.plc_time_us;
+		if (mode == ProgrammedDeliveryMode::ExternalValidation) {
+			externalvalidation::write_sample(rows, s, zero.value, zero.valid);
+			++sample_count_;
+			continue;
+		}
 		if (mode == ProgrammedDeliveryMode::Catheter)
 		{
 			rows << s.sample_index << ',' << s.plc_time_us << ',' << static_cast<unsigned>(s.phase) << ',' << s.event_sequence << ',' << s.cycle_index << ','
 				<< s.axis1_pos << ',' << s.axis1_vel << ',' << s.axis1_acc << ',' << s.axis2_pos << ',' << s.axis2_vel << ',' << s.axis2_acc << ','
 				<< s.cylinder1 << ',' << s.cylinder2 << ','
-				<< s.fn2 << ',' << s.ft2 << ',' << zeroed(s.fn1, zero.value[0]) << ',' << zeroed(s.ft1, zero.value[1]);
+				<< s.fn1 << ',' << s.ft1 << ',' << zeroed(s.fn1, zero.value[0]) << ',' << zeroed(s.ft1, zero.value[1]);
 			if (cal.valid) append_side_columns(rows, cal.side1);
 			else rows << ",,,,,,,,,,,,";
 			rows << ',' << s.axis2_pos;
-			rows << '\n';
 		}
 		else
 		{
@@ -693,14 +734,24 @@ bool ExperimentStreamRecorder::append_program(const std::vector<ProgrammedDelive
 			if (cal.valid) append_side_columns(rows, cal.side2);
 			else rows << ",,,,,,,,,,,,";
 			rows << ',' << s.axis7_pos;
-			rows << '\n';
 		}
+		rows << ',' << s.axis1_pos << ',' << s.axis2_pos << ',' << s.axis6_pos << ',' << s.axis7_pos << ',';
+		if (s.position_reference_valid) rows << s.axis1_from_left_mm << ',' << s.axis6_from_left_mm;
+		else rows << ',';
+		rows << ',' << s.position_reference_valid << ',';
+		if (s.pulse.valid) rows << s.pulse_fn_N << ',' << s.pulse_ft_N;
+		else rows << ',';
+		rows << ',' << s.pulse.valid << ',' << s.pulse.replaced << ',' << s.pulse.source_index
+			<< ',' << s.pulse.age_us << ',' << unsigned(s.pulse.status) << ',' << s.pulse.locked
+			<< ',' << s.pulse_compute_us << '\n';
+		pulse_replaced_count_ += s.pulse.replaced ? 1 : 0;
+		pulse_compute_max_us_ = std::max(pulse_compute_max_us_,s.pulse_compute_us);
 		++sample_count_;
 	}
 	if (rows.str().empty()) return true;
 	++block_count_;
 	return enqueue_write(0, rows.str(), error) && enqueue_write(3, model_rows.str(), error)
-		&& enqueue_write(4, illustration_rows.str(), error);
+		&& (mode == ProgrammedDeliveryMode::ExternalValidation || enqueue_write(4, illustration_rows.str(), error));
 }
 
 bool ExperimentStreamRecorder::append_standalone(const std::vector<ExperimentStreamSample>& samples,
@@ -869,7 +920,9 @@ bool ExperimentStreamRecorder::write_json(const std::string& status, const std::
 		<< "  \"tangential_arm_mm\": " << forcecal::kTangentialArmMm << ",\n"
 		<< "  \"decoupling_matrix\": [[" << forcecal::kDecouplingFf << ", " << forcecal::kDecouplingFt << "], ["
 		<< forcecal::kDecouplingTf << ", " << forcecal::kDecouplingTt << "]],\n"
-		<< "  \"units\": {\"realtime_fn\": \"N\", \"realtime_ft\": \"N\", \"csv_torque\": \"N·mm\"},\n"
+		<< (mode_name_ == "external_validation"
+			? "  \"units\": {\"realtime_fn\": \"N\", \"realtime_torque\": \"N·mm\", \"csv_torque\": \"N·mm\"},\n"
+			: "  \"units\": {\"realtime_fn\": \"N\", \"realtime_ft\": \"N\", \"csv_torque\": \"N·mm\"},\n")
 		<< "  \"crosstalk_decoupling_applied\": true,\n"
 		<< "  \"gravity_compensation_applied\": false,\n";
 	if (standalone_mode_)
@@ -878,6 +931,52 @@ bool ExperimentStreamRecorder::write_json(const std::string& status, const std::
 	}
 	if (program_mode_)
 	{
+		if (mode_ == ProgrammedDeliveryMode::ExternalValidation) {
+			out << "  \"record_schema\": \"external-validation-v1\",\n";
+			externalvalidation::write_metadata(out, program_config_);
+		} else {
+		out << "  \"record_schema\": \"program-pulse-position-v1\",\n"
+			<< "  \"force_pulse_guard\": {\"version\":\"" << forcepulse::kVersion
+			<< "\",\"causal\":true,\"initial_confirmed_events\":3,\"maximum_hold_ms\":100,"
+			"\"period_range_ms\":[2200,2550],\"period_tolerance_ms\":130,"
+			"\"threshold_unit\":\"sensor_counts\",\"ft_rise\":35,\"ft_excursion\":43,"
+			"\"fn_edge\":23,\"ft_recovery_band\":8,"
+			"\"replacement\":\"last_pre_event_accepted_pair\",\"raw_preserved\":true,"
+			"\"guidewire_thresholds\":\"shared_count_signature_requires_independent_online_lock\","
+			"\"replaced_samples\":" << pulse_replaced_count_
+			<< ",\"max_compute_us\":" << pulse_compute_max_us_ << "},\n"
+			<< "  \"model2_input\": \"pulse_cleaned_installed_delta_N\",\n"
+			<< "  \"causal_force_csv_input\": \"original_installed_delta_N_unchanged\",\n"
+			<< "  \"position_reference\": {\"captured_before_start\":true,\"valid\":"
+			<< (program_reference_.valid && program_reference_.leftlimit_valid ? "true":"false")
+			<< ",\"axis1_leftlimit_nc_mm\":";
+		if (program_reference_.valid && std::isfinite(program_reference_.leftlimit_axis1_abs_mm))
+			out << program_reference_.leftlimit_axis1_abs_mm;
+		else out << "null";
+		out << ",\"axis6_leftlimit_nc_mm\":";
+		if (program_reference_.valid && std::isfinite(program_reference_.leftlimit_axis6_abs_mm))
+			out << program_reference_.leftlimit_axis6_abs_mm;
+		else out << "null";
+		out << ",\"linear_definition\":\"sample_ActPos_minus_frozen_leftlimit\","
+			"\"rotation_definition\":\"axis2_axis7_NC_angle_deg\","
+			"\"rotation_physical_home_verified\":false},\n"
+			<< "  \"axis1_prepare_from_left_mm\": " << program_config_.axis1_prepare_from_left_mm << ",\n"
+			<< "  \"axis1_trigger_from_left_mm\": " << program_config_.axis1_trigger_from_left_mm << ",\n"
+			<< "  \"axis2_command_angle_deg\": " << program_config_.axis2_angle_deg << ",\n"
+			<< "  \"axis7_command_angle_deg\": " << program_config_.axis7_angle_deg << ",\n"
+			<< "  \"forward_velocity_mm_s\": " << program_config_.forward_velocity_mm_s << ",\n"
+			<< "  \"forward_acceleration_mm_s2\": " << program_config_.forward_acceleration_mm_s2 << ",\n"
+			<< "  \"forward_deceleration_mm_s2\": " << program_config_.forward_deceleration_mm_s2 << ",\n"
+			<< "  \"forward_jerk_mm_s3\": " << program_config_.forward_jerk_mm_s3 << ",\n"
+			<< "  \"return_velocity_mm_s\": " << program_config_.return_velocity_mm_s << ",\n"
+			<< "  \"return_acceleration_mm_s2\": " << program_config_.return_acceleration_mm_s2 << ",\n"
+			<< "  \"return_deceleration_mm_s2\": " << program_config_.return_deceleration_mm_s2 << ",\n"
+			<< "  \"return_jerk_mm_s3\": " << program_config_.return_jerk_mm_s3 << ",\n"
+			<< "  \"release_wait_ms\": " << program_config_.release_wait_ms << ",\n"
+			<< "  \"reclamp_wait_ms\": " << program_config_.reclamp_wait_ms << ",\n"
+			<< "  \"release_lead_ms\": " << program_config_.release_lead_ms << ",\n"
+			<< "  \"reclamp_lead_ms\": " << program_config_.reclamp_lead_ms << ",\n";
+		}
 		out << "  \"cylinder1_coupling_enabled\": " << (program_cylinder1_coupling_enabled_ ? "true" : "false") << ",\n"
 			<< "  \"cylinder3_coupling_enabled\": " << (program_cylinder3_coupling_enabled_ ? "true" : "false") << ",\n"
 			<< "  \"cylinder2_open_word\": " << program_cylinder2_open_word_ << ",\n"

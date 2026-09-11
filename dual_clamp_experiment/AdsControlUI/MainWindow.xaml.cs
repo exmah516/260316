@@ -41,6 +41,9 @@ namespace DualClampExperimentUI
         public MainWindow()
         {
             InitializeComponent();
+            foreach (var box in new[] {ExternalAxis6PreparePos, ProgramAxis1PreparePos, ProgramAxis1TriggerPos,
+                ProgramCycleCount, ProgramFinalDistance})
+                box.TextChanged += (_, _) => UpdateExternalTravel();
             ForceCanvas.SizeChanged += (_, _) => DrawCausalCurves();
             TorqueCanvas.SizeChanged += (_, _) => DrawCausalCurves();
             _pollTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(33) };
@@ -49,6 +52,7 @@ namespace DualClampExperimentUI
             {
                 _loaded = true;
                 UpdateModeView();
+                if (IsExternalReplay) { LoadExternalReplay(); return; }
                 if (IsCurveReplay) { LoadCurveReplay(); return; }
                 await ConnectAsync();
                 _pollTimer.Start();
@@ -56,7 +60,7 @@ namespace DualClampExperimentUI
             Closed += async (_, _) =>
             {
                 _pollTimer.Stop();
-                if (IsCurveReplay) return;
+                if (IsCurveReplay || IsExternalReplay) return;
                 try { await SendAsync("QUIT"); } catch { }
                 DisconnectPipe();
             };
@@ -70,11 +74,11 @@ namespace DualClampExperimentUI
                 string baseDir = AppDomain.CurrentDomain.BaseDirectory;
                 string[] candidates =
                 {
+                    System.IO.Path.Combine(baseDir, "DualClampExperiment.exe"),
                     System.IO.Path.GetFullPath(System.IO.Path.Combine(baseDir, @"..\..\..\..\x64\Debug\DualClampExperiment.exe")),
                     System.IO.Path.GetFullPath(System.IO.Path.Combine(baseDir, @"..\..\..\..\x64\Release\DualClampExperiment.exe")),
                     System.IO.Path.GetFullPath(System.IO.Path.Combine(baseDir, @"..\..\..\..\..\x64\Debug\DualClampExperiment.exe")),
                     System.IO.Path.GetFullPath(System.IO.Path.Combine(baseDir, @"..\..\..\..\..\x64\Release\DualClampExperiment.exe")),
-                    System.IO.Path.Combine(baseDir, "DualClampExperiment.exe"),
                     System.IO.Path.GetFullPath(System.IO.Path.Combine(baseDir, @"..\DualClampExperiment.exe"))
                 };
                 foreach (string path in candidates)
@@ -212,6 +216,7 @@ namespace DualClampExperimentUI
             CausalForceToggle.Visibility = CausalTorqueToggle.Visibility =
                 Model2ForceToggle.Visibility = Model2TorqueToggle.Visibility =
                 CausalStatusText.Visibility = legacy ? Visibility.Collapsed : Visibility.Visible;
+            ConfigureExternalView();
             ResetCurveView();
         }
 
@@ -235,11 +240,15 @@ namespace DualClampExperimentUI
                 string positionFields = mode == "guidewire"
                     ? "axis5_from_left=" + Number(ProgramAxis5Pos) + "|axis6_prepare_from_left=" + Number(ProgramAxis6PreparePos) + "|axis6_trigger_from_left=" + Number(ProgramAxis6TriggerPos)
                     : "axis1_prepare_from_left=" + Number(ProgramAxis1PreparePos) + "|axis1_trigger_from_left=" + Number(ProgramAxis1TriggerPos);
+                if (IsExternalMode) positionFields += "|axis6_prepare_from_left=" + Number(ExternalAxis6PreparePos);
                 string commandText = string.Format(CultureInfo.InvariantCulture,
                     "PROGRAM_PREPARE|mode={0}|{1}|{2}={3}|cycle_count={4}|final_forward_distance={5}|cylinder1_coupling={6}|cylinder3_coupling={7}|cylinder2_open={8}|cylinder2_close={9}|cylinder4_open={10}|cylinder4_close={11}|release_wait_ms={12}|reclamp_wait_ms={13}|forward_velocity={14}|forward_acceleration={15}|forward_deceleration={16}|forward_jerk={17}|return_velocity={18}|return_acceleration={19}|return_deceleration={20}|return_jerk={21}|release_lead_ms={22}|reclamp_lead_ms={23}|record_name={24}",
                     mode, positionFields, angleKey, Number(ProgramAngle), Int(ProgramCycleCount), Number(ProgramFinalDistance),
-                    ProgramCylinder1Coupling.IsChecked == true ? 1 : 0, ProgramCylinder3Coupling.IsChecked == true ? 1 : 0,
-                    Word(ProgramCylinder2OpenValue), Word(ProgramCylinder2CloseValue), Word(ProgramCylinder4OpenValue), Word(ProgramCylinder4CloseValue),
+                    IsExternalMode || ProgramCylinder1Coupling.IsChecked == true ? 1 : 0,
+                    !IsExternalMode && ProgramCylinder3Coupling.IsChecked == true ? 1 : 0,
+                    Word(ProgramCylinder2OpenValue), Word(ProgramCylinder2CloseValue),
+                    Word(IsExternalMode ? ExternalCylinder4Open : ProgramCylinder4OpenValue),
+                    Word(IsExternalMode ? ExternalCylinder4Close : ProgramCylinder4CloseValue),
                     Int(ProgramReleaseWait), Int(ProgramReclampWait), Number(ProgramForwardVelocity), Number(ProgramForwardAcceleration),
                     Number(ProgramForwardDeceleration), Number(ProgramForwardJerk), Number(ProgramReturnVelocity), Number(ProgramReturnAcceleration),
                     Number(ProgramReturnDeceleration), Number(ProgramReturnJerk), Int(ProgramReleaseLead), Int(ProgramReclampLead), RecordSuffix());
@@ -259,7 +268,7 @@ namespace DualClampExperimentUI
             {
                 await SendAsync(CurrentMode == "legacy" ? "GET" : "GET_PROGRAM");
                 if (CurrentMode == "legacy") await SendAsync("GET_STANDALONE_RECORD");
-                else await SendAsync("PROGRAM_CURVES|" + _curveCursor.ToString(CultureInfo.InvariantCulture)
+                else await SendAsync((IsExternalMode ? "PROGRAM_EXTERNAL_CURVES|" : "PROGRAM_CURVES|") + _curveCursor.ToString(CultureInfo.InvariantCulture)
                     + "|" + _curveGeneration.ToString(CultureInfo.InvariantCulture));
             }
             finally { _isPolling = false; }
@@ -367,6 +376,7 @@ namespace DualClampExperimentUI
             if (response.StartsWith("STATE|", StringComparison.Ordinal)) ParseLegacyState(response);
             else if (response.StartsWith("PROGRAM_STATE|", StringComparison.Ordinal)) ParseProgramState(response);
             else if (response.StartsWith("PROGRAM_CURVES|", StringComparison.Ordinal)) ParseCurveResponse(response);
+            else if (response.StartsWith("PROGRAM_EXTERNAL_CURVES|", StringComparison.Ordinal)) ParseExternalResponse(response);
             else if (response.StartsWith("STANDALONE_STATE|", StringComparison.Ordinal)) ParseStandaloneState(response);
             else if (response.StartsWith("OK|CONNECT_ADS", StringComparison.Ordinal)) SetAdsStatus(true, "ADS: 正常 (Port 851)");
             else if (response.StartsWith("ERROR|", StringComparison.Ordinal)) ErrorText.Text = response.Substring(6);
@@ -444,7 +454,7 @@ namespace DualClampExperimentUI
             ErrorText.Text = p[programError];
             if (p.Length > 58 && int.Parse(p[39], CultureInfo.InvariantCulture) != 0 && p[54] != "0")
             {
-                string source = p[54] == "1" ? "准备定位" : p[54] == "2" ? "前向至触发位置" : p[54] == "3" ? "回退" : p[54] == "4" ? "最终前向" : "未知动作";
+                string source = p[54] == "1" ? "准备定位" : p[54] == "2" ? "前向至触发位置" : p[54] == "3" ? "回退" : p[54] == "4" ? "最终前向" : p[54] == "5" ? "主从耦合" : p[54] == "6" ? "主从解除" : "未知动作";
                 ErrorText.Text = p[55] == "1" || p[55] == "5" || p[55] == "6"
                     ? string.Format(CultureInfo.InvariantCulture, "PLC运动错误：ID {0}；轴{1}；{2}；目标距左限位 {3:F3} mm", p[39], p[55], source, D(p[58]))
                     : string.Format(CultureInfo.InvariantCulture, "PLC运动错误：ID {0}；轴{1}；{2}；目标值 {3:F3}", p[39], p[55], source, D(p[57]));
@@ -484,6 +494,7 @@ namespace DualClampExperimentUI
             ProgramReclampLead.IsEnabled = programCouplingEditable;
             ProgramReleaseWait.IsEnabled = programCouplingEditable;
             ProgramReclampWait.IsEnabled = programCouplingEditable;
+            if (IsExternalMode) UpdateExternalState(p, programCouplingEditable);
         }
 
         private void ParseStandaloneState(string response)

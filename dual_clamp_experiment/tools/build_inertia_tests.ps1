@@ -15,6 +15,11 @@ New-Item -ItemType Directory -Force -Path $output, $objects | Out-Null
 $flags = @('/nologo', '/std:c++17', '/EHsc', '/utf-8', '/O2', '/MD', '/DWIN32_LEAN_AND_MEAN',
     '/DNOMINMAX', "/I$(Join-Path (Split-Path $root -Parent) '64位ADS - 相对路径 - 传数组 - 加上手柄\ADS\Include')", "/Fo$objects\")
 # 测试只链接计算和文件记录实现，不链接ADS通信实现或生产入口。
+& $compiler @flags "$PSScriptRoot\test_force_pulse.cpp" "/Fe$output\test_force_pulse.exe"
+if ($LASTEXITCODE -ne 0) { throw 'Pulse test build failed' }
+$debugFlags = @($flags | Where-Object { $_ -ne '/O2' }) + '/Od'
+& $compiler @debugFlags "$PSScriptRoot\test_force_pulse.cpp" "/Fe$output\test_force_pulse_debug.exe"
+if ($LASTEXITCODE -ne 0) { throw 'Debug pulse test build failed' }
 & $compiler @flags "$PSScriptRoot\test_clamp_dynamics.cpp" "/Fe$output\test_clamp_dynamics.exe"
 if ($LASTEXITCODE -ne 0) { throw '动力学测试构建失败' }
 & $compiler @flags "$PSScriptRoot\test_clamp_recording.cpp" "$root\ExperimentStreamRecorder.cpp" `

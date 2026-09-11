@@ -77,7 +77,7 @@ ELSIF G.gen_state = _self_check THEN
 	self_check_();
 ELSIF G.gen_state = _dual_clamp THEN
 	// 旧模式仅在空闲、自检完成等待、完成或中止阶段接受切换。
-	IF (G.program_test_mode = 1) OR (G.program_test_mode = 2) THEN
+	IF (G.program_test_mode = 1) OR (G.program_test_mode = 2) OR (G.program_test_mode = 4) THEN
 		IF (G.dual_clamp_phase = 0) OR (G.dual_clamp_phase = 10) OR
 		   (G.dual_clamp_phase = 11) OR (G.dual_clamp_phase = 13) THEN
 			G.gen_state := _program_test;

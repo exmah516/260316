@@ -5,6 +5,7 @@
 #include "ExperimentStreamRecorder.h"
 #include "ClampCurveBuffer.h"
 #include "ClampDynamics.h"
+#include "ExternalValidation.h"
 
 #include <mutex>
 #include <string>
@@ -36,6 +37,7 @@ public:
 	std::string recording_directory() const;
 	bool recording_archived() const;
 	std::string curve_response(std::uint64_t after, std::uint64_t generation) const;
+	std::string external_curve_response(std::uint64_t after, std::uint64_t generation) const;
 
 private:
 	bool validate_config(const ProgrammedDeliveryConfig& config, std::string& error) const;
@@ -63,10 +65,14 @@ private:
 	clampdynamics::Predictor predictor_;
 	clampdynamics::OperationGate illustration_gate_;
 	clampdynamics::Result last_prediction_;
-	std::array<clampdynamics::Config, 3> mode_dynamics_{};
+	std::array<clampdynamics::Config, 5> mode_dynamics_{};
 	clampillustration::Generator illustration_;
 	clampmodel::CurveBuffer curves_;
+	externalvalidation::CurveBuffer external_curves_;
 	double model_compute_us_ = 0.0;
 	double model_block_span_ms_ = 0.0;
 	bool model_zero_valid_ = false;
+	forcepulse::Guard pulse_guard_;
+	double pulse_compute_us_ = 0.0;
+	ProgrammedDeliveryLiveFrame position_reference_{};
 };

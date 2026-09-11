@@ -596,7 +596,7 @@ IF all_done THEN
 	G.program_test_setup_busy := FALSE;
 	G.program_test_setup_done := FALSE;
 	G.program_test_status_error_id := 0;
-	IF (G.program_test_mode = 1) OR (G.program_test_mode = 2) THEN
+	IF (G.program_test_mode = 1) OR (G.program_test_mode = 2) OR (G.program_test_mode = 4) THEN
 		G.gen_state := _program_test;
 	ELSE
 		G.gen_state := _dual_clamp;

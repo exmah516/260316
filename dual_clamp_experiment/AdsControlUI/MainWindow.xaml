@@ -60,6 +60,7 @@
                     <ComboBoxItem Content="旧双机构对照模式" Tag="legacy"/>
                     <ComboBoxItem Content="导管程序递送测试" Tag="catheter"/>
                     <ComboBoxItem Content="导丝程序递送测试" Tag="guidewire"/>
+                    <ComboBoxItem Content="外源验证模式" Tag="external_validation"/>
                 </ComboBox>
 
                 <!-- 旧模式工具栏选项 -->
@@ -313,6 +314,17 @@
                                 <DockPanel Margin="0,0,0,10">
                                     <TextBlock x:Name="ProgramPanelTitle" Text="程序递送参数配置" FontSize="15" FontWeight="Bold" Foreground="{StaticResource Ink}"/>
                                 </DockPanel>
+                                <Grid x:Name="ExternalParameters" Visibility="Collapsed" Margin="0,0,0,8">
+                                    <Grid.ColumnDefinitions><ColumnDefinition Width="165"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                                    <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+                                    <TextBlock Text="轴6初始位置 (mm)" VerticalAlignment="Center" FontSize="12.5"/>
+                                    <TextBox x:Name="ExternalAxis6PreparePos" Grid.Column="1" Text="451" Height="28" Margin="0,3"/>
+                                    <TextBlock Grid.Row="1" Text="电缸4开值 (WORD)" VerticalAlignment="Center" FontSize="12.5"/>
+                                    <TextBox x:Name="ExternalCylinder4Open" Grid.Row="1" Grid.Column="1" Text="0" Height="28" Margin="0,3"/>
+                                    <TextBlock Grid.Row="2" Text="电缸4闭值 (WORD)" VerticalAlignment="Center" FontSize="12.5"/>
+                                    <TextBox x:Name="ExternalCylinder4Close" Grid.Row="2" Grid.Column="1" Text="500" Height="28" Margin="0,3"/>
+                                    <TextBlock x:Name="ExternalTravelText" Grid.Row="3" Grid.ColumnSpan="2" TextWrapping="Wrap" FontSize="12" Margin="0,6,0,0" Foreground="#475569"/>
+                                </Grid>
                                 <Grid>
                                     <Grid.ColumnDefinitions>
                                         <ColumnDefinition Width="165"/>
@@ -469,6 +481,10 @@
                                     <TextBlock x:Name="ForceTitle" Text="实时轴向力 (N)" FontSize="15" FontWeight="Bold" Foreground="{StaticResource Ink}"/>
                                     <TextBlock x:Name="ForceValueText" Text="未取零" FontSize="11" Foreground="{StaticResource Muted}" Margin="0,2,0,0" TextWrapping="Wrap" MaxWidth="250" HorizontalAlignment="Left"/>
                                     <TextBlock x:Name="CausalStatusText" Text="模型：等待数据" FontSize="10" Foreground="{StaticResource Muted}" TextWrapping="Wrap" MaxWidth="250" HorizontalAlignment="Left"/>
+                                    <CheckBox x:Name="PulseGuardToggle" Content="周期脉冲修正" IsChecked="True"
+                                              FontSize="11" Margin="0,3,0,0"
+                                              Checked="CausalVisibility_Changed" Unchecked="CausalVisibility_Changed"
+                                              ToolTip="先观察三次周期事件，再用最近有效值替代高置信度脉冲。原值与替代标记均保存；取消勾选查看原始曲线。模型2始终使用修正输入。"/>
                                 </StackPanel>
                             </StackPanel>
 
@@ -489,7 +505,7 @@
                                 <Border x:Name="Force2Legend" Background="#FFF7ED" BorderBrush="#FFEDD5" BorderThickness="1" CornerRadius="4" Padding="8,2">
                                     <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
                                         <Ellipse Width="8" Height="8" Fill="#EA580C" Margin="0,0,6,0"/>
-                                        <TextBlock Text="fn2 (N)" FontSize="11.5" FontWeight="SemiBold" Foreground="#C2410C"/>
+                                        <TextBlock x:Name="Force2LegendText" Text="fn2 (N)" FontSize="11.5" FontWeight="SemiBold" Foreground="#C2410C"/>
                                     </StackPanel>
                                 </Border>
                             </StackPanel>
@@ -505,6 +521,7 @@
                                     <Border BorderBrush="#EEF2F6" BorderThickness="0,0,0,1"/>
                                     <Border/>
                                 </UniformGrid>
+                                <Canvas x:Name="ExternalForcePhases" IsHitTestVisible="False" Visibility="Collapsed"/>
                                 <Canvas x:Name="ForceCanvas" Background="Transparent">
                                     <Polyline x:Name="Force1Line" Stroke="#0D9488" StrokeThickness="2.2" StrokeLineJoin="Round"/>
                                     <Polyline x:Name="Force2Line" Stroke="#EA580C" StrokeThickness="2.2" StrokeLineJoin="Round"/>
@@ -551,7 +568,7 @@
                                 <Border x:Name="Torque2Legend" Background="#FAF5FF" BorderBrush="#F3E8FF" BorderThickness="1" CornerRadius="4" Padding="8,2">
                                     <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
                                         <Ellipse Width="8" Height="8" Fill="#9333EA" Margin="0,0,6,0"/>
-                                        <TextBlock Text="ft2 (N)" FontSize="11.5" FontWeight="SemiBold" Foreground="#7E22CE"/>
+                                        <TextBlock x:Name="Torque2LegendText" Text="ft2 (N)" FontSize="11.5" FontWeight="SemiBold" Foreground="#7E22CE"/>
                                     </StackPanel>
                                 </Border>
                             </StackPanel>
@@ -567,6 +584,7 @@
                                     <Border BorderBrush="#EEF2F6" BorderThickness="0,0,0,1"/>
                                     <Border/>
                                 </UniformGrid>
+                                <Canvas x:Name="ExternalTorquePhases" IsHitTestVisible="False" Visibility="Collapsed"/>
                                 <Canvas x:Name="TorqueCanvas" Background="Transparent">
                                     <Polyline x:Name="Torque1Line" Stroke="#2563EB" StrokeThickness="2.2" StrokeLineJoin="Round"/>
                                     <Polyline x:Name="Torque2Line" Stroke="#9333EA" StrokeThickness="2.2" StrokeLineJoin="Round"/>

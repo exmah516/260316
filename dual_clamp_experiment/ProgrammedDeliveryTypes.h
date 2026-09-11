@@ -3,6 +3,7 @@
 #include <array>
 #include "ClampIllustration.h"
 #include "ClampDynamics.h"
+#include "ForcePulseGuard.h"
 #include <cstdint>
 #include <string>
 
@@ -10,8 +11,14 @@ enum class ProgrammedDeliveryMode : std::uint8_t
 {
 	Legacy = 0,
 	Catheter = 1,
-	Guidewire = 2
+	Guidewire = 2,
+	ExternalValidation = 4
 };
+
+inline bool is_catheter_motion(ProgrammedDeliveryMode mode)
+{
+	return mode == ProgrammedDeliveryMode::Catheter || mode == ProgrammedDeliveryMode::ExternalValidation;
+}
 
 enum class ProgrammedDeliveryPhase : std::uint8_t
 {
@@ -69,6 +76,7 @@ struct ProgrammedDeliveryConfig
 
 struct ProgrammedDeliveryLiveFrame
 {
+	bool leftlimit_valid = false;
 	ProgrammedDeliveryMode mode = ProgrammedDeliveryMode::Legacy;
 	ProgrammedDeliveryPhase phase = ProgrammedDeliveryPhase::Idle;
 	std::uint16_t cycle_index = 0;
@@ -79,6 +87,7 @@ struct ProgrammedDeliveryLiveFrame
 	bool selfcheck_busy = false;
 	std::uint32_t status_error_id = 0;
 	std::uint8_t wait_action = 0;
+	std::uint8_t sync_state = 0;
 	std::uint8_t error_source = 0;
 	std::uint8_t error_axis = 0;
 	std::uint8_t error_phase = 0;
@@ -114,6 +123,10 @@ struct ProgrammedDeliveryLiveFrame
 
 struct ProgrammedDeliverySample
 {
+	forcepulse::Result pulse;
+	double pulse_fn_N = 0.0, pulse_ft_N = 0.0, pulse_compute_us = 0.0;
+	double axis1_from_left_mm = 0.0, axis6_from_left_mm = 0.0;
+	bool position_reference_valid = false;
 	// 仅上位机派生数据，不属于PLC传输结构。
 	double model_fn = 0.0, model_ft = 0.0;
 	bool model_valid = false;
@@ -127,6 +140,7 @@ struct ProgrammedDeliverySample
 	std::uint8_t phase = 0;
 	std::uint32_t event_sequence = 0;
 	std::uint16_t cycle_index = 0;
+	std::uint8_t sync_state = 0;
 	double axis1_pos = 0.0, axis1_vel = 0.0, axis1_acc = 0.0;
 	double axis2_pos = 0.0, axis2_vel = 0.0, axis2_acc = 0.0;
 	double axis5_pos = 0.0, axis5_vel = 0.0, axis5_acc = 0.0;

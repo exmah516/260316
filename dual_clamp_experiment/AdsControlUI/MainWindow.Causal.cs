@@ -22,24 +22,28 @@ namespace DualClampExperimentUI
             public double Model2Fn, Model2Ft;
             public bool Model2FnValid, Model2FtValid;
             public bool Valid;
+            public double PulseFn, PulseFt;
+            public bool PulseAvailable, PulseReplaced, PulseLocked;
+            public int PulseStatus;
+            public ulong PulseAgeUs;
         }
         private readonly List<CurveSample> _curvePoints = new List<CurveSample>();
         private ulong _curveCursor, _curveGeneration;
         private double _lastDrawMs;
         private bool _curveGap;
-        private readonly bool[,] _model2Choices = new bool[3, 2];
+        private readonly bool[,] _model2Choices = new bool[5, 2];
         private bool _restoringModel2;
         private int _model2Mode;
-        private readonly int[] _dynamicsSigns = new int[3];
-        private readonly bool[] _dynamicsValidation = new bool[3];
+        private readonly int[] _dynamicsSigns = new int[5];
+        private readonly bool[] _dynamicsValidation = new bool[5];
         private bool _restoringDynamics, _appliedValidation;
         private int _dynamicsMode;
         private void RestoreDynamicsOptions()
         {
             _restoringDynamics = true;
-            _dynamicsMode = CurrentMode == "guidewire" ? 2 : CurrentMode == "catheter" ? 1 : 0;
+            _dynamicsMode = CurrentModeNumber;
             DynamicsSign.SelectedIndex = _dynamicsSigns[_dynamicsMode];
-            DynamicsValidation.IsChecked = _dynamicsValidation[_dynamicsMode];
+            DynamicsValidation.IsChecked = !IsExternalMode && _dynamicsValidation[_dynamicsMode];
             DynamicsConditions.IsChecked = false;
             DynamicsConditions.IsEnabled = DynamicsValidation.IsChecked == true;
             _restoringDynamics = false;
@@ -56,7 +60,7 @@ namespace DualClampExperimentUI
         private void RestoreModel2Visibility()
         {
             _restoringModel2 = true;
-            _model2Mode = CurrentMode == "guidewire" ? 2 : CurrentMode == "catheter" ? 1 : 0;
+            _model2Mode = CurrentModeNumber;
             Model2ForceToggle.IsChecked = _model2Choices[_model2Mode, 0];
             Model2TorqueToggle.IsChecked = _model2Choices[_model2Mode, 1];
             _restoringModel2 = false;
@@ -75,6 +79,7 @@ namespace DualClampExperimentUI
             _curveCursor = _curveGeneration = 0;
             _curveGap = false;
             _curvePoints.Clear();
+            ResetExternalCurves();
             if (CausalForceLine == null) return;
             CausalForceLine.Points.Clear(); CausalTorqueLine.Points.Clear();
             Model2ForceLine.Points.Clear(); Model2TorqueLine.Points.Clear();
@@ -99,19 +104,26 @@ namespace DualClampExperimentUI
             foreach (string item in p[10].Split(';')) {
                 if (item.Length == 0) continue;
                 string[] f = item.Split(',');
-                if (f.Length != 8 && f.Length != 12) continue;
+                if (f.Length != 8 && f.Length != 12 && f.Length != 18) continue;
                 var s = new CurveSample {
                     Sequence = ulong.Parse(f[0], CultureInfo.InvariantCulture),
                     Time = D(f[1]), Fn = D(f[2]), Ft = D(f[3]),
                     CorrectedFn = D(f[4]), CorrectedFt = D(f[5]), Valid = f[6] == "1",
-                    Model2Fn = f.Length == 12 ? D(f[8]) : D(f[2]),
-                    Model2Ft = f.Length == 12 ? D(f[9]) : D(f[3]),
-                    Model2FnValid = f.Length == 12 && f[10] == "1",
-                    Model2FtValid = f.Length == 12 && f[11] == "1"
+                    Model2Fn = f.Length >= 12 ? D(f[8]) : D(f[2]),
+                    Model2Ft = f.Length >= 12 ? D(f[9]) : D(f[3]),
+                    Model2FnValid = f.Length >= 12 && f[10] == "1",
+                    Model2FtValid = f.Length >= 12 && f[11] == "1",
+                    PulseAvailable = f.Length == 18,
+                    PulseFn = f.Length == 18 ? D(f[12]) : D(f[2]),
+                    PulseFt = f.Length == 18 ? D(f[13]) : D(f[3]),
+                    PulseReplaced = f.Length == 18 && f[14] == "1",
+                    PulseStatus = f.Length == 18 ? int.Parse(f[15],CultureInfo.InvariantCulture) : 0,
+                    PulseAgeUs = f.Length == 18 ? ulong.Parse(f[16],CultureInfo.InvariantCulture) : 0,
+                    PulseLocked = f.Length == 18 && f[17] == "1"
                 };
                 if (s.Sequence <= _curveCursor) continue;
                 _curveCursor = s.Sequence;
-                if (new[] {s.Time, s.Fn, s.Ft, s.CorrectedFn, s.CorrectedFt, s.Model2Fn, s.Model2Ft}.Any(
+                if (new[] {s.Time, s.Fn, s.Ft, s.CorrectedFn, s.CorrectedFt, s.Model2Fn, s.Model2Ft, s.PulseFn, s.PulseFt}.Any(
                     x => double.IsNaN(x) || double.IsInfinity(x))) continue;
                 // Never draw a connecting segment over a missing acquisition interval.
                 if (_curvePoints.Count > 0 && (s.Time <= _curvePoints.Last().Time ||
@@ -145,17 +157,27 @@ namespace DualClampExperimentUI
                 + (dynamics ? "\n传感器预测=s*0.025*a/1000 N；显示增量=安装增益*传感器预测，不加截距。"
                     + "\n直接反馈加速度，无差分、滤波或时间平移；ft不补偿。数值有效不代表物理模型已验证。"
                     + "\n状态：" + (p.Length > 14 ? p[14] : "") + "；重置：" + (p.Length > 15 ? p[15] : "") : "");
+            if (_curvePoints.Count > 0 && _curvePoints.Last().PulseAvailable) {
+                var last = _curvePoints.Last();
+                CausalStatusText.Text += "\n脉冲：" + (last.PulseReplaced ? "替代中" :
+                    last.PulseLocked ? "周期已确认" : "观察中")
+                    + " · 近10秒替代 " + _curvePoints.Count(x => x.PulseReplaced) + " 点";
+                if (p.Length > 18)
+                    CausalStatusText.ToolTip += "\n脉冲算法单点最大 " + D(p[18]).ToString("F2",CultureInfo.InvariantCulture) + " μs";
+            }
             DrawCausalCurves();
         }
 
         private void CausalVisibility_Changed(object sender, RoutedEventArgs e)
         {
             if (!_loaded) return;
+            SaveCurveVisibility();
             DrawCausalCurves();
         }
 
         private void DrawCausalCurves()
         {
+            if (_loaded && IsExternalMode) { DrawExternalCurves(); return; }
             if (!_loaded || CurrentMode == "legacy") {
                 if (CausalForceLine != null) CausalForceLine.Visibility = CausalTorqueLine.Visibility = Visibility.Collapsed;
                 if (Model2ForceLine != null) Model2ForceLine.Visibility = Model2TorqueLine.Visibility = Visibility.Collapsed;
@@ -170,16 +192,32 @@ namespace DualClampExperimentUI
             DrawTimed(TorqueCanvas, Torque1Line, CausalTorqueLine, false);
             if (_curvePoints.Count > 0) {
                 var s = _curvePoints.Last();
+                bool cleaned = PulseGuardToggle.IsChecked == true && s.PulseAvailable;
                 ForceValueText.Text = string.Format(CultureInfo.InvariantCulture,
-                    "原始 {0:F4} N   处理 {1:F4} N   t={2:F3} s", s.Fn, s.CorrectedFn, s.Time);
+                    "{3} {0:F4} N   处理 {1:F4} N   t={2:F3} s",
+                    DisplayForce(s,true), DisplayCorrected(s,true), s.Time, cleaned ? "修正" : "原始");
                 TorqueValueText.Text = string.Format(CultureInfo.InvariantCulture,
-                    "原始 {0:F4} N   处理 {1:F4} N", s.Ft, s.CorrectedFt);
+                    "{2} {0:F4} N   处理 {1:F4} N", DisplayForce(s,false), DisplayCorrected(s,false),
+                    cleaned ? "修正" : "原始");
+                if (s.PulseReplaced)
+                    ForceValueText.Text += "\n异常标记 · 历史值 " + (s.PulseAgeUs/1000.0).ToString("F0",CultureInfo.InvariantCulture) + " ms";
                 if (Model2ForceToggle.IsChecked == true)
                     ForceValueText.Text += s.Model2FnValid ? "\n示意有效" : "\n示意未启用/参考不足";
                 if (Model2TorqueToggle.IsChecked == true)
                     TorqueValueText.Text += s.Model2FtValid ? "\n示意有效" : "\n示意未启用/参考不足";
             }
             _lastDrawMs = watch.Elapsed.TotalMilliseconds;
+        }
+
+        private double DisplayForce(CurveSample s, bool axial)
+        {
+            return PulseGuardToggle.IsChecked == true && s.PulseAvailable
+                ? (axial ? s.PulseFn : s.PulseFt) : (axial ? s.Fn : s.Ft);
+        }
+
+        private double DisplayCorrected(CurveSample s, bool axial)
+        {
+            return DisplayForce(s,axial) + (axial ? s.CorrectedFn-s.Fn : s.CorrectedFt-s.Ft);
         }
 
         private void DrawTimed(Canvas canvas, Polyline original, Polyline corrected, bool axial)
@@ -189,7 +227,7 @@ namespace DualClampExperimentUI
             if (_curvePoints.Count == 0) { original.Points.Clear(); corrected.Points.Clear(); illustration.Points.Clear(); return; }
             double min = double.PositiveInfinity, max = double.NegativeInfinity;
             foreach (var s in _curvePoints) {
-                double a = axial ? s.Fn : s.Ft, b = axial ? s.CorrectedFn : s.CorrectedFt;
+                double a = DisplayForce(s,axial), b = DisplayCorrected(s,axial);
                 min = Math.Min(min, Math.Min(a, b)); max = Math.Max(max, Math.Max(a, b));
                 if (illustration.Visibility == Visibility.Visible) {
                     double c = axial ? s.Model2Fn : s.Model2Ft;
@@ -205,8 +243,8 @@ namespace DualClampExperimentUI
             var cPoints = new PointCollection(_curvePoints.Count);
             foreach (var s in _curvePoints) {
                 double x = (s.Time - start) / duration * canvas.ActualWidth;
-                aPoints.Add(new Point(x, (max - (axial ? s.Fn : s.Ft)) / (max - min) * canvas.ActualHeight));
-                bPoints.Add(new Point(x, (max - (axial ? s.CorrectedFn : s.CorrectedFt)) / (max - min) * canvas.ActualHeight));
+                aPoints.Add(new Point(x, (max - DisplayForce(s,axial)) / (max - min) * canvas.ActualHeight));
+                bPoints.Add(new Point(x, (max - DisplayCorrected(s,axial)) / (max - min) * canvas.ActualHeight));
                 cPoints.Add(new Point(x, (max - (axial ? s.Model2Fn : s.Model2Ft)) / (max - min) * canvas.ActualHeight));
             }
             original.Points = aPoints; corrected.Points = bPoints;
@@ -275,7 +313,8 @@ namespace DualClampExperimentUI
                     payload.Add(string.Join(",", (++seq).ToString(CultureInfo.InvariantCulture), row[0],
                         row[7], row[8], (D(row[7]) - D(row[9])).ToString("R", CultureInfo.InvariantCulture),
                         (D(row[8]) - D(row[10])).ToString("R", CultureInfo.InvariantCulture), row[12], row[5])
-                        + (row.Length >= 17 ? "," + string.Join(",", row.Skip(13).Take(4)) : ""));
+                        + (row.Length >= 17 ? "," + string.Join(",", row.Skip(13).Take(4)) : "")
+                        + (row.Length >= 23 ? "," + string.Join(",", row.Skip(17).Take(6)) : ""));
                 }
                 ParseCurveResponse("PROGRAM_CURVES|1|" + (guidewire ? "2|1" : dynamicsReplay ? "1|1" : "1|0")
                     + "|1|1|offline-parity-fixture|0|511|0|" + string.Join(";", payload)
@@ -283,6 +322,17 @@ namespace DualClampExperimentUI
                         + "|computed_physics_unverified|initial|2.85" : ""));
             }
             Dispatcher.BeginInvoke(new Action(() => {
+                if (rows.Length > 0 && rows[0].Length >= 23) {
+                    if (!_curvePoints.Any(x => x.PulseAvailable)) throw new InvalidOperationException("Pulse fields missing");
+                    var probe = _curvePoints.FirstOrDefault(x => x.PulseReplaced);
+                    if (probe != null) {
+                        PulseGuardToggle.IsChecked = true;
+                        if (DisplayForce(probe,true) != probe.PulseFn) throw new InvalidOperationException("Pulse display");
+                        PulseGuardToggle.IsChecked = false;
+                        if (DisplayForce(probe,true) != probe.Fn) throw new InvalidOperationException("Raw display");
+                        PulseGuardToggle.IsChecked = true;
+                    }
+                }
                 UpdateLayout(); DrawCausalCurves();
                 UpdateLayout(); DrawCausalCurves();
                 int snapshot = Array.IndexOf(args, "--curve-snapshot");
@@ -300,6 +350,8 @@ namespace DualClampExperimentUI
                         + ",\"model2_fn_visible\":" + (Model2ForceToggle.IsChecked == true ? "true" : "false")
                         + ",\"model2_ft_visible\":" + (Model2TorqueToggle.IsChecked == true ? "true" : "false")
                         + ",\"dynamics_ui_tests_passed\":true,\"hardware_connected\":false"
+                        + ",\"pulse_fields_present\":" + (_curvePoints.Any(x => x.PulseAvailable) ? "true" : "false")
+                        + ",\"pulse_replaced_visible_points\":" + _curvePoints.Count(x => x.PulseReplaced)
                         + ",\"dynamics_sign\":" + signReplay
                         + ",\"validation_mode\":" + (validationReplay ? "true" : "false") + "}", System.Text.Encoding.UTF8);
                     Close();

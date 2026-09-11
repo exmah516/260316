@@ -15,6 +15,7 @@ struct ExperimentStreamSample
 	std::uint8_t phase = 0;
 	std::uint32_t event_sequence = 0;
 	std::uint16_t cycle_index = 0;
+	std::uint8_t sync_state = 0;
 	double axis1_pos = 0.0, axis1_vel = 0.0, axis1_acc = 0.0;
 	double axis2_pos = 0.0, axis2_vel = 0.0, axis2_acc = 0.0;
 	double axis5_pos = 0.0, axis5_vel = 0.0, axis5_acc = 0.0;
@@ -53,7 +54,8 @@ public:
 	bool request_zero();
 	bool invalidate_zero();
 	bool read_status(ExperimentStreamStatus& status);
-	bool read_block(int slot, std::vector<ExperimentStreamSample>& samples, std::uint32_t& sequence);
+	bool read_block(int slot, std::vector<ExperimentStreamSample>& samples, std::uint32_t& sequence,
+		bool external_validation = false);
 	bool acknowledge_block(int slot, std::uint32_t sequence);
 	bool read_zero_samples(std::vector<std::array<double, 4>>& samples);
 

@@ -111,7 +111,8 @@ namespace
 				if (text == "legacy") config.mode = ProgrammedDeliveryMode::Legacy;
 				else if (text == "catheter") config.mode = ProgrammedDeliveryMode::Catheter;
 				else if (text == "guidewire") config.mode = ProgrammedDeliveryMode::Guidewire;
-				else { error = "mode必须是legacy、catheter或guidewire"; return false; }
+				else if (text == "external_validation") config.mode = ProgrammedDeliveryMode::ExternalValidation;
+				else { error = "mode必须是legacy、catheter、guidewire或external_validation"; return false; }
 				continue;
 		}
 		if (key == "record_name")
@@ -356,10 +357,10 @@ std::string DualClampPipeServer::handle_command(DualClampController& controller,
 
 std::string DualClampPipeServer::handle_program_command(ProgrammedDeliveryController& controller, const std::string& command)
 {
-	if (command.rfind("PROGRAM_CURVES|", 0) == 0)
+	if (command.rfind("PROGRAM_CURVES|", 0) == 0 || command.rfind("PROGRAM_EXTERNAL_CURVES|", 0) == 0)
 	{
 		std::uint64_t after = 0, generation = 0;
-		std::istringstream fields(command.substr(15));
+		std::istringstream fields(command.substr(command.find('|') + 1));
 		std::string first, second;
 		if (!std::getline(fields, first, '|') || !std::getline(fields, second, '|'))
 			return "ERROR|invalid curve cursor";
@@ -368,7 +369,8 @@ std::string DualClampPipeServer::handle_program_command(ProgrammedDeliveryContro
 				second.find_first_not_of("0123456789") != std::string::npos) return "ERROR|invalid curve cursor";
 			after = std::stoull(first); generation = std::stoull(second);
 		} catch (...) { return "ERROR|invalid curve cursor"; }
-		return controller.curve_response(after, generation);
+		return command.rfind("PROGRAM_EXTERNAL_CURVES|", 0) == 0
+			? controller.external_curve_response(after, generation) : controller.curve_response(after, generation);
 	}
 	if (command == "GET_PROGRAM")
 	{
@@ -414,6 +416,10 @@ std::string DualClampPipeServer::handle_program_command(ProgrammedDeliveryContro
 			<< (force.valid ? 1 : 0) << '|' << force.side1.force_cal_delta_n << '|' << force.side1.ft_cal_delta_n << '|'
 			<< force.side2.force_cal_delta_n << '|' << force.side2.ft_cal_delta_n << '|'
 			<< (live.selfcheck_busy ? 1 : 0);
+		if (live.mode == ProgrammedDeliveryMode::ExternalValidation)
+			out << '|' << unsigned(live.sync_state) << '|' << force.side1.force_decoupled_delta_n
+				<< '|' << force.side1.torque_decoupled_delta_nmm << '|' << force.side2.force_decoupled_delta_n
+				<< '|' << force.side2.torque_decoupled_delta_nmm;
 		return out.str();
 	}
 	if (command == "PROGRAM_ZERO_STATUS") return handle_program_command(controller, "GET_PROGRAM");

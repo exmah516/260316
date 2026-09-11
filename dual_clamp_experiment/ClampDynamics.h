@@ -132,12 +132,12 @@ private:
     const char* pending_reset_ = "initial";
 };
 
-inline std::string snapshot(bool guidewire, const Config& c) {
+inline std::string snapshot(bool guidewire, const Config& c, bool external_validation = false) {
     std::ostringstream out;
     out << std::setprecision(17)
         << "{\"version\":\"" << kVersion << "\",\"experimental\":true,\"available\":"
         << (valid_config(c) ? "true" : "false")
-        << ",\"application_mode\":\"" << (guidewire ? "guidewire" : "catheter")
+        << ",\"application_mode\":\"" << (external_validation ? "external_validation" : guidewire ? "guidewire" : "catheter")
         << "\",\"parameter_source\":\"assumed_sensor_load_path\",\"cross_mode_preview\":false"
         << ",\"force_definition\":\"installed_delta_N; no decoupling\""
         << ",\"formula\":\"d_sensor=s*0.025*a_mm_s2*0.001; d_display=gain*d_sensor; fn_processed=fn_original-gate*d_display\""

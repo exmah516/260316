@@ -86,6 +86,6 @@ public:
     }
 };
 inline const char* snapshot() {
-    return R"({"version":"target-illustration-v2","purpose":"target_illustration","attenuation":0.8,"identified":false,"hold_after_gate_s":0.120,"fade_out_s":0.040,"transition":"cubic smoothstep from current weight","reference_age_s":[0.010,0.100],"reference_min_samples":5,"max_gap_s":0.003,"force_definition":"installed_delta_N; same as displayed original","gate":"existing command and phase gate","reentry":"preserve reference and current weight during hold/fade","warning":"Not dynamics output, external force or performance evidence; may suppress real external-force changes","training_target":false})";
+    return R"({"version":"target-illustration-v3-pulse-input","purpose":"target_illustration","attenuation":0.8,"identified":false,"hold_after_gate_s":0.120,"fade_out_s":0.040,"transition":"cubic smoothstep from current weight","reference_age_s":[0.010,0.100],"reference_min_samples":5,"max_gap_s":0.003,"force_definition":"installed_delta_N","input_preprocessing":"experiment.json:model2_input; CSV:fn_input_N,ft_input_N","gate":"existing command and phase gate","reentry":"preserve reference and current weight during hold/fade","warning":"Not dynamics output, external force or performance evidence; may suppress real external-force changes","training_target":false})";
 }
 }

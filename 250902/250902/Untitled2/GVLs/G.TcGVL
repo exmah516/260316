@@ -189,7 +189,7 @@ VAR_GLOBAL
 	dual_clamp_sample_cylinder4	: ARRAY[0..32767] OF WORD;
 
 	// 程序递送测试接口，与旧 dual_clamp_* 接口完全独立。
-	// program_test_mode: 0=旧双机构模式，1=导管，2=导丝。
+	// program_test_mode: 0=旧双机构模式，1=导管，2=导丝，4=外源验证；记录来源3保留给独立记录。
 	program_test_mode			: USINT := 0;
 	program_test_setup_req		: BOOL := FALSE;
 	program_test_start_req		: BOOL := FALSE;
@@ -233,7 +233,8 @@ VAR_GLOBAL
 	program_test_status_error_id : UDINT := 0;
 	// 等待状态：0=无，1=等待释放，2=等待重新夹紧。
 	program_test_wait_action : USINT := 0;
-	// 运动错误上下文：来源1=准备，2=前向，3=回退，4=最终前向。
+	program_test_sync_state : USINT := 0; // 0独立保持，1等待耦合，2已耦合，3等待解除，4已解除
+	// 运动错误上下文：来源1=准备，2=前向，3=回退，4=最终前向，5=耦合，6=解除。
 	program_test_error_source : USINT := 0;
 	program_test_error_axis : USINT := 0;
 	program_test_error_phase : USINT := 0;
@@ -257,6 +258,7 @@ VAR_GLOBAL
 	program_test_sample_phase	: ARRAY[0..32767] OF USINT;
 	program_test_sample_event_sequence : ARRAY[0..32767] OF UDINT;
 	program_test_sample_cycle_index : ARRAY[0..32767] OF UINT;
+	program_test_sample_sync_state : ARRAY[0..32767] OF USINT;
 	program_test_sample_axis1_pos : ARRAY[0..32767] OF LREAL;
 	program_test_sample_axis1_vel : ARRAY[0..32767] OF LREAL;
 	program_test_sample_axis1_acc : ARRAY[0..32767] OF LREAL;
@@ -291,13 +293,14 @@ VAR_GLOBAL
 	experiment_record_overflow	: BOOL := FALSE;
 	experiment_record_total_count : UDINT := 0;
 	experiment_record_error_id	: UDINT := 0;
-	experiment_record_source_mode : USINT := 0; // 0=旧双机构，1=导管，2=导丝，3=独立记录
+	experiment_record_source_mode : USINT := 0; // 0=旧双机构，1=导管，2=导丝，3=独立记录，4=外源验证
 
 	experiment_record_block0_index : ARRAY[0..511] OF UDINT;
 	experiment_record_block0_time_us : ARRAY[0..511] OF ULINT;
 	experiment_record_block0_phase : ARRAY[0..511] OF USINT;
 	experiment_record_block0_event_sequence : ARRAY[0..511] OF UDINT;
 	experiment_record_block0_cycle_index : ARRAY[0..511] OF UINT;
+	experiment_record_block0_sync_state : ARRAY[0..511] OF USINT;
 	experiment_record_block0_axis1_pos : ARRAY[0..511] OF LREAL;
 	experiment_record_block0_axis1_vel : ARRAY[0..511] OF LREAL;
 	experiment_record_block0_axis1_acc : ARRAY[0..511] OF LREAL;
@@ -327,6 +330,7 @@ VAR_GLOBAL
 	experiment_record_block1_phase : ARRAY[0..511] OF USINT;
 	experiment_record_block1_event_sequence : ARRAY[0..511] OF UDINT;
 	experiment_record_block1_cycle_index : ARRAY[0..511] OF UINT;
+	experiment_record_block1_sync_state : ARRAY[0..511] OF USINT;
 	experiment_record_block1_axis1_pos : ARRAY[0..511] OF LREAL;
 	experiment_record_block1_axis1_vel : ARRAY[0..511] OF LREAL;
 	experiment_record_block1_axis1_acc : ARRAY[0..511] OF LREAL;

@@ -139,7 +139,8 @@ bool ExperimentStreamAds::read_status(ExperimentStreamStatus& status)
 	return true;
 }
 
-bool ExperimentStreamAds::read_block(int slot, std::vector<ExperimentStreamSample>& samples, std::uint32_t& sequence)
+bool ExperimentStreamAds::read_block(int slot, std::vector<ExperimentStreamSample>& samples, std::uint32_t& sequence,
+	bool external_validation)
 {
 	if (slot < 0 || slot > 1) return false;
 	const int plc_slot = slot + 1;
@@ -197,6 +198,9 @@ bool ExperimentStreamAds::read_block(int slot, std::vector<ExperimentStreamSampl
 	};
 	if (!comm_.ADSReadSum(symbols.data(), lengths.data(), outputs.data(), static_cast<unsigned long>(symbols.size()))) return false;
 
+	std::vector<std::uint8_t> sync(count, 0);
+	if (external_validation && !read_array(comm_, block_symbol(slot, "sync_state"), count, sync)) return false;
+
 	std::uint32_t final_sequence = 0;
 	bool final_ready = false;
 	if (!comm_.ADSRead(("G.experiment_record_block_sequence[" + std::to_string(plc_slot) + "]").c_str(), sizeof(final_sequence), &final_sequence) ||
@@ -208,6 +212,7 @@ bool ExperimentStreamAds::read_block(int slot, std::vector<ExperimentStreamSampl
 	{
 		auto& s = samples[i];
 		s.index = index[i]; s.time_us = time[i]; s.phase = phase[i]; s.event_sequence = event[i]; s.cycle_index = cycle[i];
+		s.sync_state = sync[i];
 		s.axis1_pos = a1p[i]; s.axis1_vel = a1v[i]; s.axis1_acc = a1a[i]; s.axis2_pos = a2p[i]; s.axis2_vel = a2v[i]; s.axis2_acc = a2a[i];
 		s.axis5_pos = a5p[i]; s.axis5_vel = a5v[i]; s.axis5_acc = a5a[i]; s.axis6_pos = a6p[i]; s.axis6_vel = a6v[i]; s.axis6_acc = a6a[i];
 		s.axis7_pos = a7p[i]; s.axis7_vel = a7v[i]; s.axis7_acc = a7a[i];

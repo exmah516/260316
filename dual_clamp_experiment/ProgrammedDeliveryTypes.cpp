@@ -6,6 +6,7 @@ const char* programmed_delivery_mode_name(ProgrammedDeliveryMode mode)
 	{
 	case ProgrammedDeliveryMode::Legacy: return "legacy";
 	case ProgrammedDeliveryMode::Catheter: return "catheter";
+	case ProgrammedDeliveryMode::ExternalValidation: return "external_validation";
 	case ProgrammedDeliveryMode::Guidewire: return "guidewire";
 	default: return "unknown";
 	}

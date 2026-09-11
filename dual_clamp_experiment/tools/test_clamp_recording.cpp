@@ -5,12 +5,114 @@
 #include <fstream>
 #include <iostream>
 #include <stdexcept>
+#include <algorithm>
+#include <chrono>
+#include <sstream>
 
 void check(bool result, const std::string& message) {
     if (!result) throw std::runtime_error(message);
 }
-int main() {
+std::vector<std::string> fields(const std::string& line) {
+    std::vector<std::string> out;
+    std::istringstream stream(line);
+    std::string field;
+    while(std::getline(stream,field,',')) out.push_back(field);
+    if(!line.empty() && line.back()==',') out.emplace_back();
+    return out;
+}
+void pulse_recording_test() {
+    for(auto mode:{ProgrammedDeliveryMode::Catheter,ProgrammedDeliveryMode::Guidewire}) {
+        ExperimentStreamRecorder recorder;
+        ProgrammedDeliveryConfig config;
+        config.mode=mode;
+        config.return_acceleration_mm_s2=600;
+        ProgrammedDeliveryLiveFrame reference;
+        reference.valid=reference.leftlimit_valid=true;
+        reference.leftlimit_axis1_abs_mm=-90;
+        reference.leftlimit_axis6_abs_mm=20;
+        recorder.set_program_context(config,reference);
+        std::string error;
+        check(recorder.begin(mode==ProgrammedDeliveryMode::Catheter?"catheter":"guidewire",
+            "OFFLINE_PULSE_POSITION_TEST",error),error);
+        ForceZeroState zero;
+        zero.done=zero.valid=true;
+        zero.value={-1000,-800,-900,-700};
+        forcepulse::Guard guard;
+        std::vector<ProgrammedDeliverySample> block;
+        std::vector<double> append_us;
+        const auto begin=std::chrono::steady_clock::now();
+        for(int i=0;i<12000;++i) {
+            ProgrammedDeliverySample s;
+            s.sample_index=i;s.plc_time_us=i*1000ULL;s.phase=6;s.cycle_index=1;
+            s.axis1_pos=-75+i*.0001;s.axis2_pos=12;s.axis6_pos=45;s.axis7_pos=34;
+            s.position_reference_valid=i!=11999;
+            s.axis1_from_left_mm=s.axis1_pos+90;s.axis6_from_left_mm=25;
+            s.fn1=-1000;s.ft1=-800;s.fn2=-900;s.ft2=-700;
+            const bool pulse=i>=1000&&(i-1000)%2370<60;
+            if(pulse) {s.fn1+=130;s.ft1+=110;s.fn2+=130;s.ft2+=110;}
+            const bool wire=mode==ProgrammedDeliveryMode::Guidewire;
+            s.pulse=guard.update(s.plc_time_us,s.sample_index,wire?s.fn2:s.fn1,wire?s.ft2:s.ft1,true);
+            const auto clean=forcecal::calculate(wire?s.fn1:short(s.pulse.fn),
+                wire?s.ft1:short(s.pulse.ft),wire?short(s.pulse.fn):s.fn2,
+                wire?short(s.pulse.ft):s.ft2,zero.value,true);
+            const auto& side=wire?clean.side2:clean.side1;
+            s.pulse_fn_N=side.force_cal_delta_n;s.pulse_ft_N=side.ft_cal_delta_n;
+            block.push_back(s);
+            if(block.size()==512 || i==11999) {
+                const auto start=std::chrono::steady_clock::now();
+                check(recorder.append_program(block,0,mode,zero,error),error);
+                append_us.push_back(std::chrono::duration<double,std::micro>(
+                    std::chrono::steady_clock::now()-start).count());
+                block.clear();
+            }
+        }
+        check(recorder.finalize("Completed","OFFLINE SYNTHETIC ONLY",zero,error),error);
+        const double wall_ms=std::chrono::duration<double,std::milli>(
+            std::chrono::steady_clock::now()-begin).count();
+        const auto dir=std::filesystem::u8path(recorder.directory());
+        std::ifstream file(dir/"samples_1khz.csv");
+        std::string line;
+        std::getline(file,line);
+        auto header=fields(line);
+        const auto col=[&](const char* name){
+            auto it=std::find(header.begin(),header.end(),name);
+            check(it!=header.end(),std::string("missing column ")+name);
+            return std::size_t(it-header.begin());
+        };
+        unsigned replaced=0,index=0;
+        while(std::getline(file,line)) {
+            auto f=fields(line);
+            check(f.size()==header.size(),"column count");
+            check(std::stoul(f[col("sample_index")])==index,"index");
+            check(std::stoll(f[col("plc_time_us")])==index*1000LL,"timestamp");
+            check(std::stod(f[col("record_axis2_nc_deg")])==12,"axis2 coordinate");
+            check(std::stod(f[col("record_axis7_nc_deg")])==34,"axis7 coordinate");
+            if(index<11999) check(std::abs(std::stod(f[col("axis1_from_left_mm")])-(15+index*.0001))<1e-8,"left reference");
+            else check(f[col("axis1_from_left_mm")].empty()&&f[col("axis6_from_left_mm")].empty(),"invalid reference blank");
+            const int original=mode==ProgrammedDeliveryMode::Catheter?-1000:-900;
+            const bool pulse=index>=1000&&(index-1000)%2370<60;
+            check(std::stoi(f[col(mode==ProgrammedDeliveryMode::Catheter?"fn1_raw":"fn2_raw")])==
+                original+(pulse?130:0),"raw channel unchanged");
+            if(f[col("pulse_replaced")]=="1") {
+                ++replaced;
+                check(std::stod(f[col("fn_despiked_N")])==0,"clean force");
+                check(std::stoul(f[col("pulse_source_index")])<index,"historical source");
+            }
+            ++index;
+        }
+        check(index==12000&&replaced==120,"record replacement count");
+        std::ifstream meta(dir/"experiment.json");
+        std::string text((std::istreambuf_iterator<char>(meta)),{});
+        check(text.find("\"return_acceleration_mm_s2\": 600")!=std::string::npos,"settings saved");
+        std::cout<<"PULSE_RECORD "<<dir.u8string()<<" points=12000 total_ms="<<wall_ms
+                 <<" append_max_us="<<*std::max_element(append_us.begin(),append_us.end())
+                 <<" samples_bytes="<<std::filesystem::file_size(dir/"samples_1khz.csv")<<'\n';
+    }
+}
+int main(int argc,char**argv) {
     try {
+        if(argc>1&&std::string(argv[1])=="--pulse-only") {pulse_recording_test();return 0;}
+        pulse_recording_test();
         for (auto mode : {ProgrammedDeliveryMode::Catheter, ProgrammedDeliveryMode::Guidewire})
         for (bool validation : {false, true})
         for (double sign : {1.0, -1.0}) {

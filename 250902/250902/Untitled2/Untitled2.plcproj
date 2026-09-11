@@ -55,6 +55,9 @@
     <Compile Include="POUs\ExperimentRecorder.TcPOU">
       <SubType>Code</SubType>
     </Compile>
+    <Compile Include="POUs\ExternalValidationSync.TcPOU">
+      <SubType>Code</SubType>
+    </Compile>
     <Compile Include="POUs\ProgrammedDeliveryExperiment.TcPOU">
       <SubType>Code</SubType>
     </Compile>
