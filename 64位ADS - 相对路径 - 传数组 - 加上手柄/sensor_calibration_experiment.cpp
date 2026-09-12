@@ -924,6 +924,75 @@ namespace
 			!nearly_equal(routing_ff.force_587_f, frozen_587_f, 1e-12),
 			"快退结束后582与587恢复实时映射");
 
+		// 使用未打开的手柄离线验证恒力，不连接设备或下发实际力。
+		for (GuidewireMode mode : { GuidewireMode::None, GuidewireMode::Independent, GuidewireMode::Cooperative })
+		{
+			for (double bias : { routing_cfg.handle_587_outward_force_n, -routing_cfg.handle_587_outward_force_n })
+			{
+				ForceFeedbackState bias_ff;
+				process_force_feedback(
+					bias_ff, ForceSampleFrame{},
+					unopened_guidewire_handle, unopened_catheter_handle,
+					mode, false, false, false, false, false, false, 0, 0,
+					routing_cfg, direct_cfg, ForceCalibrationState{}, bias);
+				check(nearly_equal(bias_ff.force_582_f, bias, 1e-12) &&
+					nearly_equal(bias_ff.force_587_f, 0.0, 1e-15) &&
+					nearly_equal(bias_ff.force_582_n, 0.0, 1e-15),
+					"各模式正反恒力只作用物理587，无需激活、标零或有效力采样");
+
+				process_force_feedback(
+					bias_ff, ForceSampleFrame{},
+					unopened_guidewire_handle, unopened_guidewire_handle,
+					mode, false, false, false, false, false, false, 0, 0,
+					routing_cfg, direct_cfg, ForceCalibrationState{}, bias);
+				check(nearly_equal(bias_ff.force_582_f, bias, 1e-12) &&
+					nearly_equal(bias_ff.force_587_f, bias, 1e-12),
+					"单手柄物理587在各模式保留当前语义恒力");
+
+				const double bias_582 = bias < 0.0
+					? -routing_cfg.handle_582_outward_force_n : routing_cfg.handle_582_outward_force_n;
+				process_force_feedback(
+					bias_ff, ForceSampleFrame{},
+					unopened_guidewire_handle, unopened_catheter_handle,
+					mode, false, false, false, false, false, false, 0, 0,
+					routing_cfg, direct_cfg, ForceCalibrationState{}, bias, bias_582);
+				check(nearly_equal(bias_ff.force_582_f, bias, 1e-12) &&
+					nearly_equal(bias_ff.force_587_f, bias_582, 1e-12) &&
+					nearly_equal(bias_ff.force_587_n, 0.0, 1e-15),
+					"物理582与587同时输出正反恒力，无需激活、标零或有效力采样");
+
+				process_force_feedback(
+					bias_ff, ForceSampleFrame{},
+					unopened_catheter_handle, unopened_catheter_handle,
+					mode, false, false, false, false, false, false, 0, 0,
+					routing_cfg, direct_cfg, ForceCalibrationState{}, bias, bias_582);
+				check(nearly_equal(bias_ff.force_582_f, bias_582, 1e-12) &&
+					nearly_equal(bias_ff.force_587_f, bias_582, 1e-12),
+					"单手柄物理582在各模式保留当前语义恒力");
+
+				bias_ff.enabled = true;
+				process_force_feedback(
+					bias_ff, ForceSampleFrame{},
+					unopened_guidewire_handle, unopened_catheter_handle,
+					mode, false, false, false, false, false, false, 0, 0,
+					routing_cfg, direct_cfg, ForceCalibrationState{}, bias, bias_582);
+				check(nearly_equal(bias_ff.force_582_f, 0.0, 1e-15) &&
+					nearly_equal(bias_ff.force_587_f, 0.0, 1e-15),
+					"打开力反馈即取消恒力，反馈条件未满足时不回落到恒力");
+
+				process_force_feedback(
+					bias_ff, routing_sample,
+					unopened_guidewire_handle, unopened_catheter_handle,
+					mode, true, false, false, false, false, false, 0, 0,
+					routing_cfg, direct_cfg, direct_zero, bias, bias_582);
+				check(nearly_equal(bias_ff.force_582_f,
+					mode == GuidewireMode::Independent ? 0.0 : expected_axial_n, 1e-12) &&
+					nearly_equal(bias_ff.force_587_f,
+						mode == GuidewireMode::None ? 0.0 : expected_guidewire_axial_n, 1e-12),
+					"有效传感器反馈不叠加结构补偿恒力");
+			}
+		}
+
 		ForceCalibrationConfig locked_gravity_cfg = direct_cfg;
 		locked_gravity_cfg.gravity_comp_enabled = true;
 		locked_gravity_cfg.gravity_comp_validated = false;

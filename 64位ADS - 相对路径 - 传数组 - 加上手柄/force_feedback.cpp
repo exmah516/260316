@@ -16,7 +16,9 @@ void process_force_feedback(
 	int loop_count,
 	const ControlConfig& cfg,
 	const ForceCalibrationConfig& cal_cfg,
-	const ForceCalibrationState& cal_state)
+	const ForceCalibrationState& cal_state,
+	double handle_587_bias_force_n,
+	double handle_582_bias_force_n)
 {
 	(void)loop_count;
 	ForceOutputCmd out_cmd;
@@ -155,6 +157,19 @@ void process_force_feedback(
 		ff.freeze_587_active = false;
 		out_cmd.force_587_f = 0.0;
 		out_cmd.force_587_n = 0.0;
+	}
+
+	// 恒力按物理序列号分配，不随导管/导丝角色切换，也不与传感器反馈叠加。
+	if (!ff.enabled)
+	{
+		if (catheter_feedback_handle.serial() == 587)
+			out_cmd.force_582_f = handle_587_bias_force_n;
+		else if (catheter_feedback_handle.serial() == 582)
+			out_cmd.force_582_f = handle_582_bias_force_n;
+		if (guidewire_feedback_handle.serial() == 587)
+			out_cmd.force_587_f = handle_587_bias_force_n;
+		else if (guidewire_feedback_handle.serial() == 582)
+			out_cmd.force_587_f = handle_582_bias_force_n;
 	}
 
 	// 单手柄模式的两个逻辑角色会指向同一对象，此时只下发当前模式对应的一条命令。

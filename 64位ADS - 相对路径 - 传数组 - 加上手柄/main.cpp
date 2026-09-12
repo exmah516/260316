@@ -177,11 +177,19 @@ int main(int argc, char* argv[])
 	vis_server.start();
 
 	bool axis1_handle_ready = handle_axis1.init();
+	if (handle_axis1.serial() == physical_handle_587_serial)
+		handle_axis1.setforce_axis(cfg.handle_587_outward_force_n, cfg.axial_force_axis, 0.0);
+	else if (handle_axis1.serial() == physical_handle_582_serial)
+		handle_axis1.setforce_axis(cfg.handle_582_outward_force_n, cfg.axial_force_axis, 0.0);
 	if (!axis1_handle_ready)
 	{
 		std::cout << "手柄初始化未就绪，序列号: " << serial_axis1_handle << "，将在后台持续重试。" << std::endl;
 	}
 	const bool axis6_handle_ready_init = handle_axis6.init();
+	if (handle_axis6.serial() == physical_handle_587_serial)
+		handle_axis6.setforce_axis(cfg.handle_587_outward_force_n, cfg.axial_force_axis, 0.0);
+	else if (handle_axis6.serial() == physical_handle_582_serial)
+		handle_axis6.setforce_axis(cfg.handle_582_outward_force_n, cfg.axial_force_axis, 0.0);
 	bool axis6_handle_ready = axis6_handle_ready_init;
 	if (!axis6_handle_ready)
 	{
@@ -930,7 +938,6 @@ int main(int argc, char* argv[])
 	startup_smoothing_bypass = false;
 
 	std::cout << "力反馈：关闭（按 F 键切换）。" << std::endl;
-	clear_force_output();
 
 	bool force_tcp_zero_wait_logged = false;
 	// TCP 采集卡是力输入源，不再与任何磁盘记录开关绑定。
@@ -4752,6 +4759,9 @@ int main(int argc, char* argv[])
 			planned_return.phase = PlannedReturnPhase::AwaitHandoffApplied;
 		}
 
+		// 两只手柄的恒力均按当前实际模式的递送/撤出方向换向。
+		const bool bias_reverse = guidewire_mode == GuidewireMode::Independent
+			? axis6_effective_reverse_pressed : axis1_reverse_pressed;
 		process_force_feedback(
 			ff,
 			force_sample,
@@ -4769,7 +4779,9 @@ int main(int argc, char* argv[])
 			loop_count,
 			cfg,
 			cal_cfg,
-			cal_state);
+			cal_state,
+			bias_reverse ? -cfg.handle_587_outward_force_n : cfg.handle_587_outward_force_n,
+			bias_reverse ? -cfg.handle_582_outward_force_n : cfg.handle_582_outward_force_n);
 
 		// 力过渡专用表只保存复现实验所需的精简字段，纯净力与统一 force.csv 语义一致。
 		if (ft_exp.active() && experiment_recorder.force_transition_log_running())

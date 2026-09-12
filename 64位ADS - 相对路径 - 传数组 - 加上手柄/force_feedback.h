@@ -19,7 +19,9 @@ void process_force_feedback(
 	int loop_count,
 	const ControlConfig& cfg,
 	const ForceCalibrationConfig& cal_cfg,
-	const ForceCalibrationState& cal_state);
+	const ForceCalibrationState& cal_state,
+	double handle_587_bias_force_n = 0.0,
+	double handle_582_bias_force_n = 0.0);
 
 // 保留标定自检等旧调用方的兼容入口；旧路径不触发夹爪保持。
 void process_force_feedback(

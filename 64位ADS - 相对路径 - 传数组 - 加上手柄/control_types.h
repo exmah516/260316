@@ -92,6 +92,9 @@ struct ControlConfig
 	// 力反馈输出配置：轴向力映射到 SDK 三轴力向量中的一个轴。
 	int axial_force_axis = 1;
 	double axial_force_sign = -1.0;
+	// 两只物理手柄的结构补偿恒力：正值向外推，撤出模式取反，开启力反馈后停用。
+	double handle_587_outward_force_n = 0.05;
+	double handle_582_outward_force_n = 0.05;
 
 	// 按键映射来自 buttons2 位掩码。
 	unsigned char btn_b0 = 0x01;
@@ -487,7 +490,7 @@ struct CrawlState
 
 struct ForceFeedbackState
 {
-	// 力反馈开关：F=ON 时允许输出，F=OFF 时强制双手柄归零。
+	// 力反馈开关：F=ON 时使用传感器反馈，F=OFF 时仅保留指定手柄的结构补偿恒力。
 	bool enabled = false;
 	bool clamp_hold_enabled = true;
 	// 当前输出命令缓存（用于调试与冻结保持）。
