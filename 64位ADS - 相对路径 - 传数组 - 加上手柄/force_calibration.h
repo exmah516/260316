@@ -7,8 +7,8 @@ namespace force_direct_calibration
 	constexpr double counts_per_volt = 1000.0;
 	constexpr double ft_1_slope_n_per_count = 0.000703683250522;
 	constexpr double ft_1_intercept_n = 0.017083888668;
-	constexpr double fn_1_slope_n_per_count = 0.000614437208097;
-	constexpr double fn_1_intercept_n = 0.508483950049;
+	constexpr double fn_1_slope_n_per_count = 0.000319519429;
+	constexpr double fn_1_intercept_n = -0.04012571;
 	constexpr double fn_2_slope_n_per_count = 0.001134444473;
 	constexpr double fn_2_intercept_n = 0.87021858;
 	constexpr double ft_2_slope_n_per_count = 0.000133373639;

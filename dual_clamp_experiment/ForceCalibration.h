@@ -5,7 +5,7 @@
 namespace forcecal
 {
 // 两级标定和串扰解耦的统一常量，所有实时显示与CSV记录均使用这里的定义。
-inline constexpr double kFn1SensorSlopeNPerCount = 0.000614437208097;
+inline constexpr double kFn1SensorSlopeNPerCount = 0.000319519429;
 inline constexpr double kFt1SensorSlopeNPerCount = 0.000703683250522;
 inline constexpr double kFn2SensorSlopeNPerCount = 0.001134444473;
 inline constexpr double kFt2SensorSlopeNPerCount = 0.000133373639;
