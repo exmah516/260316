@@ -116,8 +116,8 @@ struct ControlConfig
 	double axis3_delivery_release_hysteresis_mm = 2.0;
 	double guidewire_entry_axis6_from_left_max_mm = 667.0;
 	// 普通导管正向递送中，axis1 每次计划回退后前 10 mm 手柄输入的附加映射量。
-	// 0 表示关闭；默认 1 mm，UI 与内部均限制在 [0, 5] mm。
-	double axis1_post_return_lead_mm = 1.0;
+	// 0 表示关闭；默认 4 mm，UI 与内部均限制在 [0, 5] mm。
+	double axis1_post_return_lead_mm = 4.0;
 	double axis1_post_return_lead_limit_mm = 5.0;
 	double axis1_post_return_mapping_span_mm = 10.0;
 	// axis6 距自身左限位的上位机内部软限位。达到预测越限条件后仅锁止上位机链路，
@@ -133,6 +133,8 @@ struct ControlConfig
 	DWORD spacing_recovery_exit_settle_ms = 100;
 	DWORD spacing_recovery_exit_timeout_ms = 2000;
 	unsigned short spacing_recovery_cyl4_release = 100;
+	// 582 手柄屈曲恢复按键：0=禁用，0x01=B0，0x20=B5。
+	unsigned char spacing_recovery_button_mask = 0x00;
 
 	// 爬行触发/到位阈值。
 	double crawl_trigger_deadband_mm = 0.3; // |delta| 小于此值视为无效输入（不触发 push/pull）
@@ -437,6 +439,12 @@ struct SpacingRecoveryState
 	double moved_mm = 0.0;
 	double remaining_mm = 0.0;
 	bool limit_logged = false;
+	// 退出后恢复进入屈曲恢复前的模式来源、方向和界面覆盖。
+	int restore_mode_selection = 1;
+	int restore_physical_mode_source = 0;
+	bool restore_vis_reverse_override_active = false;
+	bool restore_vis_reverse_override_value = false;
+	int restore_vis_reverse_override_target = 0;
 
 	bool active() const
 	{
@@ -453,6 +461,11 @@ struct SpacingRecoveryState
 		moved_mm = 0.0;
 		remaining_mm = 0.0;
 		limit_logged = false;
+		restore_mode_selection = 1;
+		restore_physical_mode_source = 0;
+		restore_vis_reverse_override_active = false;
+		restore_vis_reverse_override_value = false;
+		restore_vis_reverse_override_target = 0;
 	}
 };
 

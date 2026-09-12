@@ -177,19 +177,11 @@ int main(int argc, char* argv[])
 	vis_server.start();
 
 	bool axis1_handle_ready = handle_axis1.init();
-	if (handle_axis1.serial() == physical_handle_587_serial)
-		handle_axis1.setforce_axis(cfg.handle_587_outward_force_n, cfg.axial_force_axis, 0.0);
-	else if (handle_axis1.serial() == physical_handle_582_serial)
-		handle_axis1.setforce_axis(cfg.handle_582_outward_force_n, cfg.axial_force_axis, 0.0);
 	if (!axis1_handle_ready)
 	{
 		std::cout << "手柄初始化未就绪，序列号: " << serial_axis1_handle << "，将在后台持续重试。" << std::endl;
 	}
 	const bool axis6_handle_ready_init = handle_axis6.init();
-	if (handle_axis6.serial() == physical_handle_587_serial)
-		handle_axis6.setforce_axis(cfg.handle_587_outward_force_n, cfg.axial_force_axis, 0.0);
-	else if (handle_axis6.serial() == physical_handle_582_serial)
-		handle_axis6.setforce_axis(cfg.handle_582_outward_force_n, cfg.axial_force_axis, 0.0);
 	bool axis6_handle_ready = axis6_handle_ready_init;
 	if (!axis6_handle_ready)
 	{
@@ -1056,11 +1048,17 @@ int main(int argc, char* argv[])
 	ModeSelection pending_mode_selection = ModeSelection::None;
 	std::uint32_t physical_button_event_counter = 0;
 	int physical_button_event_code = 0;
+	bool spacing_recovery_button_pressed_prev = false;
 
 	auto apply_mode_selection = [&](ModeSelection selection,
 		PhysicalModeSource mode_source = PhysicalModeSource::None)
 	{
 		clear_axis1_delivery_mapping();
+		if (selection == ModeSelection::CatheterDelivery)
+		{
+			// 每次回到普通导管正向递送段都重新启用前10 mm映射。
+			arm_axis1_delivery_mapping();
+		}
 		// UI/键盘选择清除物理模式源；B7选择保留对应手柄作为模式源。
 		physical_mode_source = mode_source;
 		if (selection == ModeSelection::CooperativeDelivery ||
@@ -1551,14 +1549,57 @@ int main(int argc, char* argv[])
 
 		const unsigned char axis1_buttons = axis1_input_handle->buttons2;
 		const unsigned char axis6_buttons = axis6_input_handle->buttons2;
+		const unsigned char physical_582_buttons =
+			handle_axis1.serial() == 582 ? handle_axis1.buttons2 : handle_axis6.buttons2;
 		const bool catheter_b6_pressed = (axis1_buttons & cfg.btn_b6) != 0;
 		const bool guidewire_b6_pressed = (axis6_buttons & cfg.btn_b6) != 0;
+		const bool spacing_recovery_button_pressed =
+			cfg.spacing_recovery_button_mask != 0 &&
+			(physical_582_buttons & cfg.spacing_recovery_button_mask) != 0;
+		const bool spacing_recovery_button_press_edge =
+			spacing_recovery_button_pressed && !spacing_recovery_button_pressed_prev;
+		const bool spacing_recovery_button_release_edge =
+			!spacing_recovery_button_pressed && spacing_recovery_button_pressed_prev;
 		const bool catheter_b7_pressed = (axis1_buttons & cfg.btn_b7) != 0;
 		const bool guidewire_b7_pressed = (axis6_buttons & cfg.btn_b7) != 0;
 		const bool catheter_b7_press_edge =
 			catheter_b7_pressed && !catheter_mode_button_pressed_prev;
 		const bool guidewire_b7_press_edge =
 			guidewire_b7_pressed && !guidewire_mode_button_pressed_prev;
+
+		// 反向键按下沿只用于诊断，不改变现有控制状态机。
+		static bool catheter_b6_pressed_prev = false;
+		static bool guidewire_b6_pressed_prev = false;
+		if (catheter_b6_pressed && !catheter_b6_pressed_prev)
+		{
+			std::cout << "手柄诊断：物理SN " << serial_axis1_handle
+				<< "，buttons2=0x" << std::hex << static_cast<int>(axis1_buttons) << std::dec
+				<< "，is_open=" << (handle_axis1.is_open() ? 1 : 0)
+				<< "，poll=" << (handle1_poll_ok ? 1 : 0)
+				<< "，模式=" << static_cast<int>(guidewire_mode)
+				<< "，反向=1，线性原始=" << handle_axis1.fJoints2[0]
+				<< "，旋转原始=" << handle_axis1.fJoints2[1]
+				<< "，线性滤波=" << axis1_handle_filter.axis0_filtered
+				<< "，旋转滤波=" << axis1_handle_filter.axis1_filtered
+				<< "，handle_soft_hold=" << (handle_soft_hold_active ? 1 : 0)
+				<< std::endl;
+		}
+		if (guidewire_b6_pressed && !guidewire_b6_pressed_prev)
+		{
+			std::cout << "手柄诊断：物理SN " << serial_axis6_handle
+				<< "，buttons2=0x" << std::hex << static_cast<int>(axis6_buttons) << std::dec
+				<< "，is_open=" << (handle_axis6.is_open() ? 1 : 0)
+				<< "，poll=" << (handle6_poll_ok ? 1 : 0)
+				<< "，模式=" << static_cast<int>(guidewire_mode)
+				<< "，反向=1，线性原始=" << handle_axis6.fJoints2[0]
+				<< "，旋转原始=" << handle_axis6.fJoints2[1]
+				<< "，线性滤波=" << axis6_handle_filter.axis0_filtered
+				<< "，旋转滤波=" << axis6_handle_filter.axis1_filtered
+				<< "，handle_soft_hold=" << (handle_soft_hold_active ? 1 : 0)
+				<< std::endl;
+		}
+		catheter_b6_pressed_prev = catheter_b6_pressed;
+		guidewire_b6_pressed_prev = guidewire_b6_pressed;
 
 		// 屈曲恢复正常退出并完成重同步后，再落实恢复期间点击的目标模式。
 		if (pending_mode_selection != ModeSelection::None &&
@@ -1681,6 +1722,33 @@ int main(int argc, char* argv[])
 					? vis_reverse_override_value
 					: (single_handle_mode ? axis1_reverse_pressed : false)));
 		const bool startup_sequence_active = startup.is_active();
+		if (spacing_recovery_button_press_edge)
+		{
+			spacing_recovery.restore_mode_selection =
+				guidewire_mode == GuidewireMode::Cooperative
+				? (cooperative_direction == CooperativeDirection::Retraction
+					? static_cast<int>(ModeSelection::CooperativeRetraction)
+					: static_cast<int>(ModeSelection::CooperativeDelivery))
+				: (guidewire_mode == GuidewireMode::Independent
+					? (axis6_effective_reverse_pressed
+						? static_cast<int>(ModeSelection::GuidewireRetraction)
+						: static_cast<int>(ModeSelection::GuidewireDelivery))
+					: (axis1_reverse_pressed
+						? static_cast<int>(ModeSelection::CatheterRetraction)
+						: static_cast<int>(ModeSelection::CatheterDelivery)));
+			spacing_recovery.restore_physical_mode_source = static_cast<int>(physical_mode_source);
+			spacing_recovery.restore_vis_reverse_override_active = vis_reverse_override_active;
+			spacing_recovery.restore_vis_reverse_override_value = vis_reverse_override_value;
+			spacing_recovery.restore_vis_reverse_override_target = vis_reverse_override_target;
+			spacing_recovery.requested = true;
+			std::cout << "582 屈曲恢复按键：按下，准备进入恢复模式。" << std::endl;
+		}
+		if (spacing_recovery_button_release_edge)
+		{
+			spacing_recovery.requested = false;
+			std::cout << "582 屈曲恢复按键：松开，准备退出恢复模式。" << std::endl;
+		}
+		spacing_recovery_button_pressed_prev = spacing_recovery_button_pressed;
 		// 该映射只属于一次“导管正向递送回退完成后的前 10 mm”过程。
 		// 只要离开普通导管正向 Follow，立即清除，避免撤出/暂停/保持后再次接管时
 		// 把旧的附加量带入新的运动段。
@@ -2121,6 +2189,10 @@ int main(int argc, char* argv[])
 							clear_cylinder_manual_overrides();
 							guidewire_mode = GuidewireMode::Independent;
 							cooperative_direction = CooperativeDirection::None;
+							// 入口已按当前实际位置和当前手柄姿态重建基准，
+							// 同步首拍方向电平，避免把模式切换误判成反向切换。
+							axis6_effective_reverse_prev = axis6_effective_reverse_pressed;
+							axis6_reverse_switch_guard_active = false;
 							std::cout << (axis6_effective_reverse_pressed ? "导丝模式：反向取出。" : "导丝模式：正向输送。") << std::endl;
 						}
 					}
@@ -3491,8 +3563,7 @@ int main(int argc, char* argv[])
 					cfg.axis6_window_min_gap_from_axis5_mm + cfg.axis6_window_size_mm;
 				const bool prerequisites_ok =
 					startup.completed && startup.phase == StartupPhase::Done &&
-					control_active && guidewire_mode == GuidewireMode::None &&
-					!axis1_reverse_pressed && !ft_exp.active() && !axis6_soft_limit_hold &&
+					control_active && !ft_exp.active() && !axis6_soft_limit_hold &&
 					!planned_return.active();
 
 				spacing_recovery.axis1_hold_rel = plc_act_pos[0];
@@ -4339,6 +4410,13 @@ int main(int argc, char* argv[])
 			const double recovered_mm = spacing_recovery.moved_mm;
 			if (sync_all(20))
 			{
+				const ModeSelection restore_selection =
+					static_cast<ModeSelection>(spacing_recovery.restore_mode_selection);
+				const PhysicalModeSource restore_source =
+					static_cast<PhysicalModeSource>(spacing_recovery.restore_physical_mode_source);
+				vis_reverse_override_active = spacing_recovery.restore_vis_reverse_override_active;
+				vis_reverse_override_value = spacing_recovery.restore_vis_reverse_override_value;
+				vis_reverse_override_target = spacing_recovery.restore_vis_reverse_override_target;
 				const double recovered_axis3_from_left_mm =
 					(plc_act_pos[2] + plc_init_pos[2]) - plc_leftlimit[2];
 				if (recovered_axis3_from_left_mm >
@@ -4350,6 +4428,8 @@ int main(int argc, char* argv[])
 				axis1_push_rearm_after_hold = false;
 				spacing_recovery.reset();
 				control_active = true;
+				apply_mode_selection(restore_selection, restore_source);
+				std::cout << "屈曲恢复退出后已恢复原模式。" << std::endl;
 				std::cout << "屈曲恢复已退出并完成重同步，本次共同移动 "
 					<< recovered_mm << " mm。" << std::endl;
 			}
@@ -4762,6 +4842,7 @@ int main(int argc, char* argv[])
 		// 两只手柄的恒力均按当前实际模式的递送/撤出方向换向。
 		const bool bias_reverse = guidewire_mode == GuidewireMode::Independent
 			? axis6_effective_reverse_pressed : axis1_reverse_pressed;
+		const bool handle_bias_enabled = startup.is_active() || startup.completed;
 		process_force_feedback(
 			ff,
 			force_sample,
@@ -4780,8 +4861,12 @@ int main(int argc, char* argv[])
 			cfg,
 			cal_cfg,
 			cal_state,
-			bias_reverse ? -cfg.handle_587_outward_force_n : cfg.handle_587_outward_force_n,
-			bias_reverse ? -cfg.handle_582_outward_force_n : cfg.handle_582_outward_force_n);
+			handle_bias_enabled
+				? (bias_reverse ? -cfg.handle_587_outward_force_n : cfg.handle_587_outward_force_n)
+				: 0.0,
+			handle_bias_enabled
+				? (bias_reverse ? -cfg.handle_582_outward_force_n : cfg.handle_582_outward_force_n)
+				: 0.0);
 
 		// 力过渡专用表只保存复现实验所需的精简字段，纯净力与统一 force.csv 语义一致。
 		if (ft_exp.active() && experiment_recorder.force_transition_log_running())
