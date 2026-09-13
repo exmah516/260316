@@ -69,9 +69,6 @@
     <ClCompile Include="delivery_tracking.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
-    <ClCompile Include="sensor_calibration_experiment.cpp">
-      <Filter>源文件</Filter>
-    </ClCompile>
     <ClCompile Include="arm_manual_ads_service.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
@@ -135,9 +132,6 @@
       <Filter>头文件</Filter>
     </ClInclude>
     <ClInclude Include="delivery_tracking.h">
-      <Filter>头文件</Filter>
-    </ClInclude>
-    <ClInclude Include="sensor_calibration_experiment.h">
       <Filter>头文件</Filter>
     </ClInclude>
     <ClInclude Include="arm_manual_ads_service.h">

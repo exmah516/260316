@@ -127,8 +127,8 @@ struct ControlConfig
 	// 手动间距恢复：582 手柄仅驱动轴3/5/6向远离左限位方向等位移移动。
 	double spacing_recovery_speed_limit_mm_s = 40.0;
 	double spacing_recovery_axis3_max_from_left_mm = 650.0;
-	double spacing_recovery_axis5_max_from_left_mm = 670.0;
-	double spacing_recovery_axis6_max_from_left_mm = 670.0;
+	double spacing_recovery_axis5_max_from_left_mm = 665.0;
+	double spacing_recovery_axis6_max_from_left_mm = 665.0;
 	DWORD spacing_recovery_clamp_settle_ms = 150;
 	DWORD spacing_recovery_exit_settle_ms = 100;
 	DWORD spacing_recovery_exit_timeout_ms = 2000;

@@ -162,7 +162,6 @@
     <ClCompile Include="guidewire_mode.cpp" />
     <ClCompile Include="force_feedback.cpp" />
     <ClCompile Include="force_transition_experiment.cpp" />
-    <ClCompile Include="sensor_calibration_experiment.cpp" />
     <ClCompile Include="delivery_tracking.cpp" />
     <ClCompile Include="arm_manual_ads_service.cpp" />
     <ClCompile Include="startup_sequence.cpp" />
@@ -194,7 +193,6 @@
     <ClInclude Include="guidewire_mode.h" />
     <ClInclude Include="force_feedback.h" />
     <ClInclude Include="force_transition_experiment.h" />
-    <ClInclude Include="sensor_calibration_experiment.h" />
     <ClInclude Include="delivery_tracking.h" />
     <ClInclude Include="arm_manual_ads_service.h" />
     <ClInclude Include="startup_sequence.h" />

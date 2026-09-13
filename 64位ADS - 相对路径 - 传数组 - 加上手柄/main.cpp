@@ -9,7 +9,6 @@
 #include "guidewire_mode.h"
 #include "motion_sync.h"
 #include "plc_io.h"
-#include "sensor_calibration_experiment.h"
 #include "startup_sequence.h"
 #include "tcp_force_daq.h"
 #include "vis_server.h"
@@ -33,11 +32,6 @@
 int main(int argc, char* argv[])
 {
 	setup_console_utf8();
-	if (sensor_calibration_experiment::is_command(argc, argv))
-	{
-		return sensor_calibration_experiment::run(argc, argv);
-	}
-
 	constexpr DWORD physical_handle_582_serial = 582;
 	constexpr DWORD physical_handle_587_serial = 587;
 	// 主循环允许通信线程最多 300 ms 产出下一帧，避免低频 ADS 请求占用期间误触发连接保持。
@@ -103,46 +97,6 @@ int main(int argc, char* argv[])
 			Sleep(10);
 		}
 
-		test_handle.close();
-		return 0;
-	}
-
-	// 工具模式：持续输出手柄原始状态用于诊断。
-	if (argc > 1 && (std::string(argv[1]) == "--monitor" || std::string(argv[1]) == "--mon"))
-	{
-		DWORD test_serial = serial_axis1_handle;
-		if (argc > 2)
-		{
-			test_serial = static_cast<DWORD>(std::strtoul(argv[2], nullptr, 10));
-		}
-
-		Handle test_handle(test_serial);
-		if (!test_handle.init())
-		{
-			std::cout << "手柄初始化失败，序列号: " << test_serial << std::endl;
-			return 0;
-		}
-
-		std::cout << "=== 手柄监视模式 ===" << std::endl;
-		std::cout << "序列号: " << test_serial << std::endl;
-		std::cout << "按 ESC 或 q 退出。" << std::endl;
-
-		while (true)
-		{
-			test_handle.showinfo();
-
-			if (_kbhit())
-			{
-				const int ch = _getch();
-				if (ch == 27 || ch == 'q')
-				{
-					break;
-				}
-			}
-			Sleep(20);
-		}
-
-		std::cout << std::endl;
 		test_handle.close();
 		return 0;
 	}
@@ -2440,20 +2394,6 @@ int main(int argc, char* argv[])
 				axis3_from_left_mm <= (cfg.axis3_delivery_stop_from_left_mm + cfg.crawl_arrive_tol_mm);
 
 			const double axis6_abs = plc_act_pos[5] + plc_init_pos[5]; // 轴6绝对位置(mm)
-			if (axis6_soft_limit_reason == Axis6SoftLimitReason::ActualPosition &&
-				!axis6_target_exceeds_soft_limit(axis6_abs))
-			{
-				// 实际位置已经回到限制内，允许后续正常状态机重新接管。
-				axis6_soft_limit_hold = false;
-				axis6_soft_limit_reason = Axis6SoftLimitReason::None;
-			}
-			if (axis6_target_exceeds_soft_limit(axis6_abs))
-			{
-				engage_axis6_soft_limit_hold(
-					axis6_abs,
-					Axis6SoftLimitReason::ActualPosition,
-					"axis6 实际位置");
-			}
 			const double axis6_linear_increment_raw_mm =
 				(axis6_linear_filtered - axis6_prev_linear_filtered) * cfg.k_handle_to_mm * cfg.axis_push_sign;
 			const double axis6_linear_increment_mm =
