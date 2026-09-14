@@ -21,7 +21,6 @@ enum class TrackingInvalidReason : int
 	PlcHold = 6,
 	AdsReturnFault = 7,
 	SpacingRecovery = 8,
-	ForceTransitionExperiment = 9,
 	ManualCylinderOverride = 10,
 	CrawlReturnActive = 11,
 	GripSettling = 12

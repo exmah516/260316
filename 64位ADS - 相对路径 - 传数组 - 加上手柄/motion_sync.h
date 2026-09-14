@@ -36,16 +36,10 @@ namespace motion_sync
 	bool rebase_axis6_after_return(AppContext& ctx);
 	// 协同回退交接：用同一份PLC快照同时重建双手柄、双轴链基准，
 	// 并按axis5当前实际位置建立axis6动态窗口。
-	bool rebase_cooperative_after_return(AppContext& ctx);
 	bool sync_axis6(
 		AppContext& ctx,
 		int samples,
 		bool rebuild_window,
-		bool log_window_rebuild,
-		bool preserve_rotation_targets = true);
-	bool sync_cooperative_guidewire(
-		AppContext& ctx,
-		int samples,
 		bool log_window_rebuild,
 		bool preserve_rotation_targets = true);
 	bool sync_all(AppContext& ctx, int samples);

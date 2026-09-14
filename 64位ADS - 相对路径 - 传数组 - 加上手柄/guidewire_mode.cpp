@@ -99,8 +99,6 @@ namespace guidewire_mode_ctrl
 			ctx.axis6_crawl->max_abs(),
 			ctx.cfg->crawl_arrive_tol_mm);
 		ctx.axis6_crawl->enabled = true;
-		*ctx.axis6_coop_ff_inited = false;
-		*ctx.axis6_coop_prev_axis1_cmd_abs = 0.0;
 		*ctx.axis6_reverse_switch_guard_active = false;
 		*ctx.axis6_prev_abs_for_trigger = *ctx.axis6_follow_cmd_abs;
 		*ctx.axis6_prev_abs_valid = true;
@@ -114,14 +112,7 @@ namespace guidewire_mode_ctrl
 		return plc_io::write_refer(ctx);
 	}
 
-	bool enter_cooperative_guidewire_mode(AppContext& ctx)
-	{
-		if (!prepare_axis6_guidewire_handoff(ctx))
-		{
-			return false;
-		}
-		return motion_sync::sync_cooperative_guidewire(ctx, 20, true);
-	}
+	
 
 	bool check_axis6_guidewire_entry_gate(AppContext& ctx, double& axis6_from_left_mm)
 	{
@@ -154,8 +145,6 @@ namespace guidewire_mode_ctrl
 		}
 		*ctx.guidewire_mode = GuidewireMode::None;
 		*ctx.axis6_window_locked = false;
-		*ctx.axis6_coop_ff_inited = false;
-		*ctx.axis6_coop_prev_axis1_cmd_abs = 0.0;
 		return true;
 	}
 }

@@ -40,30 +40,16 @@ struct VisState
 	double force_582_theory_f;
 	double force_582_theory_n;
 	bool gravity_comp_enabled;
-	// 力过渡决定性预实验（论文 §6.1）状态字段。末尾追加保持二进制兼容。
-	int ft_exp_phase;
-	int ft_exp_velocity_level;
-	int ft_exp_trial_id;
-	int ft_exp_repeat_in_lvl;
-	double ft_exp_v_ratio_curr;
-	double ft_exp_axis1_target;
-	bool ft_exp_active;
-	bool ft_exp_aborted;
 	// 手动屈曲/间距恢复状态。末尾追加保持既有字段布局不变。
 	int spacing_recovery_phase;
 	double spacing_recovery_moved_mm;
 	double spacing_recovery_remaining_mm;
-	// 协同递送状态。仅由上位机内部状态发布，不增加 PLC ADS 契约。
-	bool dual_handle_ready;
-	int cooperative_return_owner;
 	// 主从位移补偿只发布控制状态，不再持有任何磁盘会话状态。
 	bool tracking_compensation_enabled;
 	double axis1_tracking_error_mm;
 	double axis6_tracking_error_mm;
 	double axis1_compensation_gain;
 	double axis6_compensation_gain;
-	// 协同方向：0=None，1=Delivery，2=Retraction。末尾追加要求 C++ 与 WPF 同步更新。
-	int cooperative_direction;
 	// axis6 当前软限位阻断状态。仅来自上位机，不增加 PLC ADS 契约。
 	bool axis6_soft_limit_hold;
 
@@ -144,7 +130,7 @@ struct VisState
 	bool cylinder_manual_allowed;
 };
 #pragma pack(pop)
-static_assert(sizeof(VisState) == 884, "VisState 管道布局发生变化，请同步更新 WPF 协议结构。");
+static_assert(sizeof(VisState) == 841, "VisState 管道布局发生变化，请同步更新 WPF 协议结构。");
 
 enum class VisCommandType : int
 {
@@ -162,17 +148,10 @@ enum class VisCommandType : int
 	ExecuteStartup = 11,
 	SelectDirectControl = 12,
 	SetGravityCompensation = 13,
-	// 力过渡决定性预实验（论文 §6.1）控制命令。
-	StartForceTransitionExperiment = 14,
-	StopForceTransitionExperiment = 15,
-	SetFtExpParamA = 16, // param1=field_id, param2=int_val
-	SetFtExpParamB = 17, // param1=field_id, param2=fixed-point val (×1000)
 	SetSpacingRecovery = 18, // param1: 0=退出，1=进入
-	SetCooperativeDelivery = 19, // param1: 0=退出，1=进入
 	// 20 为已删除的旧位移记录命令，保留数值空洞。
 	SetTrackingCompensation = 21, // param1: 0=关闭，1=开启
 	SetTrackingCompensationParam = 22, // param1=TrackingParameterField，param2=数值×1000
-	SetCooperativeRetraction = 23, // param1: 0=退出，1=进入
 	SetAxis1PostReturnLead = 24, // param1=轴1前10 mm比例映射量，单位 mm×1000，范围 [0, 5]
 	StartExperimentRecording = 25, // UTF-8 负载为实验名称
 	StopExperimentRecording = 26,

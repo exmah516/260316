@@ -108,8 +108,6 @@ struct ControlConfig
 	double axis6_window_size_mm = 22.0;
 	// 轴6距左限位坐标相对轴5的窗口为[4,26] mm，宽度22 mm。
 	double axis6_window_min_gap_from_axis5_mm = 4.0;
-	// 协同模式双边换手目标分别从近端/远端窗口向内缩该距离。
-	double cooperative_axis6_reset_inset_mm = 5.0;
 	// 标准启动中间夹持阶段的轴5/6间距；与运行时20 mm窗口宽度相互独立。
 	double axis56_ready_gap_mm = 15.0;
 	double axis3_delivery_stop_from_left_mm = 20.0;
@@ -166,7 +164,6 @@ struct ControlConfig
 	// 手柄低通滤波。
 	double linear_handle_alpha = 0.25;
 	double rotational_handle_alpha = 0.20;
-	bool cooperative_debug_log = false;
 	// 力反馈与 CSV 中 ft_1/fn_1 的采样来源：ADS(PLC变量) 或 TCP_DAQ(采集卡直连)。
 	// 轴1力/扭矩优先由 PLC 映射后的 ADS 原始 INT 提供；TCP 仅保留代码回退路径。
 	ForceSampleSource force_sample_source = ForceSampleSource::ADS;
@@ -228,27 +225,7 @@ struct CylinderPreset
 enum class GuidewireMode
 {
 	None,
-	Independent,
-	Cooperative
-};
-
-// 协同模式的固定运动方向。GuidewireMode::Cooperative 只表示双手柄协同已接管，
-// 具体是递送还是撤出由该枚举决定，避免改变原有 GuidewireMode 的数值契约。
-enum class CooperativeDirection
-{
-	None,
-	Delivery,
-	Retraction
-};
-
-// 协同模式中正在执行计划
-// 的链路。非拥有链路必须保持当前位置，
-// 直到拥有链路完成夹爪恢复和双手柄重同步。
-enum class CooperativeReturnOwner
-{
-	None,
-	Axis1,
-	Axis6
+	Independent
 };
 
 // 六种业务模式共用的计划回退生命周期。Follow 仍由各轴现有逻辑计算，
@@ -273,18 +250,13 @@ enum class PlannedReturnMode : unsigned char
 	CatheterDelivery,
 	CatheterRetraction,
 	GuidewireDelivery,
-	GuidewireRetraction,
-	CooperativeDeliveryAxis1,
-	CooperativeDeliveryAxis6,
-	CooperativeRetractionAxis1,
-	CooperativeRetractionAxis6
+	GuidewireRetraction
 };
 
 enum class PlannedReturnRebaseScope : unsigned char
 {
 	Axis1,
-	Axis6,
-	Cooperative
+	Axis6
 };
 
 // 统一换手通过通信线程异步提交的 ADS 批量命令用途。
@@ -369,29 +341,6 @@ struct PlannedReturnCoordinator
 			if (legs[i].active && legs[i].axis_index == axis_index) return true;
 		}
 		return false;
-	}
-
-	bool cooperative() const
-	{
-		return mode == PlannedReturnMode::CooperativeDeliveryAxis1 ||
-			mode == PlannedReturnMode::CooperativeDeliveryAxis6 ||
-			mode == PlannedReturnMode::CooperativeRetractionAxis1 ||
-			mode == PlannedReturnMode::CooperativeRetractionAxis6;
-	}
-
-	CooperativeReturnOwner cooperative_owner() const
-	{
-		if (mode == PlannedReturnMode::CooperativeDeliveryAxis1 ||
-			mode == PlannedReturnMode::CooperativeRetractionAxis1)
-		{
-			return CooperativeReturnOwner::Axis1;
-		}
-		if (mode == PlannedReturnMode::CooperativeDeliveryAxis6 ||
-			mode == PlannedReturnMode::CooperativeRetractionAxis6)
-		{
-			return CooperativeReturnOwner::Axis6;
-		}
-		return CooperativeReturnOwner::None;
 	}
 
 	// 保持既有WPF数值契约：0=Follow，1=夹爪稳定，2=请求/运动，3=交接/恢复夹爪稳定。
@@ -724,7 +673,5 @@ struct AppContext
 	bool* axis6_window_locked = nullptr;
 	double* axis6_locked_window_start_abs = nullptr;
 	double* axis6_locked_window_end_abs = nullptr;
-	bool* axis6_coop_ff_inited = nullptr;
-	double* axis6_coop_prev_axis1_cmd_abs = nullptr;
 	bool* startup_smoothing_bypass = nullptr;
 };

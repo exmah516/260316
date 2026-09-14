@@ -210,8 +210,6 @@ namespace startup_sequence
 		*ctx.guidewire_mode = GuidewireMode::None;
 		ctx.axis6_crawl->enabled = false;
 		*ctx.axis6_window_locked = false;
-		*ctx.axis6_coop_ff_inited = false;
-		*ctx.axis6_coop_prev_axis1_cmd_abs = 0.0;
 		ctx.startup->phase = ctx.startup->recovery_mode
 			? StartupPhase::RecoveryMoveAxis1267
 			: StartupPhase::ReleaseClamps;

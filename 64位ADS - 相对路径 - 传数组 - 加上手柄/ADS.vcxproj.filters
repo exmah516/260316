@@ -63,9 +63,6 @@
     <ClCompile Include="experiment_recorder.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
-    <ClCompile Include="force_transition_experiment.cpp">
-      <Filter>源文件</Filter>
-    </ClCompile>
     <ClCompile Include="delivery_tracking.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
@@ -126,9 +123,6 @@
       <Filter>头文件</Filter>
     </ClInclude>
     <ClInclude Include="experiment_recorder.h">
-      <Filter>头文件</Filter>
-    </ClInclude>
-    <ClInclude Include="force_transition_experiment.h">
       <Filter>头文件</Filter>
     </ClInclude>
     <ClInclude Include="delivery_tracking.h">

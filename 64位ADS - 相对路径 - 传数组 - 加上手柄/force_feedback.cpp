@@ -29,10 +29,8 @@ void process_force_feedback(
 		!estop_hold_active &&
 		cal_state.zeroed &&
 		sample.valid;
-	const bool catheter_feedback_active =
-		guidewire_mode == GuidewireMode::None || guidewire_mode == GuidewireMode::Cooperative;
-	const bool guidewire_feedback_active =
-		guidewire_mode == GuidewireMode::Independent || guidewire_mode == GuidewireMode::Cooperative;
+	const bool catheter_feedback_active = guidewire_mode == GuidewireMode::None;
+	const bool guidewire_feedback_active = guidewire_mode == GuidewireMode::Independent;
 
 	if (output_enabled)
 	{
