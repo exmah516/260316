@@ -106,8 +106,8 @@ struct ControlConfig
 	double axis1_window_left_from_left_mm = 8.0;
 	double axis1_window_right_from_left_mm = 28.0;
 	double axis6_window_size_mm = 22.0;
-	// 轴6窗口以轴5当前位置为基准，左边界至少领先轴5该距离。
-	double axis6_window_min_gap_from_axis5_mm = 1.0;
+	// 轴6距左限位坐标相对轴5的窗口为[4,26] mm，宽度22 mm。
+	double axis6_window_min_gap_from_axis5_mm = 4.0;
 	// 协同模式双边换手目标分别从近端/远端窗口向内缩该距离。
 	double cooperative_axis6_reset_inset_mm = 5.0;
 	// 标准启动中间夹持阶段的轴5/6间距；与运行时20 mm窗口宽度相互独立。
@@ -133,8 +133,8 @@ struct ControlConfig
 	DWORD spacing_recovery_exit_settle_ms = 100;
 	DWORD spacing_recovery_exit_timeout_ms = 2000;
 	unsigned short spacing_recovery_cyl4_release = 100;
-	// 582 手柄屈曲恢复按键：0=禁用，0x01=B0，0x20=B5。
-	unsigned char spacing_recovery_button_mask = 0x00;
+	// 物理587屈曲恢复键同时置位低三位；0x07、叠加反向键的0x47均表示按住。
+	unsigned char spacing_recovery_button_mask = 0x07;
 
 	// 爬行触发/到位阈值。
 	double crawl_trigger_deadband_mm = 0.3; // |delta| 小于此值视为无效输入（不触发 push/pull）

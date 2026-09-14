@@ -1503,13 +1503,12 @@ int main(int argc, char* argv[])
 
 		const unsigned char axis1_buttons = axis1_input_handle->buttons2;
 		const unsigned char axis6_buttons = axis6_input_handle->buttons2;
-		const unsigned char physical_582_buttons =
-			handle_axis1.serial() == 582 ? handle_axis1.buttons2 : handle_axis6.buttons2;
+		const unsigned char physical_587_buttons =
+			handle_axis1.serial() == 587 ? handle_axis1.buttons2 : handle_axis6.buttons2;
 		const bool catheter_b6_pressed = (axis1_buttons & cfg.btn_b6) != 0;
 		const bool guidewire_b6_pressed = (axis6_buttons & cfg.btn_b6) != 0;
 		const bool spacing_recovery_button_pressed =
-			cfg.spacing_recovery_button_mask != 0 &&
-			(physical_582_buttons & cfg.spacing_recovery_button_mask) != 0;
+			(physical_587_buttons & cfg.spacing_recovery_button_mask) == cfg.spacing_recovery_button_mask;
 		const bool spacing_recovery_button_press_edge =
 			spacing_recovery_button_pressed && !spacing_recovery_button_pressed_prev;
 		const bool spacing_recovery_button_release_edge =
@@ -1520,40 +1519,6 @@ int main(int argc, char* argv[])
 			catheter_b7_pressed && !catheter_mode_button_pressed_prev;
 		const bool guidewire_b7_press_edge =
 			guidewire_b7_pressed && !guidewire_mode_button_pressed_prev;
-
-		// 反向键按下沿只用于诊断，不改变现有控制状态机。
-		static bool catheter_b6_pressed_prev = false;
-		static bool guidewire_b6_pressed_prev = false;
-		if (catheter_b6_pressed && !catheter_b6_pressed_prev)
-		{
-			std::cout << "手柄诊断：物理SN " << serial_axis1_handle
-				<< "，buttons2=0x" << std::hex << static_cast<int>(axis1_buttons) << std::dec
-				<< "，is_open=" << (handle_axis1.is_open() ? 1 : 0)
-				<< "，poll=" << (handle1_poll_ok ? 1 : 0)
-				<< "，模式=" << static_cast<int>(guidewire_mode)
-				<< "，反向=1，线性原始=" << handle_axis1.fJoints2[0]
-				<< "，旋转原始=" << handle_axis1.fJoints2[1]
-				<< "，线性滤波=" << axis1_handle_filter.axis0_filtered
-				<< "，旋转滤波=" << axis1_handle_filter.axis1_filtered
-				<< "，handle_soft_hold=" << (handle_soft_hold_active ? 1 : 0)
-				<< std::endl;
-		}
-		if (guidewire_b6_pressed && !guidewire_b6_pressed_prev)
-		{
-			std::cout << "手柄诊断：物理SN " << serial_axis6_handle
-				<< "，buttons2=0x" << std::hex << static_cast<int>(axis6_buttons) << std::dec
-				<< "，is_open=" << (handle_axis6.is_open() ? 1 : 0)
-				<< "，poll=" << (handle6_poll_ok ? 1 : 0)
-				<< "，模式=" << static_cast<int>(guidewire_mode)
-				<< "，反向=1，线性原始=" << handle_axis6.fJoints2[0]
-				<< "，旋转原始=" << handle_axis6.fJoints2[1]
-				<< "，线性滤波=" << axis6_handle_filter.axis0_filtered
-				<< "，旋转滤波=" << axis6_handle_filter.axis1_filtered
-				<< "，handle_soft_hold=" << (handle_soft_hold_active ? 1 : 0)
-				<< std::endl;
-		}
-		catheter_b6_pressed_prev = catheter_b6_pressed;
-		guidewire_b6_pressed_prev = guidewire_b6_pressed;
 
 		// 屈曲恢复正常退出并完成重同步后，再落实恢复期间点击的目标模式。
 		if (pending_mode_selection != ModeSelection::None &&
@@ -1695,12 +1660,12 @@ int main(int argc, char* argv[])
 			spacing_recovery.restore_vis_reverse_override_value = vis_reverse_override_value;
 			spacing_recovery.restore_vis_reverse_override_target = vis_reverse_override_target;
 			spacing_recovery.requested = true;
-			std::cout << "582 屈曲恢复按键：按下，准备进入恢复模式。" << std::endl;
+			std::cout << "587 屈曲恢复按键：按下，准备进入恢复模式。" << std::endl;
 		}
 		if (spacing_recovery_button_release_edge)
 		{
 			spacing_recovery.requested = false;
-			std::cout << "582 屈曲恢复按键：松开，准备退出恢复模式。" << std::endl;
+			std::cout << "587 屈曲恢复按键：松开，准备退出恢复模式。" << std::endl;
 		}
 		spacing_recovery_button_pressed_prev = spacing_recovery_button_pressed;
 		// 该映射只属于一次“导管正向递送回退完成后的前 10 mm”过程。
@@ -3378,48 +3343,23 @@ int main(int argc, char* argv[])
 					{
 						const double axis6_trigger_edge_abs =
 							axis6_reverse_mode ? axis6_window_right_abs_now : axis6_window_left_abs_now;
-						if (axis6_reverse_switch_guard_active &&
-							(std::abs(axis6_abs - axis6_trigger_edge_abs) > cfg.reverse_switch_trigger_guard_mm))
-						{
-							axis6_reverse_switch_guard_active = false;
-						}
 						const bool axis6_toward_trigger =
 							axis6_reverse_mode ? (axis6_increment_mm > 0.0) : (axis6_increment_mm < 0.0);
 						const bool axis6_trigger_user_ok =
 							(!require_user_increment_for_trigger) || axis6_user_increment_active;
-						const bool axis6_at_trigger_edge =
-							std::abs(axis6_abs - axis6_trigger_edge_abs) <= cfg.crawl_arrive_tol_mm;
-						const double axis6_prev_abs = axis6_prev_abs_valid ? axis6_prev_abs_for_trigger : axis6_abs;
-						// 按运动方向判断是否到达或跨过触发边，避免两个 ADS 采样点跨过窄容差窗时漏触发。
-						const bool axis6_enter_trigger_edge = axis6_reverse_mode
-							? ((axis6_prev_abs < (axis6_trigger_edge_abs - cfg.crawl_arrive_tol_mm)) &&
-								(axis6_abs >= (axis6_trigger_edge_abs - cfg.crawl_arrive_tol_mm)))
-							: ((axis6_prev_abs > (axis6_trigger_edge_abs + cfg.crawl_arrive_tol_mm)) &&
-								(axis6_abs <= (axis6_trigger_edge_abs + cfg.crawl_arrive_tol_mm)));
-						// 在窗口端点切换递送/撤出时，正确方向的手柄输入会被窗口夹住，
-						// 无法满足“从窗口内部进入”的普通触发条件。此处仅允许切换后的
-						// 首次有效同向输入消耗保护并触发一次换手；切换本身不会产生运动。
-						const bool axis6_guarded_edge_input =
-							axis6_reverse_switch_guard_active &&
-							axis6_at_trigger_edge &&
-							axis6_increment_active &&
-							axis6_toward_trigger &&
-							axis6_trigger_user_ok;
-						const bool axis6_switch_guard_blocked =
-							axis6_reverse_switch_guard_active && !axis6_guarded_edge_input &&
-							(std::abs(axis6_abs - axis6_trigger_edge_abs) <= cfg.reverse_switch_trigger_guard_mm);
-						if (axis6_guarded_edge_input)
-						{
-							axis6_reverse_switch_guard_active = false;
-						}
-						// 独立导丝每个方向只有一个换手触发边：必须由窗口内部实际进入该边。
-						// 不能因停在边界后持续推手柄重复触发；方向切换后的一次性边界输入除外。
+						const bool axis6_at_trigger_edge = axis6_reverse_mode
+							? axis6_abs >= (axis6_trigger_edge_abs - cfg.crawl_arrive_tol_mm)
+							: axis6_abs <= (axis6_trigger_edge_abs + cfg.crawl_arrive_tol_mm);
+						// 到达触发边后仍可由后续同向输入触发换手，不要求到位与输入发生在同一拍。
 						axis6_ready_to_trigger =
 							axis6_trigger_user_ok &&
 							axis6_increment_active &&
 							axis6_toward_trigger &&
-							(axis6_enter_trigger_edge || axis6_guarded_edge_input) &&
-							!axis6_switch_guard_blocked;
+							axis6_at_trigger_edge;
+						if (axis6_ready_to_trigger)
+						{
+							axis6_reverse_switch_guard_active = false;
+						}
 					}
 					if (axis6_ready_to_trigger && !planned_return.active())
 					{
