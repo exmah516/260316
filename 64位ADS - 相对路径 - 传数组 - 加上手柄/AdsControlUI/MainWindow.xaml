@@ -97,32 +97,14 @@
                     <StackPanel>
                         <UniformGrid Columns="2" Margin="2">
                             <RadioButton Content="导管递送" GroupName="Mode" Style="{StaticResource ModeChipRadio}"
-                                         Click="ModeCathFwd_Click" IsChecked="{Binding ModeCathFwdSelected, Mode=OneWay}"
-                                         IsEnabled="{Binding ModeSwitchAllowed}"/>
+                                         Click="ModeCathFwd_Click" IsChecked="{Binding ModeCathFwdSelected, Mode=OneWay}"/>
                             <RadioButton Content="导管撤出" GroupName="Mode" Style="{StaticResource ModeChipRadio}"
-                                         Click="ModeCathRev_Click" IsChecked="{Binding ModeCathRevSelected, Mode=OneWay}"
-                                         IsEnabled="{Binding ModeSwitchAllowed}"/>
+                                         Click="ModeCathRev_Click" IsChecked="{Binding ModeCathRevSelected, Mode=OneWay}"/>
                             <RadioButton Content="导丝递送" GroupName="Mode" Style="{StaticResource ModeChipRadio}"
-                                         Click="ModeGuideFwd_Click" IsChecked="{Binding ModeGuideFwdSelected, Mode=OneWay}"
-                                         IsEnabled="{Binding ModeSwitchAllowed}"/>
+                                         Click="ModeGuideFwd_Click" IsChecked="{Binding ModeGuideFwdSelected, Mode=OneWay}"/>
                             <RadioButton Content="导丝撤出" GroupName="Mode" Style="{StaticResource ModeChipRadio}"
-                                         Click="ModeGuideRev_Click" IsChecked="{Binding ModeGuideRevSelected, Mode=OneWay}"
-                                         IsEnabled="{Binding ModeSwitchAllowed}"/>
+                                         Click="ModeGuideRev_Click" IsChecked="{Binding ModeGuideRevSelected, Mode=OneWay}"/>
                         </UniformGrid>
-                        <UniformGrid Columns="2" Margin="2,0,2,2">
-                            <RadioButton Content="协同递送" GroupName="Mode" Style="{StaticResource ModeChipRadio}"
-                                         Click="ModeCooperativeDelivery_Click"
-                                         IsChecked="{Binding ModeCooperativeDeliverySelected, Mode=OneWay}"
-                                         IsEnabled="{Binding CooperativeModeEnabled}"/>
-                            <RadioButton Content="协同撤出" GroupName="Mode" Style="{StaticResource ModeChipRadio}"
-                                         Click="ModeCooperativeRetraction_Click"
-                                         IsChecked="{Binding ModeCooperativeRetractionSelected, Mode=OneWay}"
-                                         IsEnabled="{Binding CooperativeModeEnabled}"/>
-                        </UniformGrid>
-                        <TextBlock Text="{Binding CooperativeStatusText}"
-                                   Style="{StaticResource CaptionText}"
-                                   Margin="6,0,6,4"
-                                   TextWrapping="Wrap"/>
                         <TextBlock Text="{Binding PhysicalButtonNoticeText}"
                                    Style="{StaticResource ErrorText}"
                                    FontSize="11" Margin="6,0,6,4"
@@ -401,7 +383,6 @@
                                 <Button Content="力反馈开关" Click="FfToggle_Click"  Margin="0,0,8,6" Padding="12,7"/>
                                 <Button Content="实际反馈窗口" Click="ShowForce_Click" Margin="0,0,8,6" Padding="12,7"/>
                                 <Button Content="纯净力感窗口" Click="ShowCleanForce_Click" Margin="0,0,8,6" Padding="12,7"/>
-                                <Button Content="力过渡实验" Click="ShowFtExp_Click" Margin="0,0,8,6" Padding="12,7"/>
                                 <ToggleButton x:Name="GravityCompCheckBox" Content="重力补偿"
                                               IsChecked="{Binding GravityCompEnabled, Mode=OneWay}"
                                               Click="GravityComp_Click" Margin="0,0,8,6" Padding="12,7"/>

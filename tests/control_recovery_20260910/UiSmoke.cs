@@ -21,6 +21,7 @@ internal static class UiSmoke
     private static readonly ConcurrentQueue<int[]> Commands = new ConcurrentQueue<int[]>();
     private static readonly object PipeLock = new object();
     private static NamedPipeServerStream Server;
+    private static volatile byte[] LatestBytes;
     private static int Checks;
 
     private static void Check(bool value, string label)
@@ -51,7 +52,7 @@ internal static class UiSmoke
             Marshal.StructureToPtr(state, pointer, false);
             var bytes = new byte[size];
             Marshal.Copy(pointer, bytes, 0, size);
-            lock (PipeLock) Server.Write(bytes, 0, bytes.Length);
+            LatestBytes = bytes;
         }
         finally { Marshal.FreeHGlobal(pointer); }
         Pump();
@@ -81,6 +82,24 @@ internal static class UiSmoke
 
     [STAThread]
     private static void Main(string[] args)
+    {
+        // 离线测试超时只结束本测试进程，防止管道清理阻塞验证任务。
+        using var timeout = new Timer(_ =>
+        {
+            Console.Error.WriteLine("FAIL: UI smoke timeout after " + Checks + " checks.");
+            Environment.Exit(2);
+        }, null, 30000, Timeout.Infinite);
+        try { Run(args); }
+        catch (Exception error)
+        {
+            // 逐层输出消息，避免装载异常在格式化完整异常时再次失败。
+            for (var current = error; current != null; current = current.InnerException)
+                Console.Error.WriteLine(current.GetType().FullName + ": " + current.Message);
+            Environment.ExitCode = 1;
+        }
+    }
+
+    private static void Run(string[] args)
     {
         // 只模拟界面管道，绝不启动上位机后台或访问 ADS。
         Check(Process.GetProcessesByName("ADS").Length == 0, "Close ADS before isolated UI test.");
@@ -115,13 +134,27 @@ internal static class UiSmoke
             Source = new Uri("/AdsControlUI;component/Themes/LightClinical.xaml", UriKind.Relative)
         });
         var window = new MainWindow();
+        // 实际后台持续发送状态；单帧后停发会让同步客户端读写互相等待。
+        using var publisher = new Timer(_ =>
+        {
+            var bytes = LatestBytes;
+            if (bytes == null) return;
+            try
+            {
+                lock (PipeLock)
+                    if (Server.IsConnected) Server.Write(bytes, 0, bytes.Length);
+            }
+            catch (IOException) { }
+            catch (ObjectDisposedException) { }
+        }, null, 0, 30);
         // 离屏布局与渲染，不创建可见窗口，也不操作用户桌面。
-        window.Measure(new Size(1040, 860));
-        window.Arrange(new Rect(0, 0, 1040, 860));
-        window.UpdateLayout();
+        var view = (FrameworkElement)window.Content;
+        view.Measure(new Size(1040, 860));
+        view.Arrange(new Rect(0, 0, 1040, 860));
+        view.UpdateLayout();
         for (int i = 0; i < 100 && !Server.IsConnected; ++i) Pump(20);
         Check(Server.IsConnected, "Mock pipe connection");
-        Check(Marshal.SizeOf<VisState>() == 884, "Protocol size");
+        Check(Marshal.SizeOf<VisState>() == 841, "Protocol size");
 
         object boxed = new VisState();
         foreach (var field in typeof(VisState).GetFields())
@@ -139,13 +172,17 @@ internal static class UiSmoke
         state.cylinder_cmd = new ushort[] { 400, 600, 400, 500 };
         Publish(state);
         var vm = (AdsControlViewModel)window.DataContext;
+        Check(vm.CylinderManualAllowed, "Snapshot enables cylinder controls");
+        view.UpdateLayout();
         var click = typeof(MainWindow).GetMethod("SetCylinderState", BindingFlags.Instance | BindingFlags.NonPublic);
         var error = (TextBlock)window.FindName("CylinderError");
         for (int index = 0; index < 4; ++index)
         {
-            var button = CylinderButton(window, index);
+            Console.WriteLine("Checking cylinder " + (index + 1));
+            var button = CylinderButton(view, index);
             var input = (TextBox)window.FindName("TbCyl" + (index + 1) + "Position");
-            Check(button != null && button.IsEnabled, "Cylinder button enabled");
+            Check(button != null, "Cylinder button exists in visual tree");
+            Check(button.IsEnabled, "Cylinder button enabled");
             Check(input.ActualWidth >= 60 && input.ActualHeight >= 30, "Input has usable bounds");
             Check(!vm.IsCylinderManual(index), "Automatic position is not manual state");
             input.Text = (index % 2 == 0 ? 0 : 2000).ToString();
@@ -175,7 +212,7 @@ internal static class UiSmoke
         error.Text = "";
         state.cylinder_manual_allowed = false;
         Publish(state);
-        Check(!CylinderButton(window, 0).IsEnabled, "Automatic sequence disables manual inputs");
+        Check(!CylinderButton(view, 0).IsEnabled, "Automatic sequence disables manual inputs");
         Check(!vm.SetCylinderManualPosition(0, 1000), "Disabled model rejects movement");
         Check(!vm.SetCylinderManualPosition(4, 1000), "Invalid index rejected");
         state.cylinder_manual_allowed = true;
@@ -184,10 +221,10 @@ internal static class UiSmoke
         {
             window.Width = size.Width;
             window.Height = size.Height;
-            window.Measure(size);
-            window.Arrange(new Rect(new Point(), size));
-            window.UpdateLayout();
-            var group = FindCylinderGroup(CylinderButton(window, 0));
+            view.Measure(size);
+            view.Arrange(new Rect(new Point(), size));
+            view.UpdateLayout();
+            var group = FindCylinderGroup(CylinderButton(view, 0));
             Check(group.ActualWidth > 300, "Cylinder group fits minimum window width");
             var image = new RenderTargetBitmap((int)Math.Ceiling(group.ActualWidth),
                 (int)Math.Ceiling(group.ActualHeight), 96, 96, PixelFormats.Pbgra32);
@@ -199,6 +236,7 @@ internal static class UiSmoke
                 encoder.Save(file);
         }
         vm.Dispose();
+        Console.WriteLine("Client disposed.");
         window.Close();
         Server.Dispose();
         Check(serverTask.Wait(2000), "Mock server stopped");

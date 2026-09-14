@@ -29,9 +29,6 @@ namespace
 		"axis1_handle_rotation_raw,axis1_handle_rotation_filtered,"
 		"axis6_handle_valid,axis6_handle_linear_raw,axis6_handle_linear_filtered,"
 		"axis6_handle_rotation_raw,axis6_handle_rotation_filtered\n";
-	constexpr const char* kTransitionHeader =
-		"elapsed_us,valid,trial_id,velocity_level,repeat_in_level,phase_code,"
-		"phase_elapsed_ms,v_ratio,axis1_from_left_mm,clean_force_n,clean_handle_torque_nm\n";
 
 	bool directory_exists(const std::wstring& path)
 	{
@@ -291,18 +288,6 @@ void ExperimentRecorder::normalize_motion_row(MotionCsvRow& row)
 	}
 }
 
-void ExperimentRecorder::normalize_transition_row(ForceTransitionCsvRow& row)
-{
-	if (row.valid)
-	{
-		return;
-	}
-	const double nan = std::numeric_limits<double>::quiet_NaN();
-	row.axis1_from_left_mm = nan;
-	row.clean_force_n = nan;
-	row.clean_handle_torque_nm = nan;
-}
-
 bool ExperimentRecorder::write_force_row(std::FILE* fp, const ForceCsvRow& row)
 {
 	ForceCsvRow normalized = row;
@@ -376,35 +361,6 @@ bool ExperimentRecorder::write_motion_row(std::FILE* fp, const MotionCsvRow& row
 	{
 		if (!write_double(fp, axis6_values[i]) ||
 			std::fputc(i + 1 == sizeof(axis6_values) / sizeof(axis6_values[0]) ? '\n' : ',', fp) == EOF)
-		{
-			return false;
-		}
-	}
-	return true;
-}
-
-bool ExperimentRecorder::write_transition_row(std::FILE* fp, const ForceTransitionCsvRow& row)
-{
-	ForceTransitionCsvRow normalized = row;
-	normalize_transition_row(normalized);
-	if (std::fprintf(fp, "%llu,%d,%d,%d,%d,%d,%llu,",
-		static_cast<unsigned long long>(normalized.elapsed_us),
-		normalized.valid ? 1 : 0,
-		normalized.trial_id,
-		normalized.velocity_level,
-		normalized.repeat_in_level,
-		normalized.phase_code,
-		static_cast<unsigned long long>(normalized.phase_elapsed_ms)) < 0)
-	{
-		return false;
-	}
-	const double values[] = {
-		normalized.v_ratio, normalized.axis1_from_left_mm,
-		normalized.clean_force_n, normalized.clean_handle_torque_nm
-	};
-	for (std::size_t i = 0; i < sizeof(values) / sizeof(values[0]); ++i)
-	{
-		if (!write_double(fp, values[i]) || std::fputc(i + 1 == sizeof(values) / sizeof(values[0]) ? '\n' : ',', fp) == EOF)
 		{
 			return false;
 		}
@@ -599,8 +555,6 @@ bool ExperimentRecorder::start(const std::string& experiment_name_utf8, const Ex
 	force_last_ads_sequence_ = 0;
 	motion_first_ads_sequence_ = 0;
 	motion_last_ads_sequence_ = 0;
-	transition_first_force_sequence_ = 0;
-	transition_last_force_sequence_ = 0;
 	force_ads_accepted_.store(0, std::memory_order_relaxed);
 	force_ads_invalid_.store(0, std::memory_order_relaxed);
 	force_ads_pre_session_rejected_.store(0, std::memory_order_relaxed);
@@ -611,15 +565,6 @@ bool ExperimentRecorder::start(const std::string& experiment_name_utf8, const Ex
 	motion_ads_pre_session_rejected_.store(0, std::memory_order_relaxed);
 	motion_ads_duplicate_rejected_.store(0, std::memory_order_relaxed);
 	motion_ads_sequence_skipped_.store(0, std::memory_order_relaxed);
-	transition_ads_accepted_.store(0, std::memory_order_relaxed);
-	transition_ads_invalid_.store(0, std::memory_order_relaxed);
-	transition_ads_pre_session_rejected_.store(0, std::memory_order_relaxed);
-	transition_ads_duplicate_rejected_.store(0, std::memory_order_relaxed);
-	transition_ads_sequence_skipped_.store(0, std::memory_order_relaxed);
-	transition_file_index_ = 0;
-	transition_dropped_completed_ = 0;
-	transition_current_pending_ = false;
-	transition_writer_used_.store(false, std::memory_order_release);
 	{
 		std::lock_guard<std::mutex> lock(ads_stats_mutex_);
 		ads_stats_baseline_ = ads_stats_latest_;
@@ -716,8 +661,6 @@ void ExperimentRecorder::stop_worker(std::string reason)
 	{
 		cleanup_failed = true;
 	}
-	try { transition_writer_.stop(); }
-	catch (...) { cleanup_failed = true; }
 	try { force_writer_.stop(); }
 	catch (...) { cleanup_failed = true; }
 	try { motion_writer_.stop(); }
@@ -747,11 +690,6 @@ void ExperimentRecorder::poll_health()
 	{
 		error_.store(ExperimentRecordingError::MotionWriterFailed, std::memory_order_release);
 		stop_async("motion_writer_error");
-	}
-	else if (transition_writer_used_.load(std::memory_order_acquire) && transition_writer_.has_error())
-	{
-		error_.store(ExperimentRecordingError::TransitionWriterFailed, std::memory_order_release);
-		stop_async("force_transition_writer_error");
 	}
 	else if (camera_.timing_writer_failed())
 	{
@@ -864,66 +802,6 @@ bool ExperimentRecorder::enqueue_motion(const MotionCsvRow& row)
 	return motion_writer_.try_enqueue(indexed);
 }
 
-bool ExperimentRecorder::start_force_transition_log()
-{
-	if (!is_recording() || transition_writer_.is_running() || !transition_writer_.stop_completed())
-	{
-		return false;
-	}
-	// 回收上一次异步停止后的线程；该等待只发生在用户显式启动下一轮实验时。
-	if (transition_current_pending_)
-	{
-		transition_dropped_completed_ += transition_writer_.dropped_count();
-		transition_current_pending_ = false;
-	}
-	transition_writer_.stop();
-	++transition_file_index_;
-	wchar_t file_name[64] = {};
-	swprintf_s(file_name, L"force_transition_%03u.csv", transition_file_index_);
-	transition_writer_used_.store(true, std::memory_order_release);
-	const bool started = transition_writer_.start(
-		join_path(session_directory_, file_name),
-		kTransitionHeader,
-		&ExperimentRecorder::write_transition_row);
-	transition_current_pending_ = started;
-	return started;
-}
-
-void ExperimentRecorder::stop_force_transition_log()
-{
-	transition_writer_.request_stop();
-}
-
-bool ExperimentRecorder::enqueue_force_transition(const ForceTransitionCsvRow& row)
-{
-	if (!is_recording() || !transition_writer_.is_running())
-	{
-		return false;
-	}
-	if (!accept_ads_snapshot(
-		row.force_snapshot_sequence,
-		row.source_qpc_ticks,
-		1,
-		transition_first_force_sequence_,
-		transition_last_force_sequence_,
-		transition_ads_accepted_,
-		transition_ads_invalid_,
-		row.valid,
-		transition_ads_pre_session_rejected_,
-		transition_ads_duplicate_rejected_,
-		transition_ads_sequence_skipped_))
-	{
-		return false;
-	}
-	ForceTransitionCsvRow normalized = row;
-	if (normalized.source_qpc_ticks >= clock_.anchor_qpc())
-	{
-		normalized.elapsed_us = clock_.elapsed_us(normalized.source_qpc_ticks);
-	}
-	normalize_transition_row(normalized);
-	return transition_writer_.try_enqueue(normalized);
-}
-
 void ExperimentRecorder::update_ads_communication_stats(const AdsCommunicationStats& stats)
 {
 	std::lock_guard<std::mutex> lock(ads_stats_mutex_);
@@ -1026,12 +904,10 @@ ExperimentRecorderSnapshot ExperimentRecorder::snapshot() const
 	}
 	result.ads_pre_session_rejected =
 		force_ads_pre_session_rejected_.load(std::memory_order_acquire) +
-		motion_ads_pre_session_rejected_.load(std::memory_order_acquire) +
-		transition_ads_pre_session_rejected_.load(std::memory_order_acquire);
+		motion_ads_pre_session_rejected_.load(std::memory_order_acquire);
 	result.ads_duplicate_rejected =
 		force_ads_duplicate_rejected_.load(std::memory_order_acquire) +
-		motion_ads_duplicate_rejected_.load(std::memory_order_acquire) +
-		transition_ads_duplicate_rejected_.load(std::memory_order_acquire);
+		motion_ads_duplicate_rejected_.load(std::memory_order_acquire);
 	result.camera = camera_.snapshot();
 	return result;
 }
@@ -1096,11 +972,6 @@ void ExperimentRecorder::write_session_json(bool final, const std::string& stop_
 	json << "    \"force\": \"ads_100hz_missed_deadlines_during_session\",\n";
 	json << "    \"motion\": \"not_applicable_even_ads_snapshot_selection\"\n";
 	json << "  },\n";
-	const std::uint64_t transition_dropped = transition_dropped_completed_ +
-		(transition_current_pending_ ? transition_writer_.dropped_count() : 0);
-	json << "  \"force_transition_writer_dropped\": " << transition_dropped << ",\n";
-	json << "  \"force_transition_writer_error\": "
-		<< ((transition_writer_used_.load() && transition_writer_.has_error()) ? "true" : "false") << ",\n";
 	json << "  \"ads\": {\n";
 	json << "    \"metrics_available\": " << (ads_metrics_available ? "true" : "false") << ",\n";
 	json << "    \"baseline_available\": " << (ads_baseline_available ? "true" : "false") << ",\n";
@@ -1186,14 +1057,7 @@ void ExperimentRecorder::write_session_json(bool final, const std::string& stop_
 	json << "      \"motion_invalid\": " << motion_ads_invalid_.load() << ",\n";
 	json << "      \"motion_pre_session_rejected\": " << motion_ads_pre_session_rejected_.load() << ",\n";
 	json << "      \"motion_duplicate_rejected\": " << motion_ads_duplicate_rejected_.load() << ",\n";
-	json << "      \"motion_sequences_skipped\": " << motion_ads_sequence_skipped_.load() << ",\n";
-	json << "      \"transition_first_force_sequence\": " << transition_first_force_sequence_ << ",\n";
-	json << "      \"transition_last_force_sequence\": " << transition_last_force_sequence_ << ",\n";
-	json << "      \"transition_accepted\": " << transition_ads_accepted_.load() << ",\n";
-	json << "      \"transition_invalid\": " << transition_ads_invalid_.load() << ",\n";
-	json << "      \"transition_pre_session_rejected\": " << transition_ads_pre_session_rejected_.load() << ",\n";
-	json << "      \"transition_duplicate_rejected\": " << transition_ads_duplicate_rejected_.load() << ",\n";
-	json << "      \"transition_sequences_skipped\": " << transition_ads_sequence_skipped_.load() << "\n";
+	json << "      \"motion_sequences_skipped\": " << motion_ads_sequence_skipped_.load() << "\n";
 	json << "    }\n";
 	json << "  },\n";
 	json << "  \"stop_reason\": ";

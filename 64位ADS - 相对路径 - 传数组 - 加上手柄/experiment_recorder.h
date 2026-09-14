@@ -29,7 +29,6 @@ enum class ExperimentRecordingError : int
 	ForceWriterFailed = 5,
 	MotionWriterFailed = 6,
 	StopThreadFailed = 7,
-	TransitionWriterFailed = 8,
 	VideoFrameWriterFailed = 9
 };
 
@@ -101,24 +100,6 @@ struct MotionCsvRow
 	double axis6_handle_rotation_filtered = 0.0;
 };
 
-struct ForceTransitionCsvRow
-{
-	std::uint64_t elapsed_us = 0;
-	// 力过渡表按实际力快照去重，避免主循环重复写入同一帧。
-	std::uint64_t force_snapshot_sequence = 0;
-	std::int64_t source_qpc_ticks = 0;
-	bool valid = false;
-	int trial_id = 0;
-	int velocity_level = 0;
-	int repeat_in_level = 0;
-	int phase_code = 0;
-	std::uint64_t phase_elapsed_ms = 0;
-	double v_ratio = 0.0;
-	double axis1_from_left_mm = 0.0;
-	double clean_force_n = 0.0;
-	double clean_handle_torque_nm = 0.0;
-};
-
 struct ExperimentRecorderSnapshot
 {
 	ExperimentRecordingState state = ExperimentRecordingState::Idle;
@@ -148,10 +129,6 @@ public:
 	bool enqueue_force(const ForceCsvRow& row);
 	bool enqueue_motion(const MotionCsvRow& row);
 
-	bool start_force_transition_log();
-	void stop_force_transition_log();
-	bool enqueue_force_transition(const ForceTransitionCsvRow& row);
-	bool force_transition_log_running() const { return transition_writer_.is_running(); }
 	void update_ads_communication_stats(const AdsCommunicationStats& stats);
 
 	void set_camera_preview(bool enabled);
@@ -163,10 +140,8 @@ public:
 private:
 	static bool write_force_row(std::FILE* fp, const ForceCsvRow& row);
 	static bool write_motion_row(std::FILE* fp, const MotionCsvRow& row);
-	static bool write_transition_row(std::FILE* fp, const ForceTransitionCsvRow& row);
 	static void normalize_force_row(ForceCsvRow& row);
 	static void normalize_motion_row(MotionCsvRow& row);
-	static void normalize_transition_row(ForceTransitionCsvRow& row);
 	static std::wstring sanitize_experiment_name(const std::wstring& raw_name);
 	static std::wstring utf8_to_wide(const std::string& text);
 	static std::string wide_to_utf8(const std::wstring& text);
@@ -208,8 +183,6 @@ private:
 	std::uint64_t force_last_ads_sequence_ = 0;
 	std::uint64_t motion_first_ads_sequence_ = 0;
 	std::uint64_t motion_last_ads_sequence_ = 0;
-	std::uint64_t transition_first_force_sequence_ = 0;
-	std::uint64_t transition_last_force_sequence_ = 0;
 	std::atomic<std::uint64_t> force_ads_accepted_{ 0 };
 	std::atomic<std::uint64_t> force_ads_invalid_{ 0 };
 	std::atomic<std::uint64_t> force_ads_pre_session_rejected_{ 0 };
@@ -220,15 +193,6 @@ private:
 	std::atomic<std::uint64_t> motion_ads_pre_session_rejected_{ 0 };
 	std::atomic<std::uint64_t> motion_ads_duplicate_rejected_{ 0 };
 	std::atomic<std::uint64_t> motion_ads_sequence_skipped_{ 0 };
-	std::atomic<std::uint64_t> transition_ads_accepted_{ 0 };
-	std::atomic<std::uint64_t> transition_ads_invalid_{ 0 };
-	std::atomic<std::uint64_t> transition_ads_pre_session_rejected_{ 0 };
-	std::atomic<std::uint64_t> transition_ads_duplicate_rejected_{ 0 };
-	std::atomic<std::uint64_t> transition_ads_sequence_skipped_{ 0 };
-	std::uint32_t transition_file_index_ = 0;
-	std::uint64_t transition_dropped_completed_ = 0;
-	bool transition_current_pending_ = false;
-	std::atomic<bool> transition_writer_used_{ false };
 	mutable std::mutex ads_stats_mutex_;
 	AdsCommunicationStats ads_stats_baseline_{};
 	AdsCommunicationStats ads_stats_latest_{};
@@ -244,7 +208,6 @@ private:
 
 	AsyncCsvWriter<ForceCsvRow> force_writer_;
 	AsyncCsvWriter<MotionCsvRow> motion_writer_;
-	AsyncCsvWriter<ForceTransitionCsvRow, 4096> transition_writer_;
 	Action4CameraRecorder camera_;
 	std::thread stop_thread_;
 };

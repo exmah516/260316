@@ -37,19 +37,16 @@ namespace AdsControlUI
         public double force_582_theory_f;
         public double force_582_theory_n;
         [MarshalAs(UnmanagedType.I1)] public bool gravity_comp_enabled;
-        // 力过渡决定性预实验（论文 §6.1）状态字段。
         // 手动屈曲/间距恢复状态。
         public int spacing_recovery_phase;
         public double spacing_recovery_moved_mm;
         public double spacing_recovery_remaining_mm;
-        // 协同递送状态。
         // 主从位移补偿只发布控制状态，不再持有磁盘会话状态。
         [MarshalAs(UnmanagedType.I1)] public bool tracking_compensation_enabled;
         public double axis1_tracking_error_mm;
         public double axis6_tracking_error_mm;
         public double axis1_compensation_gain;
         public double axis6_compensation_gain;
-        // 协同方向：0=None，1=Delivery，2=Retraction。必须与 C++ VisState 末尾字段一致。
         // axis6 当前软限位阻断状态。必须与 C++ VisState 末尾字段一致。
         [MarshalAs(UnmanagedType.I1)] public bool axis6_soft_limit_hold;
 
@@ -145,7 +142,7 @@ namespace AdsControlUI
         ExecuteStartup = 11,
         SelectDirectControl = 12,
         SetGravityCompensation = 13,
-        // 力过渡决定性预实验（论文 §6.1）控制命令。
+        // 14–17、19、23 为已删除功能的命令编号，不再复用。
         SetSpacingRecovery = 18,
         // 20 为已删除的旧位移记录命令，保留数值空洞。
         SetTrackingCompensation = 21,

@@ -132,17 +132,13 @@ namespace AdsControlUI
             // 模式与方向
 			if (prev.guidewire_mode != state.guidewire_mode ||
                 prev.axis1_reverse != state.axis1_reverse ||
-                prev.axis6_reverse != state.axis6_reverse ||
-                prev.cooperative_direction != state.cooperative_direction)
+                prev.axis6_reverse != state.axis6_reverse)
             {
                 OnPropertyChanged(nameof(ModeText));
                 OnPropertyChanged(nameof(ModeCathFwdSelected));
                 OnPropertyChanged(nameof(ModeCathRevSelected));
                 OnPropertyChanged(nameof(ModeGuideFwdSelected));
                 OnPropertyChanged(nameof(ModeGuideRevSelected));
-                OnPropertyChanged(nameof(ModeCooperativeDeliverySelected));
-                OnPropertyChanged(nameof(ModeCooperativeRetractionSelected));
-                OnPropertyChanged(nameof(CooperativeStatusText));
                 OnPropertyChanged(nameof(Axis1Reverse));
 				OnPropertyChanged(nameof(Axis6Reverse));
 			}
@@ -155,12 +151,10 @@ namespace AdsControlUI
             if (prev.control_active != state.control_active)
             {
                 OnPropertyChanged(nameof(ControlActive));
-                OnPropertyChanged(nameof(CooperativeModeEnabled));
             }
             if (prev.estop_hold != state.estop_hold)
             {
                 OnPropertyChanged(nameof(EstopHold));
-                OnPropertyChanged(nameof(CooperativeModeEnabled));
             }
 			if (prev.ff_enabled != state.ff_enabled) OnPropertyChanged(nameof(FfEnabled));
 			if (prev.force_feedback_hold_enabled != state.force_feedback_hold_enabled ||
@@ -177,56 +171,20 @@ namespace AdsControlUI
             if (prev.startup_completed != state.startup_completed)
             {
                 OnPropertyChanged(nameof(StartupCompleted));
-                OnPropertyChanged(nameof(CooperativeModeEnabled));
             }
             if (prev.startup_waiting != state.startup_waiting || prev.startup_completed != state.startup_completed)
                 OnPropertyChanged(nameof(PhaseText));
 
-            if (prev.dual_handle_ready != state.dual_handle_ready)
-            {
-                OnPropertyChanged(nameof(DualHandleReady));
-                OnPropertyChanged(nameof(CooperativeModeEnabled));
-                OnPropertyChanged(nameof(CooperativeStatusText));
-            }
-            if (prev.cooperative_return_owner != state.cooperative_return_owner)
-            {
-                OnPropertyChanged(nameof(CooperativeReturnOwner));
-                OnPropertyChanged(nameof(ModeSwitchAllowed));
-                OnPropertyChanged(nameof(CooperativeModeEnabled));
-                OnPropertyChanged(nameof(CooperativeStatusText));
-            }
             if (prev.axis6_soft_limit_hold != state.axis6_soft_limit_hold)
             {
                 OnPropertyChanged(nameof(Axis6SoftLimitHold));
                 OnPropertyChanged(nameof(Axis6SoftLimitText));
-                OnPropertyChanged(nameof(CooperativeModeEnabled));
-            }
-            if (prev.axis1_phase != state.axis1_phase || prev.axis6_phase != state.axis6_phase)
-            {
-                OnPropertyChanged(nameof(CooperativeModeEnabled));
             }
 
             if (Changed(prev.force_582_f, state.force_582_f, ForceEpsilon)) OnPropertyChanged(nameof(Force582F));
             if (Changed(prev.force_582_n, state.force_582_n, ForceEpsilon)) OnPropertyChanged(nameof(Force582N));
             if (Changed(prev.force_582_theory_f, state.force_582_theory_f, ForceEpsilon)) OnPropertyChanged(nameof(Force582TheoryF));
             if (Changed(prev.force_582_theory_n, state.force_582_theory_n, ForceEpsilon)) OnPropertyChanged(nameof(Force582TheoryN));
-
-            if (prev.ft_exp_phase != state.ft_exp_phase)
-            {
-                OnPropertyChanged(nameof(FtExpPhase));
-                OnPropertyChanged(nameof(FtExpPhaseText));
-            }
-            if (prev.ft_exp_velocity_level != state.ft_exp_velocity_level) OnPropertyChanged(nameof(FtExpVelocityLevel));
-            if (prev.ft_exp_trial_id != state.ft_exp_trial_id) OnPropertyChanged(nameof(FtExpTrialId));
-            if (prev.ft_exp_repeat_in_lvl != state.ft_exp_repeat_in_lvl) OnPropertyChanged(nameof(FtExpRepeatInLevel));
-            if (Changed(prev.ft_exp_v_ratio_curr, state.ft_exp_v_ratio_curr, ForceEpsilon)) OnPropertyChanged(nameof(FtExpVRatioCurr));
-            if (Changed(prev.ft_exp_axis1_target, state.ft_exp_axis1_target, PosEpsilon)) OnPropertyChanged(nameof(FtExpAxis1Target));
-            if (prev.ft_exp_active != state.ft_exp_active)
-            {
-                OnPropertyChanged(nameof(FtExpActive));
-                OnPropertyChanged(nameof(CooperativeModeEnabled));
-            }
-            if (prev.ft_exp_aborted != state.ft_exp_aborted) OnPropertyChanged(nameof(FtExpAborted));
 
             if (prev.spacing_recovery_phase != state.spacing_recovery_phase)
             {
@@ -238,12 +196,7 @@ namespace AdsControlUI
                 OnPropertyChanged(nameof(ModeCathRevSelected));
                 OnPropertyChanged(nameof(ModeGuideFwdSelected));
                 OnPropertyChanged(nameof(ModeGuideRevSelected));
-                OnPropertyChanged(nameof(ModeCooperativeDeliverySelected));
-			OnPropertyChanged(nameof(ModeCooperativeRetractionSelected));
 			OnPropertyChanged(nameof(PhysicalButtonNoticeText));
-			OnPropertyChanged(nameof(ModeSwitchAllowed));
-                OnPropertyChanged(nameof(CooperativeModeEnabled));
-                OnPropertyChanged(nameof(CooperativeStatusText));
                 OnPropertyChanged(nameof(PhaseText));
             }
             if (Changed(prev.spacing_recovery_moved_mm, state.spacing_recovery_moved_mm, PosEpsilon) ||
@@ -254,13 +207,11 @@ namespace AdsControlUI
             // 即使后端拒绝进入且 phase 仍为 Idle，也要把 ToggleButton 校正回实际状态。
             OnPropertyChanged(nameof(SpacingRecoveryActive));
             OnPropertyChanged(nameof(SpacingRecoveryInactive));
-            // 协同入口被拒绝时，RadioButton 仍可能保留本地点击状态；按后端快照校正。
+            // 模式切换被拒绝时，RadioButton 仍可能保留本地点击状态；按后端快照校正。
             OnPropertyChanged(nameof(ModeCathFwdSelected));
             OnPropertyChanged(nameof(ModeCathRevSelected));
             OnPropertyChanged(nameof(ModeGuideFwdSelected));
             OnPropertyChanged(nameof(ModeGuideRevSelected));
-			OnPropertyChanged(nameof(ModeCooperativeDeliverySelected));
-			OnPropertyChanged(nameof(ModeCooperativeRetractionSelected));
 			OnPropertyChanged(nameof(TrackingCompensationEnabled));
 			OnPropertyChanged(nameof(Axis1TrackingError));
 			OnPropertyChanged(nameof(Axis6TrackingError));
@@ -313,13 +264,6 @@ namespace AdsControlUI
             OnPropertyChanged(nameof(ModeCathRevSelected));
             OnPropertyChanged(nameof(ModeGuideFwdSelected));
             OnPropertyChanged(nameof(ModeGuideRevSelected));
-            OnPropertyChanged(nameof(ModeCooperativeDeliverySelected));
-            OnPropertyChanged(nameof(ModeCooperativeRetractionSelected));
-            OnPropertyChanged(nameof(ModeSwitchAllowed));
-            OnPropertyChanged(nameof(CooperativeModeEnabled));
-            OnPropertyChanged(nameof(DualHandleReady));
-            OnPropertyChanged(nameof(CooperativeReturnOwner));
-            OnPropertyChanged(nameof(CooperativeStatusText));
             OnPropertyChanged(nameof(Axis6SoftLimitHold));
             OnPropertyChanged(nameof(Axis6SoftLimitText));
             OnPropertyChanged(nameof(ControlActive));
@@ -341,15 +285,6 @@ namespace AdsControlUI
             OnPropertyChanged(nameof(StartupWaiting));
             OnPropertyChanged(nameof(StartupCompleted));
             OnPropertyChanged(nameof(PhaseText));
-            OnPropertyChanged(nameof(FtExpPhase));
-            OnPropertyChanged(nameof(FtExpVelocityLevel));
-            OnPropertyChanged(nameof(FtExpTrialId));
-            OnPropertyChanged(nameof(FtExpRepeatInLevel));
-            OnPropertyChanged(nameof(FtExpVRatioCurr));
-            OnPropertyChanged(nameof(FtExpAxis1Target));
-            OnPropertyChanged(nameof(FtExpActive));
-            OnPropertyChanged(nameof(FtExpAborted));
-            OnPropertyChanged(nameof(FtExpPhaseText));
             OnPropertyChanged(nameof(SpacingRecoveryActive));
             OnPropertyChanged(nameof(SpacingRecoveryInactive));
             OnPropertyChanged(nameof(SpacingRecoveryStatusText));
@@ -614,8 +549,6 @@ namespace AdsControlUI
             get
             {
                 if (SpacingRecoveryActive) return "屈曲恢复";
-                if (_state.guidewire_mode == 2)
-                    return _state.cooperative_direction == 2 ? "协同撤出" : "协同递送";
                 string mode = _state.guidewire_mode == 0 ? "导管" : "导丝";
                 bool rev = _state.guidewire_mode == 0 ? _state.axis1_reverse : _state.axis6_reverse;
                 return mode + (rev ? "撤出" : "递送");
@@ -628,17 +561,6 @@ namespace AdsControlUI
         public bool ModeCathRevSelected => SpacingRecoveryInactive && _state.guidewire_mode == 0 && _state.axis1_reverse;
         public bool ModeGuideFwdSelected => SpacingRecoveryInactive && _state.guidewire_mode == 1 && !_state.axis6_reverse;
         public bool ModeGuideRevSelected => SpacingRecoveryInactive && _state.guidewire_mode == 1 && _state.axis6_reverse;
-        public bool ModeCooperativeDeliverySelected =>
-            SpacingRecoveryInactive &&
-            _state.guidewire_mode == 2 &&
-            _state.cooperative_direction == 1;
-        public bool ModeCooperativeRetractionSelected =>
-            SpacingRecoveryInactive &&
-            _state.guidewire_mode == 2 &&
-            _state.cooperative_direction == 2;
-        public bool DualHandleReady => _state.dual_handle_ready;
-        public int CooperativeReturnOwner => _state.cooperative_return_owner;
-		public bool ModeSwitchAllowed => CooperativeReturnOwner == 0;
 		public string PhysicalButtonNoticeText => _physicalButtonNoticeText;
 
 		private static string PhysicalButtonEventText(int eventCode)
@@ -649,8 +571,6 @@ namespace AdsControlUI
 				case 2: return "SN 587 B7：已选择导管撤出";
 				case 3: return "SN 582 B7：已选择导丝递送";
 				case 4: return "SN 582 B7：已选择导丝撤出";
-				case 5: return "物理按钮触发：协同递送";
-				case 6: return "物理按钮触发：协同撤出";
 				case 7: return "物理按钮冲突：两只手柄同时按下 B7，本次模式切换已忽略";
 				default: return "物理按钮触发";
 			}
@@ -659,28 +579,6 @@ namespace AdsControlUI
         public string Axis6SoftLimitText => Axis6SoftLimitHold
             ? "轴6软件限位：当前动作已阻断，松手或回到安全窗口后自动重新评估。"
             : "轴6软件限位：正常（<= 670 mm）。";
-        public bool CooperativeModeEnabled =>
-            DualHandleReady &&
-            ModeSwitchAllowed &&
-            StartupCompleted &&
-            ControlActive &&
-            !EstopHold &&
-            !FtExpActive &&
-            !Axis6SoftLimitHold &&
-            _state.axis1_phase == 0 &&
-            _state.axis6_phase == 0;
-        public string CooperativeStatusText
-        {
-            get
-            {
-                if (!DualHandleReady) return "双手柄未就绪（需重启上位机）";
-                if (CooperativeReturnOwner == 1) return "导管换手中";
-                if (CooperativeReturnOwner == 2) return "导丝换手中";
-                if (ModeCooperativeDeliverySelected) return "协同递送 / 双手柄就绪";
-                if (ModeCooperativeRetractionSelected) return "协同撤出 / 双手柄就绪";
-                return "双手柄就绪：587 导管，582 导丝";
-            }
-        }
 		public bool TrackingCompensationEnabled => _state.tracking_compensation_enabled;
 		public double Axis1TrackingError => _state.axis1_tracking_error_mm;
 		public double Axis6TrackingError => _state.axis6_tracking_error_mm;
@@ -694,7 +592,7 @@ namespace AdsControlUI
 				bool forwardMode = (_state.guidewire_mode == 0 && !_state.axis1_reverse) ||
 					(_state.guidewire_mode == 1 && !_state.axis6_reverse);
 				return ControlActive && !EstopHold &&
-					!SpacingRecoveryActive && !FtExpActive && forwardMode &&
+					!SpacingRecoveryActive && forwardMode &&
 					_state.axis1_phase == 0 && _state.axis6_phase == 0;
 			}
 		}
@@ -796,7 +694,6 @@ namespace AdsControlUI
 					case 5: return "force.csv 写入失败，记录已自动停止";
 					case 6: return "motion.csv 写入失败，记录已自动停止";
 					case 7: return "无法启动停止后台线程";
-					case 8: return "力过渡专用 CSV 写入失败，统一记录已自动停止";
 					case 9: return "video_frames.csv 写入失败，统一记录已自动停止";
 					default: return "";
 				}
@@ -890,37 +787,6 @@ namespace AdsControlUI
             }
         }
 
-        // 力过渡决定性预实验（论文 §6.1）状态镜像。
-        public int FtExpPhase => _state.ft_exp_phase;
-        public int FtExpVelocityLevel => _state.ft_exp_velocity_level;
-        public int FtExpTrialId => _state.ft_exp_trial_id;
-        public int FtExpRepeatInLevel => _state.ft_exp_repeat_in_lvl;
-        public double FtExpVRatioCurr => _state.ft_exp_v_ratio_curr;
-        public double FtExpAxis1Target => _state.ft_exp_axis1_target;
-        public bool FtExpActive => _state.ft_exp_active;
-        public bool FtExpAborted => _state.ft_exp_aborted;
-        public string FtExpPhaseText
-        {
-            get
-            {
-                switch (_state.ft_exp_phase)
-                {
-                    case 0: return "空闲";
-                    case 1: return "起始静置";
-                    case 2: return "接近起点";
-                    case 3: return "推送中";
-                    case 4: return "触发回退";
-                    case 5: return "PLC 计划回退";
-                    case 6: return "回退完成";
-                    case 7: return "档间静置";
-                    case 8: return "推进试次";
-                    case 9: return "已完成";
-                    case 10: return "已中止";
-                    default: return "?";
-                }
-            }
-        }
-
         private double GetAxisPos(int index)
         {
             if (_state.axis_pos_from_left != null && _state.axis_pos_from_left.Length > index)
@@ -971,12 +837,6 @@ namespace AdsControlUI
 
         public void SetMode(int guidewireMode, int reverse) =>
             _client.SendCommand(VisCommandType.SetReverseMode, guidewireMode, reverse);
-
-        public void SetCooperativeDelivery(bool enabled) =>
-            _client.SendCommand(VisCommandType.SetCooperativeDelivery, enabled ? 1 : 0);
-
-        public void SetCooperativeRetraction(bool enabled) =>
-            _client.SendCommand(VisCommandType.SetCooperativeRetraction, enabled ? 1 : 0);
 
         public void SetAxis1PostReturnLead(double leadMm) =>
             _client.SendCommand(
@@ -1038,39 +898,6 @@ namespace AdsControlUI
             _client.SendCommand(VisCommandType.SetStartupSpeed, (int)(speed * 100000));
             _client.SendCommand(VisCommandType.ExecuteStartup);
         }
-
-        // 力过渡决定性预实验：参数下发与启停。
-        // 参数 field_id 编码与 C++ ForceTransitionExperiment::set_param_a/b 一致。
-        public void SetFtExpParamInt(int fieldId, int intVal) =>
-            _client.SendCommand(VisCommandType.SetFtExpParamA, fieldId, intVal);
-
-        public void SetFtExpParamFixedX1000(int fieldId, double val) =>
-            _client.SendCommand(VisCommandType.SetFtExpParamB, fieldId, (int)Math.Round(val * 1000.0));
-
-        public void SendFtExpConfig(
-            int numLevels, double[] vRatios, int repeatsPerLevel,
-            double startPosMm, double pushTargetMm, double returnTriggerMm,
-            double approachSpeedRatio, int dwellBetweenMs)
-        {
-            SetFtExpParamInt(0, numLevels);
-            SetFtExpParamInt(1, repeatsPerLevel);
-            SetFtExpParamInt(2, dwellBetweenMs);
-            for (int i = 0; i < 6; ++i)
-            {
-                double v = (vRatios != null && i < vRatios.Length) ? vRatios[i] : 0.0;
-                SetFtExpParamFixedX1000(10 + i, v);
-            }
-            SetFtExpParamFixedX1000(20, startPosMm);
-            SetFtExpParamFixedX1000(21, pushTargetMm);
-            SetFtExpParamFixedX1000(22, returnTriggerMm);
-            SetFtExpParamFixedX1000(23, approachSpeedRatio);
-        }
-
-        public void StartForceTransitionExperiment() =>
-            _client.SendCommand(VisCommandType.StartForceTransitionExperiment);
-
-        public void StopForceTransitionExperiment() =>
-            _client.SendCommand(VisCommandType.StopForceTransitionExperiment);
 
 		public void StartExperimentRecording(string experimentName) =>
 			_client.SendCommand(

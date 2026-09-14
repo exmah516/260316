@@ -12,7 +12,6 @@ namespace AdsControlUI
         private ForceRealtimeWindow _forceWindow;
         private CleanForceWindow _cleanForceWindow;
         private CameraPreviewWindow _cameraPreviewWindow;
-        private ForceTransitionWindow _ftExpWindow;
 		private readonly DispatcherTimer _manualJogKeepaliveTimer;
 		private int _activeArmJogAxis;
 		private int _activeArmJogDirection;
@@ -39,7 +38,6 @@ namespace AdsControlUI
             _forceWindow?.Close();
             _cleanForceWindow?.Close();
             _cameraPreviewWindow?.Close();
-            _ftExpWindow?.Close();
             _vm.Dispose();
             base.OnClosed(e);
         }
@@ -89,16 +87,6 @@ namespace AdsControlUI
         private void ModeCathRev_Click(object sender, RoutedEventArgs e) => _vm.SetMode(0, 1);
         private void ModeGuideFwd_Click(object sender, RoutedEventArgs e) => _vm.SetMode(1, 0);
         private void ModeGuideRev_Click(object sender, RoutedEventArgs e) => _vm.SetMode(1, 1);
-        private void ModeCooperativeDelivery_Click(object sender, RoutedEventArgs e)
-        {
-            if (sender is ToggleButton button)
-                _vm.SetCooperativeDelivery(button.IsChecked == true);
-        }
-        private void ModeCooperativeRetraction_Click(object sender, RoutedEventArgs e)
-        {
-            if (sender is ToggleButton button)
-                _vm.SetCooperativeRetraction(button.IsChecked == true);
-        }
         private void SpacingRecovery_Click(object sender, RoutedEventArgs e)
         {
             if (sender is ToggleButton button)
@@ -421,7 +409,6 @@ namespace AdsControlUI
             _forceWindow?.AddState(state);
 			_cleanForceWindow?.AddState(state);
 			_cameraPreviewWindow?.OnState(state);
-            _ftExpWindow?.OnState(state);
         }
 
 		private void StartExperimentRecording_Click(object sender, RoutedEventArgs e)
@@ -475,20 +462,6 @@ namespace AdsControlUI
 			}
 			_cleanForceWindow?.AddState(_vm.LatestState);
 		}
-
-        private void ShowFtExp_Click(object sender, RoutedEventArgs e)
-        {
-            if (_ftExpWindow == null)
-            {
-                _ftExpWindow = new ForceTransitionWindow(_vm) { Owner = this };
-                _ftExpWindow.Closed += (s, args) => _ftExpWindow = null;
-                _ftExpWindow.Show();
-            }
-            else
-            {
-                _ftExpWindow.Activate();
-            }
-        }
 
         private void ExecuteStartup_Click(object sender, RoutedEventArgs e)
         {

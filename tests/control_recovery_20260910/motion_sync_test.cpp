@@ -64,11 +64,10 @@ struct Fixture
 	X(axis1_prev_abs_for_trigger) X(axis6_prev_abs_for_trigger) \
 	X(independent_axis1_hold_rel) X(independent_axis2_hold_rel) \
 	X(independent_axis3_hold_rel) X(independent_axis5_hold_rel) \
-	X(axis6_locked_window_start_abs) X(axis6_locked_window_end_abs) \
-	X(axis6_coop_prev_axis1_cmd_abs)
+	X(axis6_locked_window_start_abs) X(axis6_locked_window_end_abs)
 #define BOOL_FIELDS(X) \
 	X(axis1_reverse_switch_guard_active) X(axis6_reverse_switch_guard_active) \
-	X(axis1_prev_abs_valid) X(axis6_prev_abs_valid) X(axis6_window_locked) X(axis6_coop_ff_inited)
+	X(axis1_prev_abs_valid) X(axis6_prev_abs_valid) X(axis6_window_locked)
 #define DECL_DOUBLE(name) double name = 0;
 	SCALAR_FIELDS(DECL_DOUBLE)
 #define DECL_BOOL(name) bool name = false;
@@ -140,7 +139,7 @@ int main()
 		f.actual[6] = -23;
 		f.axis2_hold_rel = 37;
 		f.axis7_hold_rel = -62;
-		assert(motion_sync::sync_cooperative_guidewire(f.ctx, 1, false, false));
+		assert(motion_sync::sync_all(f.ctx, 1));
 		f.expect_rotation(18, -23);
 		assert(f.crawl1.rot_base_rel == 18);
 		assert(f.crawl6.rot_base_rel == -23);
@@ -161,5 +160,51 @@ int main()
 		assert(!motion_sync::sync_all(f.ctx, 1));
 		assert(writes.empty());
 	}
-	std::cout << "PASS: 6 motion recovery regression cases (no hardware)." << std::endl;
+	{
+		Fixture f;
+		// 导管窗口随轴5反馈刷新，窗口相对各自左限位的差值为 [4,26]。
+		f.left[4] = 430;
+		f.left[5] = 580;
+		f.actual[4] = 450;
+		double lo = 0, hi = 0;
+		motion_sync::calculate_axis6_window_from_axis5(f.ctx, lo, hi);
+		assert(lo == 604 && hi == 626);
+		f.actual[4] += 5;
+		motion_sync::calculate_axis6_window_from_axis5(f.ctx, lo, hi);
+		assert(lo == 609 && hi == 631);
+	}
+	{
+		Fixture f;
+		// 独立导丝回退只重建基准，轴5反馈变化不能移动入模时锁定的窗口。
+		f.actual[4] = 20;
+		assert(motion_sync::rebuild_axis6_window_from_axis5(f.ctx, false));
+		f.actual[4] = 30;
+		f.actual[5] = 24;
+		f.actual[6] = 7;
+		f.filter6.inited = true;
+		f.filter6.axis0_filtered = 12;
+		f.filter6.axis1_filtered = 3;
+		assert(motion_sync::rebase_axis6_after_return(f.ctx));
+		assert(f.crawl6.start_abs == 24 && f.crawl6.end_abs == 46);
+		assert(f.axis6_follow_cmd_abs == 24 && f.axis6_prev_linear_filtered == 12);
+		assert(f.crawl6.rot_base_rel == 7 && f.independent_axis5_hold_rel == 30);
+		assert(f.crawl6.window_active && f.axis6_prev_abs_valid);
+		assert(writes.empty());
+	}
+	{
+		Fixture f;
+		// 导管双腿回退完成后，轴6实际位置仍进入导管联动基准。
+		f.actual[0] = 28;
+		f.actual[2] = 31;
+		f.actual[4] = 35;
+		f.actual[5] = 42;
+		f.filter1.inited = true;
+		f.filter1.axis0_filtered = 9;
+		assert(motion_sync::rebase_axis1_after_return(f.ctx));
+		assert(f.axis1_follow_cmd_abs == 28 && f.axis1_prev_linear_filtered == 9);
+		assert(f.axis3_base_rel == 31 && f.axis5_base_rel == 35);
+		assert(f.axis6_mirror_base_rel == 42 && f.pos[5] == 42);
+		assert(writes.empty());
+	}
+	std::cout << "PASS: 9 motion recovery regression cases (no hardware)." << std::endl;
 }
