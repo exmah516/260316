@@ -253,10 +253,10 @@
                                 </WrapPanel>
                                 <TextBlock Text="力感" FontWeight="SemiBold" FontSize="11" Margin="0,3,0,0"/>
                                 <WrapPanel>
-                                    <CheckBox x:Name="FieldFn1Raw" Content="fn1原始" Margin="0,0,6,0"/>
-                                    <CheckBox x:Name="FieldFt1Raw" Content="ft1原始" Margin="0,0,6,0"/>
-                                    <CheckBox x:Name="FieldFn2Raw" Content="fn2原始" Margin="0,0,6,0"/>
-                                    <CheckBox x:Name="FieldFt2Raw" Content="ft2原始" Margin="0,0,6,0"/>
+                                    <CheckBox x:Name="FieldFn1Raw" Content="fn1原始" IsChecked="True" Margin="0,0,6,0"/>
+                                    <CheckBox x:Name="FieldFt1Raw" Content="ft1原始" IsChecked="True" Margin="0,0,6,0"/>
+                                    <CheckBox x:Name="FieldFn2Raw" Content="fn2原始" IsChecked="True" Margin="0,0,6,0"/>
+                                    <CheckBox x:Name="FieldFt2Raw" Content="ft2原始" IsChecked="True" Margin="0,0,6,0"/>
                                     <CheckBox x:Name="FieldFn1Zeroed" Content="fn1去零" Margin="0,0,6,0"/>
                                     <CheckBox x:Name="FieldFt1Zeroed" Content="ft1去零" Margin="0,0,6,0"/>
                                     <CheckBox x:Name="FieldFn2Zeroed" Content="fn2去零" Margin="0,0,6,0"/>
@@ -266,22 +266,22 @@
                                 <WrapPanel>
                                     <CheckBox x:Name="FieldFn1Sensor" Content="fn1传感器N" Margin="0,0,6,0"/>
                                     <CheckBox x:Name="FieldFt1Sensor" Content="ft1传感器N" Margin="0,0,6,0"/>
-                                    <CheckBox x:Name="FieldFn1CalDelta" Content="fn1校正增量N" Margin="0,0,6,0"/>
+                                    <CheckBox x:Name="FieldFn1CalDelta" Content="fn1校正增量N" IsChecked="True" Margin="0,0,6,0"/>
                                     <CheckBox x:Name="FieldFn1CalAbs" Content="fn1校正绝对N" Margin="0,0,6,0"/>
-                                    <CheckBox x:Name="FieldFt1CalDelta" Content="ft1校正增量N" Margin="0,0,6,0"/>
+                                    <CheckBox x:Name="FieldFt1CalDelta" Content="ft1校正增量N" IsChecked="True" Margin="0,0,6,0"/>
                                     <CheckBox x:Name="FieldFt1CalAbs" Content="ft1校正绝对N" Margin="0,0,6,0"/>
                                     <CheckBox x:Name="FieldTorque1CalDelta" Content="扭矩1校正增量N·mm" Margin="0,0,6,0"/>
                                     <CheckBox x:Name="FieldTorque1CalAbs" Content="扭矩1校正绝对N·mm" Margin="0,0,6,0"/>
-                                    <CheckBox x:Name="FieldFn1DecoupledDelta" Content="fn1解耦增量N" Margin="0,0,6,0"/>
-                                    <CheckBox x:Name="FieldTorque1DecoupledDelta" Content="扭矩1解耦增量N·mm" Margin="0,0,6,0"/>
+                                    <CheckBox x:Name="FieldFn1DecoupledDelta" Content="fn1解耦增量N" IsChecked="True" Margin="0,0,6,0"/>
+                                    <CheckBox x:Name="FieldTorque1DecoupledDelta" Content="扭矩1解耦增量N·mm" IsChecked="True" Margin="0,0,6,0"/>
                                     <CheckBox x:Name="FieldFn1DecoupledAbs" Content="fn1解耦绝对N" Margin="0,0,6,0"/>
                                     <CheckBox x:Name="FieldTorque1DecoupledAbs" Content="扭矩1解耦绝对N·mm" Margin="0,0,6,0"/>
                                     <CheckBox x:Name="FieldAxis2Angle" Content="轴2角度" Margin="0,0,6,0"/>
                                     <CheckBox x:Name="FieldFn2Sensor" Content="fn2传感器N" Margin="0,0,6,0"/>
                                     <CheckBox x:Name="FieldFt2Sensor" Content="ft2传感器N" Margin="0,0,6,0"/>
-                                    <CheckBox x:Name="FieldFn2CalDelta" Content="fn2校正增量N" Margin="0,0,6,0"/>
+                                    <CheckBox x:Name="FieldFn2CalDelta" Content="fn2校正增量N" IsChecked="True" Margin="0,0,6,0"/>
                                     <CheckBox x:Name="FieldFn2CalAbs" Content="fn2校正绝对N" Margin="0,0,6,0"/>
-                                    <CheckBox x:Name="FieldFt2CalDelta" Content="ft2校正增量N" Margin="0,0,6,0"/>
+                                    <CheckBox x:Name="FieldFt2CalDelta" Content="ft2校正增量N" IsChecked="True" Margin="0,0,6,0"/>
                                     <CheckBox x:Name="FieldFt2CalAbs" Content="ft2校正绝对N" Margin="0,0,6,0"/>
                                     <CheckBox x:Name="FieldTorque2CalDelta" Content="扭矩2校正增量N·mm" Margin="0,0,6,0"/>
                                     <CheckBox x:Name="FieldTorque2CalAbs" Content="扭矩2校正绝对N·mm" Margin="0,0,6,0"/>

@@ -303,6 +303,10 @@ bool StandaloneRecordController::stop_record()
         set_error_locked("停止独立记录失败：" + ads_.last_error());
         return false;
     }
+    if (stream_ads_.is_open())
+    {
+        stream_ads_.stop_recording();
+    }
     recording_ = false;
     stop_requested_ = true;
     stop_poll_cycles_ = 0;
@@ -316,6 +320,7 @@ bool StandaloneRecordController::abort_record(const std::string& reason)
     std::lock_guard<std::mutex> lock(mutex_);
     if (!recording_ && !stop_requested_) return true;
     if (ads_.is_open()) ads_.set_record_enable(false, ++event_sequence_);
+    if (stream_ads_.is_open()) stream_ads_.stop_recording();
     recording_ = false;
     stop_requested_ = true;
     stop_poll_cycles_ = 0;
@@ -401,64 +406,73 @@ bool StandaloneRecordController::poll_blocks_locked()
         stop_requested_ = true;
         return false;
     }
-    if (!recorder_.active() || status.source_mode != 3) return true;
-    for (int pass = 0; pass < 2; ++pass)
+    if (!recorder_.active()) return true;
+    if (status.source_mode == 3)
     {
-        int slot = -1;
-        for (int candidate = 0; candidate < 2; ++candidate)
+        for (int pass = 0; pass < 2; ++pass)
         {
-            if (status.block_ready[candidate] && status.block_sequence[candidate] == expected_block_sequence_)
+            int slot = -1;
+            for (int candidate = 0; candidate < 2; ++candidate)
             {
-                slot = candidate;
-                break;
+                if (status.block_ready[candidate] && status.block_sequence[candidate] == expected_block_sequence_)
+                {
+                    slot = candidate;
+                    break;
+                }
             }
-        }
-        if (slot < 0) break;
-        std::vector<ExperimentStreamSample> samples;
-        std::uint32_t sequence = 0;
-        if (!stream_ads_.read_block(slot, samples, sequence) || sequence != expected_block_sequence_)
-        {
-            set_error_locked("独立记录分块读取失败或序号不连续");
-            stop_status_ = "Error";
-            stop_reason_ = last_error_;
-            if (ads_.is_open()) ads_.set_record_enable(false, ++event_sequence_);
-            recording_ = false;
-            stop_requested_ = true;
-            return false;
-        }
-        for (const auto& sample : samples)
-        {
-            if (sample.index != expected_sample_index_)
+            if (slot < 0) break;
+            std::vector<ExperimentStreamSample> samples;
+            std::uint32_t sequence = 0;
+            if (!stream_ads_.read_block(slot, samples, sequence) || sequence != expected_block_sequence_)
             {
-                set_error_locked("独立记录样本序号不连续");
+                set_error_locked("独立记录分块读取失败或序号不连续");
                 stop_status_ = "Error";
                 stop_reason_ = last_error_;
                 if (ads_.is_open()) ads_.set_record_enable(false, ++event_sequence_);
+                if (stream_ads_.is_open()) stream_ads_.stop_recording();
                 recording_ = false;
                 stop_requested_ = true;
                 return false;
             }
-            ++expected_sample_index_;
+            for (const auto& sample : samples)
+            {
+                if (sample.index != expected_sample_index_)
+                {
+                    set_error_locked("独立记录样本序号不连续");
+                    stop_status_ = "Error";
+                    stop_reason_ = last_error_;
+                    if (ads_.is_open()) ads_.set_record_enable(false, ++event_sequence_);
+                    if (stream_ads_.is_open()) stream_ads_.stop_recording();
+                    recording_ = false;
+                    stop_requested_ = true;
+                    return false;
+                }
+                ++expected_sample_index_;
+            }
+            std::string error;
+            if (!recorder_.append_standalone(samples, zero_, field_mask_, error) || !stream_ads_.acknowledge_block(slot, sequence))
+            {
+                set_error_locked(error.empty() ? "确认独立记录分块失败：" + stream_ads_.last_error() : error);
+                stop_status_ = "Error";
+                stop_reason_ = last_error_;
+                if (ads_.is_open()) ads_.set_record_enable(false, ++event_sequence_);
+                if (stream_ads_.is_open()) stream_ads_.stop_recording();
+                recording_ = false;
+                stop_requested_ = true;
+                return false;
+            }
+            ++expected_block_sequence_;
+            status.block_ready[slot] = false;
         }
-        std::string error;
-        if (!recorder_.append_standalone(samples, zero_, field_mask_, error) || !stream_ads_.acknowledge_block(slot, sequence))
-        {
-            set_error_locked(error.empty() ? "确认独立记录分块失败：" + stream_ads_.last_error() : error);
-            stop_status_ = "Error";
-            stop_reason_ = last_error_;
-            if (ads_.is_open()) ads_.set_record_enable(false, ++event_sequence_);
-            recording_ = false;
-            stop_requested_ = true;
-            return false;
-        }
-        ++expected_block_sequence_;
-        status.block_ready[slot] = false;
     }
     if (stop_requested_)
     {
         ++stop_poll_cycles_;
-        // 给PLC至少两个任务轮次完成“停止采样并提交最后不满块”的状态转换。
-        if (stop_poll_cycles_ >= 2 && !status.recording && !status.block_ready[0] && !status.block_ready[1])
+        if (stream_ads_.is_open()) stream_ads_.stop_recording();
+        // 给PLC至少两个任务轮次完成“停止采样并提交最后不满块”的状态转换；
+        // 增加超时降级逻辑（20周期，约200ms），避免PLC因标志位竞态未清除导致上位机永久卡在收尾状态。
+        const bool plc_stopped = !status.recording && !status.block_ready[0] && !status.block_ready[1];
+        if ((stop_poll_cycles_ >= 2 && plc_stopped) || stop_poll_cycles_ >= 20)
             finalize_locked(stop_status_.c_str(), stop_reason_);
     }
     return true;
