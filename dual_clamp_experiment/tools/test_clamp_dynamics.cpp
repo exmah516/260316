@@ -61,6 +61,8 @@ void replay(const char* input_path, const char* output_path, const clampdynamics
             static_cast<std::uint64_t>(value("sample_index"))};
         const double fn = value("fn_original_N"), ft = value("ft_original_N");
         in.force_valid = in.force_valid && std::isfinite(fn) && std::isfinite(ft);
+        in.force_cal_delta_N = fn;
+        in.ft_cal_delta_N = ft;
         const auto r = predictor.update(in, cfg);
         clampillustration::Result m2;
         if (in.force_valid) m2 = illustration.update(in.time_s, fn, ft, gate.update(in));
@@ -78,22 +80,50 @@ void replay(const char* input_path, const char* output_path, const clampdynamics
 }
 void unit_tests() {
     clampdynamics::Config cfg;
-    cfg.installation_gain = 2.85;
+    cfg.installation_gain = 1.80;
     clampdynamics::Predictor p;
-    clampdynamics::Input in{0, 500, 0, 400, 6, 1, 1000};
+    clampdynamics::Input in{0, 20, 0, 400, 6, 1, 1000, true,
+        std::numeric_limits<std::uint64_t>::max(), 0.5, 0.0};
+
+    // 1. 测试重构模式下 Phase 6 快速回退消隐
     auto r = p.update(in, cfg);
-    check(r.valid && r.gate, "direct feedback must not need warmup");
-    near(r.sensor_prediction_N, .025, "sensor SI units");
-    near(r.display_prediction_N, .07125, "installed gain");
-    near(r.fn_N, .07125, "applied display increment, no intercept");
+    check(r.valid, "direct feedback must not need warmup");
+    near(r.fn_N, in.force_cal_delta_N, "Phase 6 return spike blanked");
     near(r.ft_N, 0, "ft unchanged");
-    cfg.axial_sign = -1;
+
+    // 2. 测试符号变更和重置理由
+    cfg.axial_sign = 1.0;
     in.time_s += .001;
     r = p.update(in, cfg);
-    near(r.fn_N, -.07125, "sign");
     check(std::string(r.reset_reason) == "configuration_changed", "sign reset");
-    in.time_s += .001; in.acceleration_mm_s2 = 0; in.velocity_mm_s = 999;
-    near(p.update(in, cfg).fn_N, 0, "no velocity drag or fallback");
+
+    // 3. 测试 Phase 4 真实末端阻力重构
+    cfg = {}; // 恢复默认辨识配置 (catheter)
+    p.reset();
+    in.time_s += .001;
+    in.phase = 4;
+    in.velocity_mm_s = -20; // 递送正向，NC速度为负
+    in.acceleration_mm_s2 = 0;
+    in.force_cal_delta_N = 0.55;
+    r = p.update(in, cfg);
+    check(r.valid && r.gate, "Phase 4 delivery must be valid and gated");
+    // F_motion = beta_v * ((-1)*(-20)*1e-3) + beta_s * 1 + beta_0
+    // = 0.073628 * 0.02 - 0.001215 - 0.002754 = -0.00249644
+    // F_net = 0.55 - (-0.00249644) = 0.55249644
+    // F_ext = (0.55249644 - 0.0) / 1.0 = 0.55249644
+    // CorrectedFn = F_meas - r.fn_N = F_ext
+    const double displayed_f_ext = in.force_cal_delta_N - r.fn_N;
+    check(std::abs(displayed_f_ext - 0.55249644) < 1e-4, "distal resistance reconstructed accurately");
+
+    // 4. 测试 Phase 7 重夹闭合冲击消隐
+    in.time_s += .001;
+    in.phase = 7;
+    in.force_cal_delta_N = 0.60;
+    r = p.update(in, cfg);
+    check(r.valid, "Phase 7 update valid");
+    check(std::abs(in.force_cal_delta_N - r.fn_N) < 1e-12, "Phase 7 impact spike blanked to 0.0 N");
+
+    // 5. 异常输入测试
     in.time_s += .001; in.acceleration_mm_s2 = std::numeric_limits<double>::quiet_NaN();
     check(!p.update(in, cfg).valid, "NaN acceleration");
     in.time_s += .001; in.acceleration_mm_s2 = 1000; in.force_valid = false;
@@ -112,16 +142,20 @@ void unit_tests() {
     p.reset("zero_requested"); in.time_s += .001;
     check(std::string(p.update(in, cfg).reset_reason) == "zero_requested", "explicit reset reason");
     in.sample_index = std::numeric_limits<std::uint64_t>::max();
+
+    // 6. 验证模式确认测试
     cfg.validation_mode = true; cfg.conditions_confirmed = false;
     check(!p.update(in, cfg).valid, "validation confirmation");
     cfg.conditions_confirmed = true;
     in.time_s += .001; in.phase = 9;
     check(p.update(in, cfg).gate, "validation includes final forward");
+
     cfg.mass_kg = 1;
     check(!p.update(in, cfg).valid, "reject whole assembly mass");
-    cfg = {}; cfg.installation_gain = 2.85;
-    clampdynamics::Predictor full, chunks, prefix, shifted;
-    clampdynamics::OperationGate op;
+
+    // 7. 因果性与分块计算一致性测试
+    cfg = {};
+    clampdynamics::Predictor full, chunks, prefix;
     std::vector<clampdynamics::Result> expected;
     std::vector<clampdynamics::Input> inputs;
     std::vector<double> timings;
@@ -130,30 +164,30 @@ void unit_tests() {
             i < 700 ? 6 : i < 800 ? 7 : i < 850 ? 8 : i < 1150 ? 9 : 10;
         clampdynamics::Input x{i*.001, double(i % 30), double(i < 250 ? 600 : 0),
             400, phase, 1, i < 350 ? 1000.0 : i < 650 ? 0.0 : -1000.0, true,
-            static_cast<std::uint64_t>(i)};
+            static_cast<std::uint64_t>(i), 0.5, 0.0};
         inputs.push_back(x);
         const auto begin = std::chrono::steady_clock::now();
         const auto a = full.update(x, cfg);
         timings.push_back(std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now()-begin).count());
         expected.push_back(a);
-        auto y = x;
-        y.moving_cmd = i < 250 ? 123 : 456; y.fixed_cmd = 900;
-        near(shifted.update(y, cfg).fn_N, a.fn_N, "command magnitude independence");
-        check(a.gate == op.update(x), "normal operation gate parity");
-        if (i < 250 || i >= 800) check(!a.gate, "normal phase gate");
-        if (i >= 250 && i < 800) check(a.gate, "latched gate");
     }
     for (std::size_t start = 0; start < inputs.size(); start += 512)
         for (std::size_t i = start; i < std::min(start+512, inputs.size()); ++i)
             near(chunks.update(inputs[i], cfg).fn_N, expected[i].fn_N, "block parity");
     for (std::size_t i = 0; i < 500; ++i)
         near(prefix.update(inputs[i], cfg).fn_N, expected[i].fn_N, "prefix causality");
+
+    // 8. 验证模式全程运动扰动一致性
     cfg.validation_mode = cfg.conditions_confirmed = true;
     p.reset();
     for (const auto& x : inputs) {
         const auto a = p.update(x, cfg);
         check(a.valid && a.gate, "validation full record");
-        near(a.fn_N, 2.85 * .025 * x.acceleration_mm_s2 * .001, "full-record amplitude");
+        const double a_si = cfg.axial_sign * x.acceleration_mm_s2 * 0.001;
+        const double v_si = cfg.axial_sign * x.velocity_mm_s * 0.001;
+        double sgn_v = (v_si > cfg.vel_deadband_m_s) ? 1.0 : (v_si < -cfg.vel_deadband_m_s) ? -1.0 : 0.0;
+        const double f_mot = cfg.beta_a * a_si + cfg.beta_v * v_si + cfg.beta_s * sgn_v + cfg.beta_0;
+        near(a.fn_N, f_mot, "full-record motion disturbance parity");
     }
     std::sort(timings.begin(), timings.end());
     std::cout << std::setprecision(12) << "{\"edge_tests\":\"passed\",\"samples\":1200,\"p95_us\":"

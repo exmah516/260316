@@ -20,6 +20,7 @@ void ProgrammedDeliveryController::reset_model_locked(const char* reason)
 	external_curves_.reset();
 	model_compute_us_ = model_block_span_ms_ = 0.0;
 	model_zero_valid_ = false;
+	handle_feedback_.reset();
 }
 
 std::string ProgrammedDeliveryController::curve_response(std::uint64_t after, std::uint64_t generation) const
@@ -28,16 +29,22 @@ std::string ProgrammedDeliveryController::curve_response(std::uint64_t after, st
 	const bool valid = clampdynamics::valid_config(config_.dynamics);
 	return curves_.response(after, generation, static_cast<int>(config_.mode), valid,
 		stream_status_.zero.valid, !recorder_.failed(), model_compute_us_, model_block_span_ms_, clampdynamics::kVersion)
-		+ "|dynamics_25g|" + std::to_string(config_.dynamics.axial_sign)
+		+ "|dynamics_reconstruct|" + std::to_string(config_.dynamics.axial_sign)
 		+ "|" + (config_.dynamics.validation_mode ? "1" : "0")
 		+ "|" + last_prediction_.status + "|" + last_prediction_.reset_reason
 		+ "|" + std::to_string(config_.dynamics.installation_gain)
-		+ "|" + forcepulse::kVersion + "|" + std::to_string(pulse_compute_us_);
+		+ "|" + forcepulse::kVersion + "|" + std::to_string(pulse_compute_us_)
+		+ "|" + (config_.dynamics.reconstruct_external ? "1" : "0");
 }
 
 ProgrammedDeliveryController::ProgrammedDeliveryController()
 {
 	// 不在构造阶段同步阻塞ADS连接；先启动后端和UI，再由连接命令执行重试。
+	mode_dynamics_[static_cast<unsigned>(ProgrammedDeliveryMode::Catheter)] = clampdynamics::kCatheter;
+	mode_dynamics_[static_cast<unsigned>(ProgrammedDeliveryMode::Guidewire)] = clampdynamics::kGuidewire;
+	mode_dynamics_[static_cast<unsigned>(ProgrammedDeliveryMode::ExternalValidation)] = clampdynamics::kCatheter;
+	config_.dynamics = clampdynamics::kCatheter;
+	handle_feedback_.init();
 }
 
 std::string ProgrammedDeliveryController::external_curve_response(std::uint64_t after, std::uint64_t generation) const
@@ -371,6 +378,7 @@ void ProgrammedDeliveryController::abort()
 	std::lock_guard<std::mutex> lock(mutex_);
 	if (ads_.is_open() && !ads_.request_abort()) last_error_ = "下发中止请求失败：" + ads_.last_error();
 	started_ = false;
+	handle_feedback_.reset();
 }
 
 void ProgrammedDeliveryController::tick()
@@ -562,6 +570,7 @@ void ProgrammedDeliveryController::poll_stream_locked()
 		}
 		std::vector<ProgrammedDeliverySample> converted;
 		converted.reserve(raw.size());
+		double latest_ext_force = 0.0;
 		model_block_span_ms_ = raw.empty() ? 0.0 :
 			static_cast<double>(raw.back().time_us - raw.front().time_us) / 1000.0;
 		model_compute_us_ = 0.0;
@@ -620,7 +629,8 @@ void ProgrammedDeliveryController::poll_stream_locked()
 				guidewire ? s.axis6_vel : s.axis1_vel,
 				double(guidewire ? s.cylinder4 : s.cylinder2),
 				double(guidewire ? s.cylinder3 : s.cylinder1),
-				s.phase, s.cycle_index, guidewire ? s.axis6_acc : s.axis1_acc, force_valid, s.sample_index};
+				s.phase, s.cycle_index, guidewire ? s.axis6_acc : s.axis1_acc, force_valid, s.sample_index,
+				side.force_cal_delta_n, side.ft_cal_delta_n};
 			const auto prediction = predictor_.update(input, params);
 			last_prediction_ = prediction;
 			s.dynamics = prediction;
@@ -632,9 +642,8 @@ void ProgrammedDeliveryController::poll_stream_locked()
 			s.model_ft = prediction.ft_N;
 			s.model_gate = prediction.gate;
 			s.model_acceleration = prediction.acceleration_mm_s2;
-			// 旧列保留兼容；inertia_N为实际应用的显示层增量，viscous_N恒为零。
 			s.model_inertia = prediction.fn_N;
-			s.model_viscous = 0;
+			s.model_viscous = params.beta_v * (params.axial_sign * (guidewire ? s.axis6_vel : s.axis1_vel) * 0.001);
 			if (config_.mode == ProgrammedDeliveryMode::ExternalValidation) {
 				external_curves_.push({0, s.plc_time_us * 1e-6, externalvalidation::compare(cal, s),
 					s.phase, s.cycle_index, s.sync_state});
@@ -647,8 +656,17 @@ void ProgrammedDeliveryController::poll_stream_locked()
 					s.illustration.valid_fn, s.illustration.valid_ft,
 					s.pulse_fn_N, s.pulse_ft_N, s.pulse.replaced, unsigned(s.pulse.status),
 					s.pulse.age_us, s.pulse.locked});
+				latest_ext_force = side.force_cal_delta_n - s.model_fn;
 			} else { illustration_.reset(); illustration_gate_.reset(); }
 			converted.push_back(s);
+		}
+		if (!converted.empty())
+		{
+			handle_feedback_.update(stream_status_.zero.valid, latest_ext_force);
+		}
+		else if (!stream_status_.zero.valid)
+		{
+			handle_feedback_.update(false, 0.0);
 		}
 		std::string error;
 		if (!recorder_.append_program(converted, 0, config_.mode, stream_status_.zero, error))
@@ -829,8 +847,10 @@ bool ProgrammedDeliveryController::write_samples_csv(const std::string& director
 		externalvalidation::write_header(out);
 		clampdynamics::Predictor predictor;
 		for (auto s : samples) {
+			const forcecal::Result cal = forcecal::calculate(s.fn1, s.ft1, s.fn2, s.ft2, stream_status_.zero.value, stream_status_.zero.valid);
 			const clampdynamics::Input input{s.plc_time_us * 1e-6, s.axis1_vel, double(s.cylinder2),
-				double(s.cylinder1), s.phase, s.cycle_index, s.axis1_acc, stream_status_.zero.valid, s.sample_index};
+				double(s.cylinder1), s.phase, s.cycle_index, s.axis1_acc, stream_status_.zero.valid, s.sample_index,
+				cal.side1.force_cal_delta_n, cal.side1.ft_cal_delta_n};
 			const auto result = predictor.update(input, config_.dynamics);
 			s.model_valid = result.valid; s.model_fn = result.fn_N; s.model_ft = result.ft_N;
 			externalvalidation::write_sample(out, s, stream_status_.zero.value, stream_status_.zero.valid);

@@ -210,6 +210,25 @@
                                 </Grid>
                                 <TextBlock x:Name="ManualCylinderHint" Text="自检完成后可控制电缸；记录不受自检和准备定位限制。" TextWrapping="Wrap" Foreground="{StaticResource Muted}" FontSize="11" Margin="0,7,0,0"/>
 
+                                <!-- C组静止开闭自动循环测试卡片 -->
+                                <Border Background="#F8FAFC" BorderBrush="{StaticResource BorderBrushColor}" BorderThickness="1" CornerRadius="6" Padding="10,8" Margin="0,8,0,0">
+                                    <StackPanel>
+                                        <TextBlock Text="C组静止开闭自动测试（基座不动）" FontWeight="Bold" FontSize="12" Foreground="{StaticResource Ink}" Margin="0,0,0,4"/>
+                                        <WrapPanel VerticalAlignment="Center" Margin="0,2,0,4">
+                                            <TextBlock Text="循环次数" VerticalAlignment="Center" FontSize="11" Foreground="{StaticResource Muted}" Margin="0,0,4,0"/>
+                                            <TextBox x:Name="TxtStaticCycleCount" Width="36" Height="24" Text="10" Margin="0,0,10,0" HorizontalContentAlignment="Center"/>
+                                            <TextBlock Text="开/闭等待(ms)" VerticalAlignment="Center" FontSize="11" Foreground="{StaticResource Muted}" Margin="0,0,4,0"/>
+                                            <TextBox x:Name="TxtStaticWaitMs" Width="46" Height="24" Text="1000" Margin="0,0,8,0" HorizontalContentAlignment="Center"/>
+                                        </WrapPanel>
+                                        <WrapPanel Margin="0,2,0,0">
+                                            <Button x:Name="BtnAutoCycleCylinder2" Content="移动爪(电缸2)自动循环" Click="AutoCycleCylinder2_Click" Padding="6,3" Margin="0,0,6,4" ToolTip="用于 C01~C04：基座静止，移动夹爪在开值与闭值间自动开闭"/>
+                                            <Button x:Name="BtnAutoCycleCylinder1" Content="辅助爪(电缸1)自动循环" Click="AutoCycleCylinder1_Click" Padding="6,3" Margin="0,0,0,4" ToolTip="用于 C05：基座与移动夹爪不动，辅助夹爪在开值与闭值间自动开闭"/>
+                                            <Button x:Name="BtnAutoCycleStop" Content="停止循环" Click="AutoCycleStop_Click" Visibility="Collapsed" Padding="6,3" Margin="6,0,0,4" Style="{StaticResource DangerBtnStyle}"/>
+                                        </WrapPanel>
+                                        <TextBlock x:Name="StaticCycleStatusText" Text="流程：先点下方【开始记录】→ 点上方自动循环 → 完成后点【停止记录】。" FontSize="11" Foreground="#0284C7" Margin="0,3,0,0" TextWrapping="Wrap"/>
+                                    </StackPanel>
+                                </Border>
+
                                 <Separator Margin="0,12,0,10"/>
                                 <TextBlock Text="独立数据记录" FontSize="14" FontWeight="Bold" Foreground="{StaticResource Ink}" Margin="0,0,0,8"/>
                                 <TextBlock Text="选择需要写入CSV的字段（采样序号、PLC时间、阶段和事件序号始终记录）" TextWrapping="Wrap" FontSize="11" Foreground="{StaticResource Muted}" Margin="0,0,0,5"/>
@@ -297,14 +316,17 @@
                             <StackPanel x:Name="ProgramPanel" Visibility="Collapsed">
                                 <StackPanel x:Name="DynamicsOptions" Margin="0,0,0,12">
                                     <DockPanel Margin="0,0,0,6">
-                                        <TextBlock Text="25 g 惯性符号" VerticalAlignment="Center"/>
+                                        <TextBlock Text="运动补偿方向符号" VerticalAlignment="Center"/>
                                         <ComboBox x:Name="DynamicsSign" SelectedIndex="0" Width="155" HorizontalAlignment="Right"
                                                   SelectionChanged="DynamicsOption_Changed">
-                                            <ComboBoxItem Content="+1（未验证）"/>
-                                            <ComboBoxItem Content="-1（未验证）"/>
+                                            <ComboBoxItem Content="+1（未校准）"/>
+                                            <ComboBoxItem Content="-1（辨识推荐）"/>
                                         </ComboBox>
                                     </DockPanel>
-                                    <CheckBox x:Name="DynamicsValidation" Content="无器械验证（全程模型）"
+                                    <CheckBox x:Name="DynamicsReconstruct" Content="末端真实阻力重构 (1/α)" IsChecked="True" Margin="0,2,0,4"
+                                              Checked="DynamicsOption_Changed" Unchecked="DynamicsOption_Changed"
+                                              ToolTip="根据动力学辨识参数（导管α=0.4187, 导丝α=0.1659），扣除运动扰动与预紧阈值后重构末端真实外力；递送外相自动消隐。"/>
+                                    <CheckBox x:Name="DynamicsValidation" Content="无器械验证（全程运动模型）"
                                               Checked="DynamicsOption_Changed" Unchecked="DynamicsOption_Changed"/>
                                     <CheckBox x:Name="DynamicsConditions" Margin="0,5,0,0" IsEnabled="False"
                                               ToolTip="人工确认，仅作记录；此选项不控制夹爪、运动轴或电缸。">
@@ -494,7 +516,7 @@
                                           ToolTip="目标效果示意：假设削弱80%，非动力学辨识结果；可能同时压缩真实外力变化。">
                                     <StackPanel Orientation="Horizontal"><Line X2="18" Stroke="#B45309" StrokeDashArray="2,2" VerticalAlignment="Center" Margin="0,0,5,0"/><TextBlock Text="模型2 · 目标效果示意"/></StackPanel>
                                 </CheckBox>
-                                <CheckBox x:Name="CausalForceToggle" Content="25 g 惯性试算" Foreground="#E11D48" IsChecked="True"
+                                <CheckBox x:Name="CausalForceToggle" Content="末端真实阻力" Foreground="#E11D48" IsChecked="True"
                                           Checked="CausalVisibility_Changed" Unchecked="CausalVisibility_Changed" Margin="0,0,10,0"/>
                                 <Border x:Name="Force1Legend" Background="#F0FDFA" BorderBrush="#CCFBF1" BorderThickness="1" CornerRadius="4" Padding="8,2" Margin="0,0,8,0">
                                     <StackPanel Orientation="Horizontal" VerticalAlignment="Center">

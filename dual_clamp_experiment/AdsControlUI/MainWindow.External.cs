@@ -56,12 +56,13 @@ namespace DualClampExperimentUI
             ExternalParameters.Visibility = ExternalForcePhases.Visibility = ExternalTorquePhases.Visibility =
                 IsExternalMode ? Visibility.Visible : Visibility.Collapsed;
             DynamicsValidation.Visibility = DynamicsConditions.Visibility =
+                DynamicsReconstruct.Visibility =
                 IsExternalMode ? Visibility.Collapsed : Visibility.Visible;
             PulseGuardToggle.Visibility = IsExternalMode ? Visibility.Collapsed : Visibility.Visible;
             Force2LegendText.Text = IsExternalMode ? "轴6参考 (N)" : "fn2 (N)";
             Torque2LegendText.Text = IsExternalMode ? "轴6参考 (N·mm)" : "ft2 (N)";
             CausalTorqueToggle.Content = IsExternalMode ? "轴1惯性试算" : "ft 原值（未补偿）";
-            CausalForceToggle.Content = IsExternalMode ? "轴1惯性试算" : "25 g 惯性试算";
+            CausalForceToggle.Content = IsExternalMode ? "轴1惯性试算" : "末端真实阻力";
             ProgramCylinder1Coupling.IsEnabled = !IsExternalMode;
             if (!IsExternalMode)
                 ProgramAxis1PreparePos.IsEnabled = ProgramAxis1TriggerPos.IsEnabled =
@@ -296,7 +297,7 @@ namespace DualClampExperimentUI
             CausalForceToggle.IsChecked = false;
             if (args.Contains("--external-model")) CausalForceToggle.IsChecked = CausalTorqueToggle.IsChecked = true;
             if (DynamicsValidation.IsChecked == true || Model2ForceToggle.Visibility != Visibility.Collapsed ||
-                PulseGuardToggle.Visibility != Visibility.Collapsed)
+                PulseGuardToggle.Visibility != Visibility.Collapsed || DynamicsReconstruct.Visibility != Visibility.Collapsed)
                 throw new InvalidOperationException("External mode exposes incompatible processing");
             int width = Array.IndexOf(args, "--replay-width"), height = Array.IndexOf(args, "--replay-height");
             if (width >= 0) Width = D(args[width + 1]);

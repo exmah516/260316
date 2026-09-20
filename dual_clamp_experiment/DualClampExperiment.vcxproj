@@ -70,9 +70,11 @@
     <ClInclude Include="StandaloneRecordController.h" />
     <ClInclude Include="StandaloneRecordTypes.h" />
     <ClInclude Include="DualClampPipe.h" />
+    <ClInclude Include="Handle582Feedback.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <Target Name="CopyRuntimeDependencies" AfterTargets="Build">
     <Copy SourceFiles="..\64位ADS - 相对路径 - 传数组 - 加上手柄\ADS\x64\TcAdsDll.dll" DestinationFolder="$(OutDir)" SkipUnchangedFiles="true" />
+    <Copy SourceFiles="..\64位ADS - 相对路径 - 传数组 - 加上手柄\FLCatheter.dll" DestinationFolder="$(OutDir)" SkipUnchangedFiles="true" />
   </Target>
 </Project>

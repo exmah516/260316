@@ -133,6 +133,12 @@ namespace
 			else config.dynamics.conditions_confirmed = text == "1";
 			continue;
 		}
+		if (key == "model_reconstruct")
+		{
+			if (text != "0" && text != "1") { error = "model_reconstruct必须为0或1"; return false; }
+			config.dynamics.reconstruct_external = (text == "1");
+			continue;
+		}
 		if (key == "cylinder1_coupling" || key == "cylinder3_coupling")
 		{
 			if (text != "0" && text != "1")

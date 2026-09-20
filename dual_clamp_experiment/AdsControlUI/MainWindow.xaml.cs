@@ -254,7 +254,8 @@ namespace DualClampExperimentUI
                     Number(ProgramReturnDeceleration), Number(ProgramReturnJerk), Int(ProgramReleaseLead), Int(ProgramReclampLead), RecordSuffix());
                 commandText += "|model_sign=" + (DynamicsSign.SelectedIndex == 1 ? "-1" : "1")
                     + "|model_validation=" + (DynamicsValidation.IsChecked == true ? "1" : "0")
-                    + "|model_conditions_confirmed=" + (DynamicsConditions.IsChecked == true ? "1" : "0");
+                    + "|model_conditions_confirmed=" + (DynamicsConditions.IsChecked == true ? "1" : "0")
+                    + "|model_reconstruct=" + (DynamicsReconstruct.IsChecked == true ? "1" : "0");
                 await SendAsync(commandText);
             }
             catch (Exception ex) { ErrorText.Text = "准备定位参数无效：" + ex.Message; }
@@ -319,6 +320,74 @@ namespace DualClampExperimentUI
                     await SendAsync(string.Format(CultureInfo.InvariantCulture, "MANUAL_CYLINDER_{0}|cylinder={1}", open ? "OPEN" : "CLOSE", cylinder));
             }
             catch (Exception ex) { ErrorText.Text = "电缸参数无效：" + ex.Message; }
+        }
+
+        private CancellationTokenSource? _staticCycleCts;
+
+        private async void AutoCycleCylinder2_Click(object sender, RoutedEventArgs e)
+        {
+            await RunAutoCycleAsync(2);
+        }
+
+        private async void AutoCycleCylinder1_Click(object sender, RoutedEventArgs e)
+        {
+            await RunAutoCycleAsync(1);
+        }
+
+        private void AutoCycleStop_Click(object sender, RoutedEventArgs e)
+        {
+            _staticCycleCts?.Cancel();
+        }
+
+        private async Task RunAutoCycleAsync(int cylinder)
+        {
+            if (_staticCycleCts != null) return;
+
+            if (!int.TryParse(TxtStaticCycleCount.Text, out int count) || count <= 0) count = 10;
+            if (!int.TryParse(TxtStaticWaitMs.Text, out int waitMs) || waitMs < 100) waitMs = 1000;
+
+            _staticCycleCts = new CancellationTokenSource();
+            CancellationToken token = _staticCycleCts.Token;
+
+            BtnAutoCycleCylinder1.IsEnabled = false;
+            BtnAutoCycleCylinder2.IsEnabled = false;
+            BtnAutoCycleStop.Visibility = Visibility.Visible;
+
+            try
+            {
+                for (int i = 1; i <= count; i++)
+                {
+                    token.ThrowIfCancellationRequested();
+                    StaticCycleStatusText.Text = string.Format(CultureInfo.InvariantCulture,
+                        "电缸{0}自动测试：第 {1}/{2} 周期 - 【开】（等待 {3} ms）...", cylinder, i, count, waitMs);
+                    await SendManualCylinderConfigAndAction(cylinder, true);
+                    await Task.Delay(waitMs, token);
+
+                    token.ThrowIfCancellationRequested();
+                    StaticCycleStatusText.Text = string.Format(CultureInfo.InvariantCulture,
+                        "电缸{0}自动测试：第 {1}/{2} 周期 - 【闭】（等待 {3} ms）...", cylinder, i, count, waitMs);
+                    await SendManualCylinderConfigAndAction(cylinder, false);
+                    await Task.Delay(waitMs, token);
+                }
+                StaticCycleStatusText.Text = string.Format(CultureInfo.InvariantCulture,
+                    "电缸{0}自动测试：已顺利完成全部 {1} 周期！可点击下方【停止记录】归档。", cylinder, count);
+            }
+            catch (OperationCanceledException)
+            {
+                StaticCycleStatusText.Text = "自动循环已由用户停止。";
+            }
+            catch (Exception ex)
+            {
+                StaticCycleStatusText.Text = "自动循环出错：" + ex.Message;
+            }
+            finally
+            {
+                _staticCycleCts?.Dispose();
+                _staticCycleCts = null;
+                BtnAutoCycleCylinder1.IsEnabled = true;
+                BtnAutoCycleCylinder2.IsEnabled = true;
+                BtnAutoCycleStop.Visibility = Visibility.Collapsed;
+            }
         }
 
         private async void StandaloneRecordStart_Click(object sender, RoutedEventArgs e)
@@ -463,22 +532,28 @@ namespace DualClampExperimentUI
             if (forceValid)
             {
                 double fn1 = D(p[60]), ft1 = D(p[61]), fn2 = D(p[62]), ft2 = D(p[63]);
-                if (guidewire)
+                if (CurrentMode == "legacy")
                 {
-                    ForceValueText.Text = string.Format(CultureInfo.InvariantCulture, "fn2: {0:F3} N", fn2);
-					TorqueValueText.Text = string.Format(CultureInfo.InvariantCulture, "ft2: {0:F6} N", ft2);
-                }
-                else
-                {
-                    ForceValueText.Text = string.Format(CultureInfo.InvariantCulture, "fn1: {0:F3} N", fn1);
-					TorqueValueText.Text = string.Format(CultureInfo.InvariantCulture, "ft1: {0:F6} N", ft1);
+                    if (guidewire)
+                    {
+                        ForceValueText.Text = string.Format(CultureInfo.InvariantCulture, "fn2: {0:F3} N", fn2);
+                        TorqueValueText.Text = string.Format(CultureInfo.InvariantCulture, "ft2: {0:F6} N", ft2);
+                    }
+                    else
+                    {
+                        ForceValueText.Text = string.Format(CultureInfo.InvariantCulture, "fn1: {0:F3} N", fn1);
+                        TorqueValueText.Text = string.Format(CultureInfo.InvariantCulture, "ft1: {0:F6} N", ft1);
+                    }
                 }
             }
             else
             {
                 _force1.Clear(); _force2.Clear(); _torque1.Clear(); _torque2.Clear();
-                ForceValueText.Text = "未取零";
-                TorqueValueText.Text = "未取零";
+                if (CurrentMode == "legacy")
+                {
+                    ForceValueText.Text = "未取零";
+                    TorqueValueText.Text = "未取零";
+                }
             }
             SetAdsStatus(ads, ads ? "ADS: 正常 (Port 851)" : "ADS: 未连接");
             PrepareButton.IsEnabled = ads && _selfcheckDone && !_selfcheckBusy && !_setupBusy; StartButton.IsEnabled = ads && _setupDone && phase == 2 && p.Length > programZeroDone && p[programZeroDone] == "1" && !_selfcheckBusy && !_setupBusy; ZeroButton.IsEnabled = ads && _selfcheckDone && _setupDone && !_selfcheckBusy && !_setupBusy && phase == 2;

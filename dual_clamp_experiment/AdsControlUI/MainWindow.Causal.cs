@@ -36,6 +36,7 @@ namespace DualClampExperimentUI
         private int _model2Mode;
         private readonly int[] _dynamicsSigns = new int[5];
         private readonly bool[] _dynamicsValidation = new bool[5];
+        private readonly bool[] _dynamicsReconstruct = new bool[5] { true, true, true, true, true };
         private bool _restoringDynamics, _appliedValidation;
         private int _dynamicsMode;
         private void RestoreDynamicsOptions()
@@ -44,6 +45,7 @@ namespace DualClampExperimentUI
             _dynamicsMode = CurrentModeNumber;
             DynamicsSign.SelectedIndex = _dynamicsSigns[_dynamicsMode];
             DynamicsValidation.IsChecked = !IsExternalMode && _dynamicsValidation[_dynamicsMode];
+            DynamicsReconstruct.IsChecked = !IsExternalMode && _dynamicsReconstruct[_dynamicsMode];
             DynamicsConditions.IsChecked = false;
             DynamicsConditions.IsEnabled = DynamicsValidation.IsChecked == true;
             _restoringDynamics = false;
@@ -53,6 +55,7 @@ namespace DualClampExperimentUI
             if (!_loaded || _restoringDynamics) return;
             _dynamicsSigns[_dynamicsMode] = DynamicsSign.SelectedIndex;
             _dynamicsValidation[_dynamicsMode] = DynamicsValidation.IsChecked == true;
+            _dynamicsReconstruct[_dynamicsMode] = DynamicsReconstruct.IsChecked == true;
             DynamicsConditions.IsChecked = false;
             DynamicsConditions.IsEnabled = DynamicsValidation.IsChecked == true;
             ResetCurveView();
@@ -138,24 +141,33 @@ namespace DualClampExperimentUI
                 if (trim > 0) _curvePoints.RemoveRange(0, trim);
                 if (_curvePoints.Count > 10001) _curvePoints.RemoveRange(0, _curvePoints.Count - 10001);
             }
-            bool dynamics = p.Length > 11 && p[11] == "dynamics_25g";
+            bool dynamics = p.Length > 11 && (p[11] == "dynamics_25g" || p[11] == "dynamics_reconstruct");
             string sign = p.Length > 12 && D(p[12]) < 0 ? "-1" : "+1";
             _appliedValidation = dynamics && p.Length > 13 && p[13] == "1";
-            CausalForceToggle.Content = dynamics ? "25 g 惯性试算" : "模型处理";
+            bool reconstruct = dynamics && p.Length > 19 && p[19] == "1";
+            CausalForceToggle.Content = dynamics
+                ? (reconstruct ? "末端真实阻力" : "动力学扰动补偿")
+                : "模型处理";
             CausalTorqueToggle.Content = dynamics ? "ft 原值（未补偿）" : "模型处理";
             string state = p[4] != "1" ? "未取零，未补偿" :
                 p[3] != "1" ? "模型配置无效或条件待确认" :
-                _curvePoints.Count == 0 ? "试验模型，等待采样" :
+                _curvePoints.Count == 0 ? "辨识模型，等待采样" :
                 !_curvePoints.Last().Valid ? "输入无效，未补偿" :
-                dynamics ? "25 g · 符号" + sign + "未验证\n反馈及同步待验证 · " + (_appliedValidation ? "无器械全程" : "操作门控") :
+                dynamics ? (reconstruct ? "末端阻力重构 (1/α) · 符号" + sign + "\n递送重构 · 回退/重夹消隐"
+                                        : "动力学补偿 · 符号" + sign + "\n" + (_appliedValidation ? "无器械全程" : "操作门控")) :
                 p.Length > 11 && p[11] == "borrowed_guidewire" ? "借用导丝参数 · 未验证，仅作对比" : "试验模型，仅作曲线对比";
             CausalStatusText.Text = string.Format(CultureInfo.InvariantCulture,
                 "{0}\n单点≤{1:F2} μs · 块跨度 {2:F0} ms · 绘图 {3:F1} ms{4}{5}",
                 state, D(p[7]), D(p[8]), _lastDrawMs,
                 _curveGap ? " · 曲线缺段" : "", p[5] == "1" ? "" : " · 记录错误");
             CausalStatusText.ToolTip = "模型版本：" + p[6] + "\n块跨度不是完整端到端延迟；原信号和处理信号共用采样时间。"
-                + (dynamics ? "\n传感器预测=s*0.025*a/1000 N；显示增量=安装增益*传感器预测，不加截距。"
-                    + "\n直接反馈加速度，无差分、滤波或时间平移；ft不补偿。数值有效不代表物理模型已验证。"
+                + (dynamics ? (reconstruct
+                    ? "\n末端阻力重构: F_net = F_meas - F_motion; F_ext = max(0, (F_net - beta_load) / alpha)"
+                      + "\n运动扰动模型: F_motion = beta_a*a + beta_v*v + beta_s*sgn(v) + beta_0"
+                      + "\n递送外相 (Phase 5张开/Phase 6快速回退/Phase 7闭合冲击) 自动消隐置零。"
+                    : "\n动力学扰动补偿: F_corr = F_meas - F_motion"
+                      + "\n运动扰动模型: F_motion = beta_a*a + beta_v*v + beta_s*sgn(v) + beta_0"
+                      + "\n直接反馈加速度与速度，无相位平移；ft不补偿。")
                     + "\n状态：" + (p.Length > 14 ? p[14] : "") + "；重置：" + (p.Length > 15 ? p[15] : "") : "");
             if (_curvePoints.Count > 0 && _curvePoints.Last().PulseAvailable) {
                 var last = _curvePoints.Last();
@@ -193,9 +205,12 @@ namespace DualClampExperimentUI
             if (_curvePoints.Count > 0) {
                 var s = _curvePoints.Last();
                 bool cleaned = PulseGuardToggle.IsChecked == true && s.PulseAvailable;
+                bool isReconstruct = DynamicsReconstruct.IsChecked == true && !_appliedValidation;
                 ForceValueText.Text = string.Format(CultureInfo.InvariantCulture,
-                    "{3} {0:F4} N   处理 {1:F4} N   t={2:F3} s",
-                    DisplayForce(s,true), DisplayCorrected(s,true), s.Time, cleaned ? "修正" : "原始");
+                    "{3} {0:F4} N   {4} {1:F4} N   t={2:F3} s",
+                    DisplayForce(s,true), DisplayCorrected(s,true), s.Time,
+                    cleaned ? "修正" : "原始",
+                    isReconstruct ? "重构外力" : "处理");
                 TorqueValueText.Text = string.Format(CultureInfo.InvariantCulture,
                     "{2} {0:F4} N   处理 {1:F4} N", DisplayForce(s,false), DisplayCorrected(s,false),
                     cleaned ? "修正" : "原始");
@@ -288,6 +303,7 @@ namespace DualClampExperimentUI
                 throw new InvalidOperationException("Dynamics persistence/confirmation reset failed");
             Array.Clear(_dynamicsSigns, 0, _dynamicsSigns.Length);
             Array.Clear(_dynamicsValidation, 0, _dynamicsValidation.Length);
+            for (int i = 0; i < _dynamicsReconstruct.Length; ++i) _dynamicsReconstruct[i] = true;
             RestoreDynamicsOptions();
             Array.Clear(_model2Choices, 0, _model2Choices.Length);
             RestoreModel2Visibility();
