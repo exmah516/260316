@@ -136,7 +136,8 @@ namespace
 		if (key == "model_reconstruct")
 		{
 			if (text != "0" && text != "1") { error = "model_reconstruct必须为0或1"; return false; }
-			config.dynamics.reconstruct_external = (text == "1");
+			if (text == "1") { error = "末端力逆重构未验证，已停用；请使用运动补偿"; return false; }
+			config.dynamics.reconstruct_external = false;
 			continue;
 		}
 		if (key == "cylinder1_coupling" || key == "cylinder3_coupling")

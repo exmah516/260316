@@ -317,15 +317,15 @@
                                 <StackPanel x:Name="DynamicsOptions" Margin="0,0,0,12">
                                     <DockPanel Margin="0,0,0,6">
                                         <TextBlock Text="运动补偿方向符号" VerticalAlignment="Center"/>
-                                        <ComboBox x:Name="DynamicsSign" SelectedIndex="0" Width="155" HorizontalAlignment="Right"
+                                        <ComboBox x:Name="DynamicsSign" SelectedIndex="1" Width="155" HorizontalAlignment="Right"
                                                   SelectionChanged="DynamicsOption_Changed">
                                             <ComboBoxItem Content="+1（未校准）"/>
                                             <ComboBoxItem Content="-1（辨识推荐）"/>
                                         </ComboBox>
                                     </DockPanel>
-                                    <CheckBox x:Name="DynamicsReconstruct" Content="末端真实阻力重构 (1/α)" IsChecked="True" Margin="0,2,0,4"
+                                    <CheckBox x:Name="DynamicsReconstruct" Content="末端力逆重构（停用）" IsChecked="False" IsEnabled="False" Margin="0,2,0,4"
                                               Checked="DynamicsOption_Changed" Unchecked="DynamicsOption_Changed"
-                                              ToolTip="根据动力学辨识参数（导管α=0.4187, 导丝α=0.1659），扣除运动扰动与预紧阈值后重构末端真实外力；递送外相自动消隐。"/>
+                                              ToolTip="当前仅扣除轴1已辨识运动项；不使用未验证的载荷逆模型。"/>
                                     <CheckBox x:Name="DynamicsValidation" Content="无器械验证（全程运动模型）"
                                               Checked="DynamicsOption_Changed" Unchecked="DynamicsOption_Changed"/>
                                     <CheckBox x:Name="DynamicsConditions" Margin="0,5,0,0" IsEnabled="False"
@@ -516,7 +516,7 @@
                                           ToolTip="目标效果示意：假设削弱80%，非动力学辨识结果；可能同时压缩真实外力变化。">
                                     <StackPanel Orientation="Horizontal"><Line X2="18" Stroke="#B45309" StrokeDashArray="2,2" VerticalAlignment="Center" Margin="0,0,5,0"/><TextBlock Text="模型2 · 目标效果示意"/></StackPanel>
                                 </CheckBox>
-                                <CheckBox x:Name="CausalForceToggle" Content="末端真实阻力" Foreground="#E11D48" IsChecked="True"
+                                <CheckBox x:Name="CausalForceToggle" Content="运动补偿估计" Foreground="#E11D48" IsChecked="True"
                                           Checked="CausalVisibility_Changed" Unchecked="CausalVisibility_Changed" Margin="0,0,10,0"/>
                                 <Border x:Name="Force1Legend" Background="#F0FDFA" BorderBrush="#CCFBF1" BorderThickness="1" CornerRadius="4" Padding="8,2" Margin="0,0,8,0">
                                     <StackPanel Orientation="Horizontal" VerticalAlignment="Center">

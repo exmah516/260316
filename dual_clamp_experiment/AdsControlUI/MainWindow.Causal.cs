@@ -34,9 +34,9 @@ namespace DualClampExperimentUI
         private readonly bool[,] _model2Choices = new bool[5, 2];
         private bool _restoringModel2;
         private int _model2Mode;
-        private readonly int[] _dynamicsSigns = new int[5];
+        private readonly int[] _dynamicsSigns = new int[5] { 1, 1, 1, 1, 1 };
         private readonly bool[] _dynamicsValidation = new bool[5];
-        private readonly bool[] _dynamicsReconstruct = new bool[5] { true, true, true, true, true };
+        private readonly bool[] _dynamicsReconstruct = new bool[5];
         private bool _restoringDynamics, _appliedValidation;
         private int _dynamicsMode;
         private void RestoreDynamicsOptions()
@@ -45,7 +45,7 @@ namespace DualClampExperimentUI
             _dynamicsMode = CurrentModeNumber;
             DynamicsSign.SelectedIndex = _dynamicsSigns[_dynamicsMode];
             DynamicsValidation.IsChecked = !IsExternalMode && _dynamicsValidation[_dynamicsMode];
-            DynamicsReconstruct.IsChecked = !IsExternalMode && _dynamicsReconstruct[_dynamicsMode];
+            DynamicsReconstruct.IsChecked = false;
             DynamicsConditions.IsChecked = false;
             DynamicsConditions.IsEnabled = DynamicsValidation.IsChecked == true;
             _restoringDynamics = false;
@@ -146,28 +146,24 @@ namespace DualClampExperimentUI
             _appliedValidation = dynamics && p.Length > 13 && p[13] == "1";
             bool reconstruct = dynamics && p.Length > 19 && p[19] == "1";
             CausalForceToggle.Content = dynamics
-                ? (reconstruct ? "末端真实阻力" : "动力学扰动补偿")
+                ? "运动补偿估计（非末端力）"
                 : "模型处理";
             CausalTorqueToggle.Content = dynamics ? "ft 原值（未补偿）" : "模型处理";
             string state = p[4] != "1" ? "未取零，未补偿" :
-                p[3] != "1" ? "模型配置无效或条件待确认" :
+                p[3] != "1" ? (CurrentMode == "guidewire" ? "轴6模型未辨识，仅显示原始力" : "模型配置无效或条件待确认") :
                 _curvePoints.Count == 0 ? "辨识模型，等待采样" :
-                !_curvePoints.Last().Valid ? "输入无效，未补偿" :
-                dynamics ? (reconstruct ? "末端阻力重构 (1/α) · 符号" + sign + "\n递送重构 · 回退/重夹消隐"
-                                        : "动力学补偿 · 符号" + sign + "\n" + (_appliedValidation ? "无器械全程" : "操作门控")) :
+                !_curvePoints.Last().Valid ? (CurrentMode == "guidewire" ? "轴6模型未辨识，仅显示原始力" : "输入无效，补偿值不可用") :
+                dynamics ? ("运动项补偿 · 符号" + sign + "\n不清零、不反推末端力 · 手柄输出停用") :
                 p.Length > 11 && p[11] == "borrowed_guidewire" ? "借用导丝参数 · 未验证，仅作对比" : "试验模型，仅作曲线对比";
             CausalStatusText.Text = string.Format(CultureInfo.InvariantCulture,
                 "{0}\n单点≤{1:F2} μs · 块跨度 {2:F0} ms · 绘图 {3:F1} ms{4}{5}",
                 state, D(p[7]), D(p[8]), _lastDrawMs,
                 _curveGap ? " · 曲线缺段" : "", p[5] == "1" ? "" : " · 记录错误");
             CausalStatusText.ToolTip = "模型版本：" + p[6] + "\n块跨度不是完整端到端延迟；原信号和处理信号共用采样时间。"
-                + (dynamics ? (reconstruct
-                    ? "\n末端阻力重构: F_net = F_meas - F_motion; F_ext = max(0, (F_net - beta_load) / alpha)"
-                      + "\n运动扰动模型: F_motion = beta_a*a + beta_v*v + beta_s*sgn(v) + beta_0"
-                      + "\n递送外相 (Phase 5张开/Phase 6快速回退/Phase 7闭合冲击) 自动消隐置零。"
-                    : "\n动力学扰动补偿: F_corr = F_meas - F_motion"
-                      + "\n运动扰动模型: F_motion = beta_a*a + beta_v*v + beta_s*sgn(v) + beta_0"
-                      + "\n直接反馈加速度与速度，无相位平移；ft不补偿。")
+                + (dynamics ? ("\nF_corr = F_raw - (beta_a*a + beta_v*v + beta_s*sgn(v))"
+                      + "\n保留原始零位与截距；不反推载荷、不作非负截断。"
+                      + "\n原始输入独立计算；脉冲显示开关不改变模型输出。"
+                      + "\nPhase 5-7 为机构响应，不代表末端力；轴6等待独立辨识。")
                     + "\n状态：" + (p.Length > 14 ? p[14] : "") + "；重置：" + (p.Length > 15 ? p[15] : "") : "");
             if (_curvePoints.Count > 0 && _curvePoints.Last().PulseAvailable) {
                 var last = _curvePoints.Last();
@@ -210,10 +206,17 @@ namespace DualClampExperimentUI
                     "{3} {0:F4} N   {4} {1:F4} N   t={2:F3} s",
                     DisplayForce(s,true), DisplayCorrected(s,true), s.Time,
                     cleaned ? "修正" : "原始",
-                    isReconstruct ? "重构外力" : "处理");
+                    s.Valid ? "运动补偿" : "补偿不可用");
+                if (!s.Valid)
+                    ForceValueText.Text = string.Format(CultureInfo.InvariantCulture,
+                        "{0} {1:F4} N   补偿不可用   t={2:F3} s",
+                        cleaned ? "修正" : "原始", DisplayForce(s,true), s.Time);
                 TorqueValueText.Text = string.Format(CultureInfo.InvariantCulture,
                     "{2} {0:F4} N   处理 {1:F4} N", DisplayForce(s,false), DisplayCorrected(s,false),
                     cleaned ? "修正" : "原始");
+                if (!s.Valid)
+                    TorqueValueText.Text = string.Format(CultureInfo.InvariantCulture,
+                        "原始 {0:F4} N   ft未补偿", s.Ft);
                 if (s.PulseReplaced)
                     ForceValueText.Text += "\n异常标记 · 历史值 " + (s.PulseAgeUs/1000.0).ToString("F0",CultureInfo.InvariantCulture) + " ms";
                 if (Model2ForceToggle.IsChecked == true)
@@ -232,7 +235,8 @@ namespace DualClampExperimentUI
 
         private double DisplayCorrected(CurveSample s, bool axial)
         {
-            return DisplayForce(s,axial) + (axial ? s.CorrectedFn-s.Fn : s.CorrectedFt-s.Ft);
+            // Backend prediction uses raw input. Never compose with another input path.
+            return axial ? s.CorrectedFn : s.CorrectedFt;
         }
 
         private void DrawTimed(Canvas canvas, Polyline original, Polyline corrected, bool axial)
@@ -243,7 +247,8 @@ namespace DualClampExperimentUI
             double min = double.PositiveInfinity, max = double.NegativeInfinity;
             foreach (var s in _curvePoints) {
                 double a = DisplayForce(s,axial), b = DisplayCorrected(s,axial);
-                min = Math.Min(min, Math.Min(a, b)); max = Math.Max(max, Math.Max(a, b));
+                min = Math.Min(min, a); max = Math.Max(max, a);
+                if (s.Valid) { min = Math.Min(min, b); max = Math.Max(max, b); }
                 if (illustration.Visibility == Visibility.Visible) {
                     double c = axial ? s.Model2Fn : s.Model2Ft;
                     min = Math.Min(min, c); max = Math.Max(max, c);
@@ -256,10 +261,13 @@ namespace DualClampExperimentUI
             var aPoints = new PointCollection(_curvePoints.Count);
             var bPoints = new PointCollection(_curvePoints.Count);
             var cPoints = new PointCollection(_curvePoints.Count);
+            // A Polyline cannot represent gaps; show only the latest valid segment.
             foreach (var s in _curvePoints) {
                 double x = (s.Time - start) / duration * canvas.ActualWidth;
                 aPoints.Add(new Point(x, (max - DisplayForce(s,axial)) / (max - min) * canvas.ActualHeight));
-                bPoints.Add(new Point(x, (max - DisplayCorrected(s,axial)) / (max - min) * canvas.ActualHeight));
+                if (s.Valid)
+                    bPoints.Add(new Point(x, (max - DisplayCorrected(s,axial)) / (max - min) * canvas.ActualHeight));
+                else bPoints.Clear();
                 cPoints.Add(new Point(x, (max - (axial ? s.Model2Fn : s.Model2Ft)) / (max - min) * canvas.ActualHeight));
             }
             original.Points = aPoints; corrected.Points = bPoints;
@@ -290,20 +298,24 @@ namespace DualClampExperimentUI
             if (Model2ForceToggle.IsChecked != true || Model2TorqueToggle.IsChecked == true)
                 throw new InvalidOperationException("Model2 channel persistence failed");
             // 在离线入口检查两侧符号隔离、条件确认清除及默认未验证状态。
-            if (DynamicsSign.SelectedIndex != 0 || DynamicsValidation.IsChecked == true)
+            if (DynamicsSign.SelectedIndex != 1 || DynamicsValidation.IsChecked == true)
                 throw new InvalidOperationException("Dynamics defaults failed");
-            DynamicsSign.SelectedIndex = 1;
+            DynamicsSign.SelectedIndex = 0;
             DynamicsValidation.IsChecked = true;
             DynamicsConditions.IsChecked = true;
             ExperimentModeBox.SelectedIndex = 2; UpdateModeView();
-            if (DynamicsSign.SelectedIndex != 0 || DynamicsValidation.IsChecked == true || DynamicsConditions.IsChecked == true)
+            if (DynamicsSign.SelectedIndex != 1 || DynamicsValidation.IsChecked == true || DynamicsConditions.IsChecked == true)
                 throw new InvalidOperationException("Dynamics side isolation failed");
             ExperimentModeBox.SelectedIndex = 1; UpdateModeView();
-            if (DynamicsSign.SelectedIndex != 1 || DynamicsValidation.IsChecked != true || DynamicsConditions.IsChecked == true)
+            if (DynamicsSign.SelectedIndex != 0 || DynamicsValidation.IsChecked != true || DynamicsConditions.IsChecked == true)
                 throw new InvalidOperationException("Dynamics persistence/confirmation reset failed");
-            Array.Clear(_dynamicsSigns, 0, _dynamicsSigns.Length);
+            for (int i = 0; i < _dynamicsSigns.Length; ++i) _dynamicsSigns[i] = 1;
             Array.Clear(_dynamicsValidation, 0, _dynamicsValidation.Length);
-            for (int i = 0; i < _dynamicsReconstruct.Length; ++i) _dynamicsReconstruct[i] = true;
+            Array.Clear(_dynamicsReconstruct, 0, _dynamicsReconstruct.Length);
+            var compositionProbe = new CurveSample { Fn = 1, PulseFn = .2, PulseAvailable = true, CorrectedFn = .8, Valid = true };
+            PulseGuardToggle.IsChecked = true;
+            if (DisplayCorrected(compositionProbe,true) != .8)
+                throw new InvalidOperationException("Pulse display must not alter backend output");
             RestoreDynamicsOptions();
             Array.Clear(_model2Choices, 0, _model2Choices.Length);
             RestoreModel2Visibility();

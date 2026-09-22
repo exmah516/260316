@@ -673,8 +673,11 @@ bool ExperimentStreamRecorder::append_program(const std::vector<ProgrammedDelive
 		}
 		model_rows << s.sample_index << ',' << s.plc_time_us << ',' << s.cycle_index << ',' << unsigned(s.phase) << ',';
 		if (cal.valid) {
-			model_rows << side.force_cal_delta_n << ',' << side.ft_cal_delta_n << ',' << s.model_fn << ',' << s.model_ft
-				<< ',' << side.force_cal_delta_n - s.model_fn << ',' << side.ft_cal_delta_n - s.model_ft;
+			model_rows << side.force_cal_delta_n << ',' << side.ft_cal_delta_n;
+			if (s.model_valid)
+				model_rows << ',' << s.model_fn << ',' << s.model_ft
+					<< ',' << side.force_cal_delta_n - s.model_fn << ',' << side.ft_cal_delta_n - s.model_ft;
+			else model_rows << ",,,,";
 		} else model_rows << ",,,,,";
 		model_rows << ',' << (s.model_valid && cal.valid) << ',' << s.model_compute_us << ','
 			<< s.model_gate << ',' << (mode == ProgrammedDeliveryMode::Guidewire ? s.axis6_vel : s.axis1_vel)

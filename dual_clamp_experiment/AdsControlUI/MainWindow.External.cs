@@ -62,7 +62,7 @@ namespace DualClampExperimentUI
             Force2LegendText.Text = IsExternalMode ? "轴6参考 (N)" : "fn2 (N)";
             Torque2LegendText.Text = IsExternalMode ? "轴6参考 (N·mm)" : "ft2 (N)";
             CausalTorqueToggle.Content = IsExternalMode ? "轴1惯性试算" : "ft 原值（未补偿）";
-            CausalForceToggle.Content = IsExternalMode ? "轴1惯性试算" : "末端真实阻力";
+            CausalForceToggle.Content = IsExternalMode ? "轴1运动补偿估计" : "运动补偿估计";
             ProgramCylinder1Coupling.IsEnabled = !IsExternalMode;
             if (!IsExternalMode)
                 ProgramAxis1PreparePos.IsEnabled = ProgramAxis1TriggerPos.IsEnabled =

@@ -255,7 +255,7 @@ namespace DualClampExperimentUI
                 commandText += "|model_sign=" + (DynamicsSign.SelectedIndex == 1 ? "-1" : "1")
                     + "|model_validation=" + (DynamicsValidation.IsChecked == true ? "1" : "0")
                     + "|model_conditions_confirmed=" + (DynamicsConditions.IsChecked == true ? "1" : "0")
-                    + "|model_reconstruct=" + (DynamicsReconstruct.IsChecked == true ? "1" : "0");
+                    + "|model_reconstruct=0";
                 await SendAsync(commandText);
             }
             catch (Exception ex) { ErrorText.Text = "准备定位参数无效：" + ex.Message; }

@@ -76,5 +76,4 @@ private:
 	forcepulse::Guard pulse_guard_;
 	double pulse_compute_us_ = 0.0;
 	ProgrammedDeliveryLiveFrame position_reference_{};
-	handle582::Handle582Feedback handle_feedback_{ 582 };
 };

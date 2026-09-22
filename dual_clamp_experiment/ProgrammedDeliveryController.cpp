@@ -20,13 +20,12 @@ void ProgrammedDeliveryController::reset_model_locked(const char* reason)
 	external_curves_.reset();
 	model_compute_us_ = model_block_span_ms_ = 0.0;
 	model_zero_valid_ = false;
-	handle_feedback_.reset();
 }
 
 std::string ProgrammedDeliveryController::curve_response(std::uint64_t after, std::uint64_t generation) const
 {
 	std::lock_guard<std::mutex> lock(mutex_);
-	const bool valid = clampdynamics::valid_config(config_.dynamics);
+	const bool valid = clampdynamics::valid_config(config_.dynamics) && config_.dynamics.motion_model_available;
 	return curves_.response(after, generation, static_cast<int>(config_.mode), valid,
 		stream_status_.zero.valid, !recorder_.failed(), model_compute_us_, model_block_span_ms_, clampdynamics::kVersion)
 		+ "|dynamics_reconstruct|" + std::to_string(config_.dynamics.axial_sign)
@@ -44,7 +43,7 @@ ProgrammedDeliveryController::ProgrammedDeliveryController()
 	mode_dynamics_[static_cast<unsigned>(ProgrammedDeliveryMode::Guidewire)] = clampdynamics::kGuidewire;
 	mode_dynamics_[static_cast<unsigned>(ProgrammedDeliveryMode::ExternalValidation)] = clampdynamics::kCatheter;
 	config_.dynamics = clampdynamics::kCatheter;
-	handle_feedback_.init();
+	// Experimental estimates are not routed to the haptic device from recording blocks.
 }
 
 std::string ProgrammedDeliveryController::external_curve_response(std::uint64_t after, std::uint64_t generation) const
@@ -154,6 +153,11 @@ bool ProgrammedDeliveryController::select_mode(ProgrammedDeliveryMode mode)
 
 bool ProgrammedDeliveryController::validate_config(const ProgrammedDeliveryConfig& config, std::string& error) const
 {
+	if (config.mode == ProgrammedDeliveryMode::Guidewire && config.dynamics.motion_model_available)
+	{
+		error = "轴6模型尚未独立辨识，不能应用轴1补偿参数";
+		return false;
+	}
 	if (!clampdynamics::valid_config(config.dynamics))
 	{
 		error = "惯性模型配置无效；验证模式须人工确认无器械、夹爪张开、仅轴向运动";
@@ -378,7 +382,6 @@ void ProgrammedDeliveryController::abort()
 	std::lock_guard<std::mutex> lock(mutex_);
 	if (ads_.is_open() && !ads_.request_abort()) last_error_ = "下发中止请求失败：" + ads_.last_error();
 	started_ = false;
-	handle_feedback_.reset();
 }
 
 void ProgrammedDeliveryController::tick()
@@ -570,7 +573,6 @@ void ProgrammedDeliveryController::poll_stream_locked()
 		}
 		std::vector<ProgrammedDeliverySample> converted;
 		converted.reserve(raw.size());
-		double latest_ext_force = 0.0;
 		model_block_span_ms_ = raw.empty() ? 0.0 :
 			static_cast<double>(raw.back().time_us - raw.front().time_us) / 1000.0;
 		model_compute_us_ = 0.0;
@@ -642,7 +644,7 @@ void ProgrammedDeliveryController::poll_stream_locked()
 			s.model_ft = prediction.ft_N;
 			s.model_gate = prediction.gate;
 			s.model_acceleration = prediction.acceleration_mm_s2;
-			s.model_inertia = prediction.fn_N;
+			s.model_inertia = params.beta_a * prediction.acceleration_m_s2;
 			s.model_viscous = params.beta_v * (params.axial_sign * (guidewire ? s.axis6_vel : s.axis1_vel) * 0.001);
 			if (config_.mode == ProgrammedDeliveryMode::ExternalValidation) {
 				external_curves_.push({0, s.plc_time_us * 1e-6, externalvalidation::compare(cal, s),
@@ -656,17 +658,8 @@ void ProgrammedDeliveryController::poll_stream_locked()
 					s.illustration.valid_fn, s.illustration.valid_ft,
 					s.pulse_fn_N, s.pulse_ft_N, s.pulse.replaced, unsigned(s.pulse.status),
 					s.pulse.age_us, s.pulse.locked});
-				latest_ext_force = side.force_cal_delta_n - s.model_fn;
 			} else { illustration_.reset(); illustration_gate_.reset(); }
 			converted.push_back(s);
-		}
-		if (!converted.empty())
-		{
-			handle_feedback_.update(stream_status_.zero.valid, latest_ext_force);
-		}
-		else if (!stream_status_.zero.valid)
-		{
-			handle_feedback_.update(false, 0.0);
 		}
 		std::string error;
 		if (!recorder_.append_program(converted, 0, config_.mode, stream_status_.zero, error))
