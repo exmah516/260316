@@ -44,7 +44,8 @@ struct ForceCalibrationConfig
 	double decouple_tt =  0.996063;
 
 	double handle_radius_mm = 3.0;
-	double k_feedback = 1.0;
+	// 原值: double k_feedback = 1.0;
+	double k_feedback = 1.8; // 将手柄力反馈增益设为 1.8，补偿从端传力损耗
 
 	// 参数来自返工前实验；validated=false时即使误设enabled也不会进入计算。
 	bool gravity_comp_enabled = false;
@@ -173,7 +174,7 @@ inline CalibratedForce calibrate_direct_pair(
 	double F_dec = df_n;
 	double Ft_dec = dft_n;
 
-	out.f_feedback_n = F_dec;
+	out.f_feedback_n = cfg.k_feedback * F_dec;
 	out.t_feedback_nm = cfg.k_feedback * Ft_dec * cfg.handle_radius_mm * 0.001;
 
 	if (std::abs(out.f_feedback_n) < cfg.deadband_f_n) out.f_feedback_n = 0.0;
