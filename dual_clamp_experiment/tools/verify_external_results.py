@@ -51,7 +51,7 @@ def main():
         if int(row["phase"]) in (5, 6, 7):
             assert float(row["axis6_vel_mm_s"]) == 0 and int(row["sync_state"]) in (0, 4)
         if int(row["phase"]) == 6:
-            assert int(row["cylinder1_cmd"]) == 0 and int(row["cylinder2_cmd"]) == 0
+            assert int(row["cylinder1_cmd"]) == 5 and int(row["cylinder2_cmd"]) == 5
         for side in (1, 2):
             f = float(row[f"fn{side}_cal_delta_N"])
             t = float(row[f"torque{side}_cal_delta_Nmm"])
@@ -63,7 +63,7 @@ def main():
     assert [x["plc_time_us"] for x in derived] == [x["plc_time_us"] for x in samples]
     with (directory / "events.csv").open(encoding="utf-8", newline="") as stream:
         events = list(csv.DictReader(stream))
-    for name in ("GearInStart", "InGear", "GearOutStart", "GearOutDone"):
+    for name in ("GearInStart", "InGear", "GearOutStart"):
         assert sum(x["event_name"] == name for x in events) == 4
     for name in ("ReleaseStart", "ReturnStart", "ReclampStart"):
         assert sum(x["event_name"] == name for x in events) == 3

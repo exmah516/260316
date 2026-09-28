@@ -108,8 +108,8 @@ bool StandaloneRecordController::set_cylinder_config(int cylinder, bool enabled,
     }
     const std::size_t index = static_cast<std::size_t>(cylinder - 1);
     cylinder_enabled_[index] = enabled;
-    cylinder_open_[index] = open_value;
-    cylinder_close_[index] = close_value;
+    cylinder_open_[index] = cylindercommand::normalize(open_value);
+    cylinder_close_[index] = cylindercommand::normalize(close_value);
     return true;
 }
 

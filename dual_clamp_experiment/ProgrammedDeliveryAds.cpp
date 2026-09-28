@@ -1,4 +1,5 @@
 #include "ProgrammedDeliveryAds.h"
+#include "CylinderCommand.h"
 
 #include <algorithm>
 #include <array>
@@ -70,6 +71,27 @@ bool ProgrammedDeliveryAds::select_mode(ProgrammedDeliveryMode mode)
 {
 	const std::uint8_t value = static_cast<std::uint8_t>(mode);
 	return comm_.ADSWrite("G.program_test_mode", sizeof(value), const_cast<std::uint8_t*>(&value));
+}
+
+bool ProgrammedDeliveryAds::read_mode_phase(ProgrammedDeliveryMode& mode,
+	ProgrammedDeliveryPhase& phase, std::uint32_t& status_error_id)
+{
+	std::uint8_t mode_value = 0;
+	std::uint8_t phase_value = 0;
+	const char* symbols[] = {
+		"G.program_test_mode", "G.program_test_phase", "G.program_test_status_error_id"
+	};
+	const unsigned long lengths[] = {
+		sizeof(mode_value), sizeof(phase_value), sizeof(status_error_id)
+	};
+	void* outputs[] = { &mode_value, &phase_value, &status_error_id };
+	if (!comm_.ADSReadSum(symbols, lengths, outputs, 3))
+	{
+		return false;
+	}
+	mode = static_cast<ProgrammedDeliveryMode>(mode_value);
+	phase = static_cast<ProgrammedDeliveryPhase>(phase_value);
+	return true;
 }
 
 bool ProgrammedDeliveryAds::read_live(ProgrammedDeliveryLiveFrame& frame)
@@ -182,10 +204,10 @@ bool ProgrammedDeliveryAds::write_config(const ProgrammedDeliveryConfig& config,
 	const bool setup = setup_request;
 	const bool cylinder1_coupling = config.cylinder1_coupling_enabled;
 	const bool cylinder3_coupling = config.cylinder3_coupling_enabled;
-	const std::uint16_t cylinder2_open = config.cylinder2_open_word;
-	const std::uint16_t cylinder2_close = config.cylinder2_close_word;
-	const std::uint16_t cylinder4_open = config.cylinder4_open_word;
-	const std::uint16_t cylinder4_close = config.cylinder4_close_word;
+	const std::uint16_t cylinder2_open = cylindercommand::normalize(config.cylinder2_open_word);
+	const std::uint16_t cylinder2_close = cylindercommand::normalize(config.cylinder2_close_word);
+	const std::uint16_t cylinder4_open = cylindercommand::normalize(config.cylinder4_open_word);
+	const std::uint16_t cylinder4_close = cylindercommand::normalize(config.cylinder4_close_word);
 	const char* symbols[] = {
 		"G.program_test_mode", "G.program_test_axis1_prepare_from_left_mm", "G.program_test_axis1_trigger_from_left_mm",
 		"G.program_test_axis5_from_left_mm", "G.program_test_axis6_prepare_from_left_mm", "G.program_test_axis6_trigger_from_left_mm", "G.program_test_axis2_angle_deg",

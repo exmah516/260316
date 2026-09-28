@@ -3,6 +3,7 @@
 #include "DualClampTypes.h"
 #include "ProgrammedDeliveryTypes.h"
 #include "StandaloneRecordTypes.h"
+#include "CylinderCommand.h"
 
 #include <array>
 #include <condition_variable>
@@ -99,9 +100,9 @@ private:
 	std::uint64_t standalone_field_mask_ = 0;
 	bool program_cylinder1_coupling_enabled_ = true;
 	bool program_cylinder3_coupling_enabled_ = true;
-	std::uint16_t program_cylinder2_open_word_ = 0;
+	std::uint16_t program_cylinder2_open_word_ = cylindercommand::kSafeMinimumWord;
 	std::uint16_t program_cylinder2_close_word_ = 600;
-	std::uint16_t program_cylinder4_open_word_ = 0;
+	std::uint16_t program_cylinder4_open_word_ = cylindercommand::kSafeMinimumWord;
 	std::uint16_t program_cylinder4_close_word_ = 500;
 	double program_axis5_from_left_mm_ = 430.0;
 	double program_axis6_prepare_from_left_mm_ = 451.0;

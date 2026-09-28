@@ -3,6 +3,7 @@
 #include <array>
 #include <cstdint>
 #include <string>
+#include "CylinderCommand.h"
 
 enum class DualClampPhase : int
 {
@@ -42,9 +43,9 @@ struct DualClampConfig
 	double return_deceleration_mm_s2 = 100.0;
 	double return_jerk_mm_s3 = 1000.0;
 	unsigned short clamp_axis1_word = 600;
-	unsigned short release_axis1_word = 0;
+	unsigned short release_axis1_word = cylindercommand::kSafeMinimumWord;
 	unsigned short clamp_axis6_word = 500;
-	unsigned short release_axis6_word = 0;
+	unsigned short release_axis6_word = cylindercommand::kSafeMinimumWord;
 	unsigned short cylinder1_open_word = 1000;
 	unsigned short cylinder3_open_word = 1000;
 	unsigned int baseline_ms = 1000;

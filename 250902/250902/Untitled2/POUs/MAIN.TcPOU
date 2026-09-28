@@ -79,13 +79,18 @@ ELSIF G.gen_state = _dual_clamp THEN
 	// 旧模式仅在空闲、自检完成等待、完成或中止阶段接受切换。
 	IF (G.program_test_mode = 1) OR (G.program_test_mode = 2) OR (G.program_test_mode = 4) THEN
 		IF (G.dual_clamp_phase = 0) OR (G.dual_clamp_phase = 10) OR
-		   (G.dual_clamp_phase = 11) OR (G.dual_clamp_phase = 13) THEN
+		   (G.dual_clamp_phase = 11) OR (G.dual_clamp_phase = 13) OR
+		   (G.dual_clamp_phase = 15) THEN
 			G.gen_state := _program_test;
 		ELSE
 			G.program_test_mode := 0;
 			G.program_test_setup_req := FALSE;
 			G.program_test_start_req := FALSE;
 			G.program_test_status_error_id := 16#7101;
+			G.program_test_error_source := 0;
+			G.program_test_error_axis := 0;
+			G.program_test_error_phase := 0;
+			G.program_test_error_target_abs := 0.0;
 			dual_clamp_();
 		END_IF
 	ELSE

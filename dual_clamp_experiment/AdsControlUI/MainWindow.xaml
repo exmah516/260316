@@ -171,7 +171,7 @@
                                     <TextBlock Grid.Row="1" Text="电缸1" VerticalAlignment="Center" FontSize="12"/>
                                     <CheckBox x:Name="Cylinder1Enabled" Grid.Row="1" Grid.Column="1" IsChecked="True" HorizontalAlignment="Center" VerticalAlignment="Center"/>
                                     <TextBox x:Name="Cylinder1OpenValue" Grid.Row="1" Grid.Column="2" Text="1000" Height="25" Margin="2"/>
-                                    <TextBox x:Name="Cylinder1CloseValue" Grid.Row="1" Grid.Column="3" Text="0" Height="25" Margin="2"/>
+                                    <TextBox x:Name="Cylinder1CloseValue" Grid.Row="1" Grid.Column="3" Text="5" Height="25" Margin="2"/>
                                     <TextBlock x:Name="Cylinder1Current" Grid.Row="1" Grid.Column="4" Text="1000" HorizontalAlignment="Center" VerticalAlignment="Center"/>
                                     <StackPanel Grid.Row="1" Grid.Column="5" Orientation="Horizontal" HorizontalAlignment="Center">
                                         <Button Content="开" Tag="1" Click="ManualCylinderOpen_Click" Padding="5,2" Margin="1"/>
@@ -180,9 +180,9 @@
 
                                     <TextBlock Grid.Row="2" Text="电缸2" VerticalAlignment="Center" FontSize="12"/>
                                     <CheckBox x:Name="Cylinder2Enabled" Grid.Row="2" Grid.Column="1" IsChecked="True" HorizontalAlignment="Center" VerticalAlignment="Center"/>
-                                    <TextBox x:Name="Cylinder2OpenValue" Grid.Row="2" Grid.Column="2" Text="0" Height="25" Margin="2"/>
+                                    <TextBox x:Name="Cylinder2OpenValue" Grid.Row="2" Grid.Column="2" Text="5" Height="25" Margin="2"/>
                                     <TextBox x:Name="Cylinder2CloseValue" Grid.Row="2" Grid.Column="3" Text="600" Height="25" Margin="2"/>
-                                    <TextBlock x:Name="Cylinder2Current" Grid.Row="2" Grid.Column="4" Text="0" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                    <TextBlock x:Name="Cylinder2Current" Grid.Row="2" Grid.Column="4" Text="5" HorizontalAlignment="Center" VerticalAlignment="Center"/>
                                     <StackPanel Grid.Row="2" Grid.Column="5" Orientation="Horizontal" HorizontalAlignment="Center">
                                         <Button Content="开" Tag="2" Click="ManualCylinderOpen_Click" Padding="5,2" Margin="1"/>
                                         <Button Content="闭" Tag="2" Click="ManualCylinderClose_Click" Padding="5,2" Margin="1"/>
@@ -200,9 +200,9 @@
 
                                     <TextBlock Grid.Row="4" Text="电缸4" VerticalAlignment="Center" FontSize="12"/>
                                     <CheckBox x:Name="Cylinder4Enabled" Grid.Row="4" Grid.Column="1" IsChecked="True" HorizontalAlignment="Center" VerticalAlignment="Center"/>
-                                    <TextBox x:Name="Cylinder4OpenValue" Grid.Row="4" Grid.Column="2" Text="0" Height="25" Margin="2"/>
+                                    <TextBox x:Name="Cylinder4OpenValue" Grid.Row="4" Grid.Column="2" Text="5" Height="25" Margin="2"/>
                                     <TextBox x:Name="Cylinder4CloseValue" Grid.Row="4" Grid.Column="3" Text="500" Height="25" Margin="2"/>
-                                    <TextBlock x:Name="Cylinder4Current" Grid.Row="4" Grid.Column="4" Text="0" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                    <TextBlock x:Name="Cylinder4Current" Grid.Row="4" Grid.Column="4" Text="5" HorizontalAlignment="Center" VerticalAlignment="Center"/>
                                     <StackPanel Grid.Row="4" Grid.Column="5" Orientation="Horizontal" HorizontalAlignment="Center">
                                         <Button Content="开" Tag="4" Click="ManualCylinderOpen_Click" Padding="5,2" Margin="1"/>
                                         <Button Content="闭" Tag="4" Click="ManualCylinderClose_Click" Padding="5,2" Margin="1"/>
@@ -342,7 +342,7 @@
                                     <TextBlock Text="轴6初始位置 (mm)" VerticalAlignment="Center" FontSize="12.5"/>
                                     <TextBox x:Name="ExternalAxis6PreparePos" Grid.Column="1" Text="451" Height="28" Margin="0,3"/>
                                     <TextBlock Grid.Row="1" Text="电缸4开值 (WORD)" VerticalAlignment="Center" FontSize="12.5"/>
-                                    <TextBox x:Name="ExternalCylinder4Open" Grid.Row="1" Grid.Column="1" Text="0" Height="28" Margin="0,3"/>
+                                    <TextBox x:Name="ExternalCylinder4Open" Grid.Row="1" Grid.Column="1" Text="5" Height="28" Margin="0,3"/>
                                     <TextBlock Grid.Row="2" Text="电缸4闭值 (WORD)" VerticalAlignment="Center" FontSize="12.5"/>
                                     <TextBox x:Name="ExternalCylinder4Close" Grid.Row="2" Grid.Column="1" Text="500" Height="28" Margin="0,3"/>
                                     <TextBlock x:Name="ExternalTravelText" Grid.Row="3" Grid.ColumnSpan="2" TextWrapping="Wrap" FontSize="12" Margin="0,6,0,0" Foreground="#475569"/>
@@ -397,11 +397,11 @@
                                         <CheckBox x:Name="ProgramCylinder3Coupling" Content="电缸3参与配合" IsChecked="True" Margin="0,3" Visibility="Collapsed"/>
                                     </StackPanel>
                                     <TextBlock x:Name="ProgramCylinder2OpenLabel" Grid.Row="7" Text="电缸2开值 (WORD)" VerticalAlignment="Center" Foreground="#475569" FontSize="12.5" Margin="0,3"/>
-                                    <TextBox x:Name="ProgramCylinder2OpenValue" Grid.Row="7" Grid.Column="1" Text="0" Margin="0,3" Height="28"/>
+                                    <TextBox x:Name="ProgramCylinder2OpenValue" Grid.Row="7" Grid.Column="1" Text="5" Margin="0,3" Height="28"/>
                                     <TextBlock x:Name="ProgramCylinder2CloseLabel" Grid.Row="8" Text="电缸2闭值 (WORD)" VerticalAlignment="Center" Foreground="#475569" FontSize="12.5" Margin="0,3"/>
                                     <TextBox x:Name="ProgramCylinder2CloseValue" Grid.Row="8" Grid.Column="1" Text="600" Margin="0,3" Height="28"/>
                                     <TextBlock x:Name="ProgramCylinder4OpenLabel" Grid.Row="7" Text="电缸4开值 (WORD)" Visibility="Collapsed" VerticalAlignment="Center" Foreground="#475569" FontSize="12.5" Margin="0,3"/>
-                                    <TextBox x:Name="ProgramCylinder4OpenValue" Grid.Row="7" Grid.Column="1" Text="0" Visibility="Collapsed" Margin="0,3" Height="28"/>
+                                    <TextBox x:Name="ProgramCylinder4OpenValue" Grid.Row="7" Grid.Column="1" Text="5" Visibility="Collapsed" Margin="0,3" Height="28"/>
                                     <TextBlock x:Name="ProgramCylinder4CloseLabel" Grid.Row="8" Text="电缸4闭值 (WORD)" Visibility="Collapsed" VerticalAlignment="Center" Foreground="#475569" FontSize="12.5" Margin="0,3"/>
                                     <TextBox x:Name="ProgramCylinder4CloseValue" Grid.Row="8" Grid.Column="1" Text="500" Visibility="Collapsed" Margin="0,3" Height="28"/>
                                     <TextBlock Grid.Row="9" Text="前向速度 (mm/s)" VerticalAlignment="Center" Foreground="#475569" FontSize="12.5" Margin="0,3"/>

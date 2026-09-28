@@ -1,5 +1,6 @@
 #include "DualClampPipe.h"
 #include "ForceCalibration.h"
+#include "CylinderCommand.h"
 
 #include <windows.h>
 
@@ -136,7 +137,8 @@ namespace
 		if (key == "model_reconstruct")
 		{
 			if (text != "0" && text != "1") { error = "model_reconstruct必须为0或1"; return false; }
-			if (text == "1") { error = "末端力逆重构未验证，已停用；请使用运动补偿"; return false; }
+			// 兼容旧版UI：旧客户端可能仍发送model_reconstruct=1。
+			// 该功能未经验证，始终强制关闭，但不能因此阻断电机准备定位。
 			config.dynamics.reconstruct_external = false;
 			continue;
 		}
@@ -166,10 +168,11 @@ namespace
 				error = key + "必须是0至65535之间的整数";
 				return false;
 			}
-			if (key == "cylinder2_open") config.cylinder2_open_word = static_cast<std::uint16_t>(word);
-			else if (key == "cylinder2_close") config.cylinder2_close_word = static_cast<std::uint16_t>(word);
-			else if (key == "cylinder4_open") config.cylinder4_open_word = static_cast<std::uint16_t>(word);
-			else config.cylinder4_close_word = static_cast<std::uint16_t>(word);
+			const auto safe_word = cylindercommand::normalize(static_cast<std::uint16_t>(word));
+			if (key == "cylinder2_open") config.cylinder2_open_word = safe_word;
+			else if (key == "cylinder2_close") config.cylinder2_close_word = safe_word;
+			else if (key == "cylinder4_open") config.cylinder4_open_word = safe_word;
+			else config.cylinder4_close_word = safe_word;
 			continue;
 		}
 			double value = 0.0;
@@ -364,6 +367,8 @@ std::string DualClampPipeServer::handle_command(DualClampController& controller,
 
 std::string DualClampPipeServer::handle_program_command(ProgrammedDeliveryController& controller, const std::string& command)
 {
+	if (command == "PROGRAM_VERSION")
+		return "PROGRAM_VERSION|20260927.2|external_sync_and_state_guard_legacy_ui_compat";
 	if (command.rfind("PROGRAM_CURVES|", 0) == 0 || command.rfind("PROGRAM_EXTERNAL_CURVES|", 0) == 0)
 	{
 		std::uint64_t after = 0, generation = 0;
@@ -510,7 +515,8 @@ std::string DualClampPipeServer::handle_standalone_command(StandaloneRecordContr
 		if (cylinder < 1 || cylinder > 4 || open_value > 65535 || close_value > 65535 || enabled > 1)
 			return "ERROR|电缸配置参数超出范围";
 		return controller.set_cylinder_config(static_cast<int>(cylinder), enabled != 0,
-			static_cast<std::uint16_t>(open_value), static_cast<std::uint16_t>(close_value))
+			cylindercommand::normalize(static_cast<std::uint16_t>(open_value)),
+			cylindercommand::normalize(static_cast<std::uint16_t>(close_value)))
 			? "OK|MANUAL_CYLINDER_CONFIG" : "ERROR|" + sanitize_for_pipe(controller.last_error());
 	}
 	if (command.rfind("MANUAL_CYLINDER_OPEN", 0) == 0 || command.rfind("MANUAL_CYLINDER_CLOSE", 0) == 0)

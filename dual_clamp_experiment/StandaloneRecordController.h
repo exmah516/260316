@@ -3,6 +3,7 @@
 #include "ExperimentStreamAds.h"
 #include "ExperimentStreamRecorder.h"
 #include "StandaloneRecordAds.h"
+#include "CylinderCommand.h"
 
 #include <array>
 #include <cstdint>
@@ -54,9 +55,9 @@ private:
     StandaloneRecordLiveFrame live_{};
     ForceZeroState zero_{};
     std::array<bool, 4> cylinder_enabled_{ { true, true, true, true } };
-    std::array<std::uint16_t, 4> cylinder_open_{ { 1000, 0, 400, 0 } };
-    std::array<std::uint16_t, 4> cylinder_close_{ { 0, 600, 50, 500 } };
-    std::array<std::uint16_t, 4> cylinder_current_{ { 1000, 0, 400, 0 } };
+    std::array<std::uint16_t, 4> cylinder_open_{ { 1000, cylindercommand::kSafeMinimumWord, 400, cylindercommand::kSafeMinimumWord } };
+    std::array<std::uint16_t, 4> cylinder_close_{ { cylindercommand::kSafeMinimumWord, 600, 50, 500 } };
+    std::array<std::uint16_t, 4> cylinder_current_{ { 1000, cylindercommand::kSafeMinimumWord, 400, cylindercommand::kSafeMinimumWord } };
     std::string record_suffix_ = "standalone_record";
     std::uint64_t field_mask_ = 0;
     std::uint32_t event_sequence_ = 0;

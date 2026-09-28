@@ -153,9 +153,9 @@ FOR i:=1 TO 7 DO
         1: // 错开启动，避免多轴同时加速导致电流竞争触发跟随误差
             IF i = 1 THEN
                 G.cylinder1_value := 1000;
-                G.cylinder2_value := 0;
+                G.cylinder2_value := 5;
 				G.cylinder3_value := 1000;
-				G.cylinder4_value := 0;
+				G.cylinder4_value := 5;
             END_IF
 
             scan_stagger_timer[i](IN:=TRUE, PT:=scan_stagger_delay[i]);
@@ -561,9 +561,9 @@ END_FOR
 
 IF all_done THEN
 	G.cylinder1_value := 1000;
-	G.cylinder2_value := 0;
+	G.cylinder2_value := 5;
 	G.cylinder3_value := 1000;
-	G.cylinder4_value := 0;
+	G.cylinder4_value := 5;
     G.self_check_done := TRUE;
 	G.dual_clamp_selfcheck_done := TRUE;
 	G.dual_clamp_selfcheck_busy := FALSE;
@@ -596,7 +596,7 @@ IF all_done THEN
 	G.program_test_setup_busy := FALSE;
 	G.program_test_setup_done := FALSE;
 	G.program_test_status_error_id := 0;
-	IF (G.program_test_mode = 1) OR (G.program_test_mode = 2) OR (G.program_test_mode = 4) THEN
+	IF (G.program_test_mode = 1) OR (G.program_test_mode = 2) THEN
 		G.gen_state := _program_test;
 	ELSE
 		G.gen_state := _dual_clamp;

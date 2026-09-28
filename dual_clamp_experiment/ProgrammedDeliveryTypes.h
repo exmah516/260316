@@ -4,6 +4,7 @@
 #include "ClampIllustration.h"
 #include "ClampDynamics.h"
 #include "ForcePulseGuard.h"
+#include "CylinderCommand.h"
 #include <cstdint>
 #include <string>
 
@@ -52,9 +53,9 @@ struct ProgrammedDeliveryConfig
 	bool cylinder1_coupling_enabled = true;
 	bool cylinder3_coupling_enabled = true;
 	// 运动端电缸的释放值和夹紧值：导管使用电缸2，导丝使用电缸4。
-	std::uint16_t cylinder2_open_word = 0;
+	std::uint16_t cylinder2_open_word = cylindercommand::kSafeMinimumWord;
 	std::uint16_t cylinder2_close_word = 600;
-	std::uint16_t cylinder4_open_word = 0;
+	std::uint16_t cylinder4_open_word = cylindercommand::kSafeMinimumWord;
 	std::uint16_t cylinder4_close_word = 500;
 	std::uint32_t release_wait_ms = 150;
 	std::uint32_t reclamp_wait_ms = 150;

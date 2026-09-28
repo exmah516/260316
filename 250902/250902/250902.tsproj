@@ -2177,13 +2177,12 @@ External Setpoint Generation:
 				<Axis Id="6" CreateSymbols="true" AxisType="1" GroupId="3">
 					<Name>Axis 6</Name>
 					<AxisPara>
+						<Dynamic Acceleration="5000" Deceleration="5000" Jerk="51005"/>
 						<Velo SlowManual="3" FastManual="10"/>
 						<OtherSettings AllowMotionCmdToSlave="true"/>
 					</AxisPara>
 					<Encoder Name="Enc" EncType="19">
-						<EncPara ScaleFactorNumerator="65.94" ScaleFactorDenominator="425164.8" EncMode="3" MaxCount="#xffffffff">
-							<ParameterChanged>10</ParameterChanged>
-						</EncPara>
+						<EncPara ScaleFactorNumerator="65.94" ScaleFactorDenominator="425164.8" EncMode="3" MaxCount="#xffffffff"/>
 						<Vars VarGrpType="1">
 							<Name>Inputs</Name>
 							<Var>
@@ -2439,7 +2438,6 @@ External Setpoint Generation:
 					</Drive>
 					<Controller Name="Ctrl" CtrType="1">
 						<CtrPara PriorControlFactor="1">
-							<PosDiffControl Enable="false"/>
 							<Observer BandWidth="20"/>
 						</CtrPara>
 					</Controller>
@@ -2884,14 +2882,12 @@ External Setpoint Generation:
 				<Axis Id="11" CreateSymbols="true" AxisType="1">
 					<Name>Axis 11</Name>
 					<AxisPara>
-						<Dynamic Acceleration="375" Deceleration="375" Jerk="5625"/>
+						<Dynamic Acceleration="5000" Deceleration="5000" Jerk="50000"/>
 						<Velo SlowManual="3" FastManual="10"/>
 						<OtherSettings AllowMotionCmdToSlave="true"/>
 					</AxisPara>
 					<Encoder Name="Enc" EncType="19">
-						<EncPara ScaleFactorNumerator="65.94" ScaleFactorDenominator="425164.8" Inverse="true" EncMode="3" MaxCount="#xffffffff">
-							<ParameterChanged>10</ParameterChanged>
-						</EncPara>
+						<EncPara ScaleFactorNumerator="65.94" ScaleFactorDenominator="425164.8" Inverse="true" EncMode="3" MaxCount="#xffffffff"/>
 						<Vars VarGrpType="1">
 							<Name>Inputs</Name>
 							<Var>
@@ -3147,7 +3143,6 @@ External Setpoint Generation:
 					</Drive>
 					<Controller Name="Ctrl" CtrType="1">
 						<CtrPara PriorControlFactor="1">
-							<PosDiffControl Enable="false"/>
 							<Observer BandWidth="20"/>
 						</CtrPara>
 					</Controller>

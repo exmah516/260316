@@ -328,10 +328,10 @@ void ExperimentStreamRecorder::set_program_coupling(bool cylinder1_enabled, bool
 void ExperimentStreamRecorder::set_program_cylinder_words(std::uint16_t cylinder2_open,
 	std::uint16_t cylinder2_close, std::uint16_t cylinder4_open, std::uint16_t cylinder4_close)
 {
-	program_cylinder2_open_word_ = cylinder2_open;
-	program_cylinder2_close_word_ = cylinder2_close;
-	program_cylinder4_open_word_ = cylinder4_open;
-	program_cylinder4_close_word_ = cylinder4_close;
+	program_cylinder2_open_word_ = cylindercommand::normalize(cylinder2_open);
+	program_cylinder2_close_word_ = cylindercommand::normalize(cylinder2_close);
+	program_cylinder4_open_word_ = cylindercommand::normalize(cylinder4_open);
+	program_cylinder4_close_word_ = cylindercommand::normalize(cylinder4_close);
 }
 
 void ExperimentStreamRecorder::set_program_guidewire_positions(double axis5_from_left_mm,

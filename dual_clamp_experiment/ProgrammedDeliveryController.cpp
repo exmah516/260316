@@ -130,6 +130,34 @@ bool ProgrammedDeliveryController::select_mode(ProgrammedDeliveryMode mode)
 		last_error_ = "切换PLC实验模式失败：" + ads_.last_error();
 		return false;
 	}
+	// ADS 写入成功只代表变量写入成功，不代表 MAIN 已接受状态机切换。
+	// 等待 PLC 一个或多个任务周期并回读模式，避免随后 PREPARE 被静默拒绝。
+	ProgrammedDeliveryMode observed_mode = ProgrammedDeliveryMode::Legacy;
+	ProgrammedDeliveryPhase observed_phase = ProgrammedDeliveryPhase::Idle;
+	std::uint32_t status_error_id = 0;
+	bool accepted = false;
+	for (int attempt = 0; attempt < 10; ++attempt)
+	{
+		if (ads_.read_mode_phase(observed_mode, observed_phase, status_error_id) &&
+			observed_mode == mode)
+		{
+			accepted = true;
+			break;
+		}
+		std::this_thread::sleep_for(std::chrono::milliseconds(20));
+	}
+	if (!accepted)
+	{
+		if (status_error_id == 0x7101)
+			last_error_ = "PLC拒绝切换程序递送模式：旧双机构尚未处于空闲、完成或中止状态，请先停止/归档旧实验";
+		else if (status_error_id == 0x7102)
+			last_error_ = "PLC拒绝切换程序递送模式：程序递送仍在运行或准备中";
+		else if (status_error_id != 0)
+			last_error_ = "PLC拒绝切换程序递送模式，错误ID：" + std::to_string(status_error_id);
+		else
+			last_error_ = "PLC未确认程序递送模式切换，请检查PLC工程版本和运行状态";
+		return false;
+	}
 	if (!stream_ads_.is_open() && !stream_ads_.open())
 	{
 		last_error_ = "实时记录ADS连接失败：" + stream_ads_.last_error();
@@ -392,7 +420,16 @@ void ProgrammedDeliveryController::tick()
 	if (!ads_.read_live(frame))
 	{
 		reset_model_locked("live_read_failed");
-		last_error_ = "读取程序递送实时状态失败：" + ads_.last_error();
+		const std::string ads_error = ads_.last_error();
+		if (config_.mode == ProgrammedDeliveryMode::ExternalValidation &&
+			ads_error.find("program_test_sync_state") != std::string::npos)
+		{
+			last_error_ = "外源验证PLC接口版本不匹配：缺少 G.program_test_sync_state（1808）；请重新编译并下载包含 ExternalValidationSync 的PLC工程";
+		}
+		else
+		{
+			last_error_ = "读取程序递送实时状态失败：" + ads_error;
+		}
 		if (started_)
 		{
 			ads_.request_abort();
@@ -412,7 +449,15 @@ void ProgrammedDeliveryController::tick()
 	}
 	live_ = frame;
 	poll_stream_locked();
-	if (live_.status_error_id != 0 || (live_.phase == ProgrammedDeliveryPhase::Error && live_.error_source >= 5))
+	if (live_.status_error_id == 0x7101)
+	{
+		last_error_ = "PLC拒绝进入程序递送：旧双机构尚未处于空闲、完成或中止状态，请先停止旧模式并等待其回到待机";
+	}
+	else if (live_.status_error_id == 0x7102)
+	{
+		last_error_ = "PLC拒绝切换程序递送模式：程序递送仍在运行或准备中，请先中止并等待终态";
+	}
+	else if (live_.status_error_id != 0 || (live_.phase == ProgrammedDeliveryPhase::Error && live_.error_source >= 5))
 	{
 		const char* source = live_.error_source == 1 ? "准备定位" : live_.error_source == 2 ? "前向至触发位置" : live_.error_source == 3 ? "回退" : live_.error_source == 4 ? "最终前向" : live_.error_source == 5 ? "主从耦合" : live_.error_source == 6 ? "主从解除" : "未知动作";
 		std::ostringstream detail;
@@ -424,6 +469,7 @@ void ProgrammedDeliveryController::tick()
 		last_error_ = detail.str();
 	}
 	else if (last_error_.rfind("PLC运动错误：", 0) == 0 ||
+		last_error_.rfind("PLC拒绝", 0) == 0 ||
 		last_error_.rfind("读取程序递送实时状态失败：", 0) == 0)
 		last_error_.clear();
 	if (live_.phase == ProgrammedDeliveryPhase::Completed || live_.phase == ProgrammedDeliveryPhase::Aborted || live_.phase == ProgrammedDeliveryPhase::Error)

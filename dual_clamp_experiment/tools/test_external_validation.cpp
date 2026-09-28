@@ -92,7 +92,7 @@ int main(int argc, char** argv)
         recorder.set_program_context(config, reference);
         recorder.set_dynamics_config(config.dynamics);
         recorder.set_program_coupling(true, false);
-        recorder.set_program_cylinder_words(0, 600, 0, 500);
+        recorder.set_program_cylinder_words(5, 600, 5, 500);
         std::string error;
         check(recorder.begin("external_validation", "OFFLINE_EXTERNAL_VALIDATION_SYNTHETIC", error), error.c_str());
         std::ostringstream manual;

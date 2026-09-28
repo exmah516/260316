@@ -17,6 +17,7 @@ namespace DualClampExperimentUI
 {
     public partial class MainWindow : Window
     {
+        private const string ExpectedBackendVersion = "PROGRAM_VERSION|20260927.2|";
         private NamedPipeClientStream? _pipe;
         private StreamWriter? _writer;
         private StreamReader? _reader;
@@ -72,15 +73,15 @@ namespace DualClampExperimentUI
             {
                 if (Process.GetProcessesByName("DualClampExperiment").Length > 0) return;
                 string baseDir = AppDomain.CurrentDomain.BaseDirectory;
-                string[] candidates =
+                var candidates = new List<string>();
+                string? projectRoot = FindProjectRoot(baseDir);
+                if (!string.IsNullOrEmpty(projectRoot))
                 {
-                    System.IO.Path.Combine(baseDir, "DualClampExperiment.exe"),
-                    System.IO.Path.GetFullPath(System.IO.Path.Combine(baseDir, @"..\..\..\..\x64\Debug\DualClampExperiment.exe")),
-                    System.IO.Path.GetFullPath(System.IO.Path.Combine(baseDir, @"..\..\..\..\x64\Release\DualClampExperiment.exe")),
-                    System.IO.Path.GetFullPath(System.IO.Path.Combine(baseDir, @"..\..\..\..\..\x64\Debug\DualClampExperiment.exe")),
-                    System.IO.Path.GetFullPath(System.IO.Path.Combine(baseDir, @"..\..\..\..\..\x64\Release\DualClampExperiment.exe")),
-                    System.IO.Path.GetFullPath(System.IO.Path.Combine(baseDir, @"..\DualClampExperiment.exe"))
-                };
+                    candidates.Add(System.IO.Path.Combine(projectRoot, "x64", "Debug", "DualClampExperiment.exe"));
+                    candidates.Add(System.IO.Path.Combine(projectRoot, "x64", "Release", "DualClampExperiment.exe"));
+                }
+                candidates.Add(System.IO.Path.Combine(baseDir, "DualClampExperiment.exe"));
+                candidates.Add(System.IO.Path.GetFullPath(System.IO.Path.Combine(baseDir, @"..\DualClampExperiment.exe")));
                 foreach (string path in candidates)
                 {
                     if (!File.Exists(path)) continue;
@@ -96,6 +97,18 @@ namespace DualClampExperimentUI
                 }
             }
             catch { }
+        }
+
+        private static string? FindProjectRoot(string startDirectory)
+        {
+            DirectoryInfo? current = new DirectoryInfo(startDirectory);
+            while (current != null)
+            {
+                if (File.Exists(System.IO.Path.Combine(current.FullName, "DualClampExperiment.sln")))
+                    return current.FullName;
+                current = current.Parent;
+            }
+            return null;
         }
 
         private void DisconnectPipe()
@@ -124,6 +137,9 @@ namespace DualClampExperimentUI
                 _reader = new StreamReader(pipe, new UTF8Encoding(false), false, 4096, true);
                 SetPipeStatus(true, "UI管道: 已连接");
                 await SendCommandInternalAsync("CONNECT_ADS");
+                string backendVersion = await SendCommandInternalAsync("PROGRAM_VERSION");
+                if (!backendVersion.StartsWith(ExpectedBackendVersion, StringComparison.Ordinal))
+                    throw new InvalidOperationException("后端版本不匹配，请关闭旧 DualClampExperiment.exe 后重新启动当前构建");
                 await SendCommandInternalAsync(CurrentMode == "legacy" ? "GET" : "GET_PROGRAM");
                 if (CurrentMode == "legacy") await SendCommandInternalAsync("GET_STANDALONE_RECORD");
             }
@@ -520,7 +536,15 @@ namespace DualClampExperimentUI
             ZeroValuesText.Text = p.Length > 47 ? string.Format(CultureInfo.InvariantCulture, "零点值（原始计数 count）\nfn1：{0:F3}  ft1：{1:F3}\nfn2：{2:F3}  ft2：{3:F3}", D(p[44]), D(p[45]), D(p[46]), D(p[47])) : "";
             int waitAction = p.Length > 53 ? int.Parse(p[53], CultureInfo.InvariantCulture) : 0;
             PhaseText.Text = waitAction == 1 ? "等待电缸释放" : waitAction == 2 ? "等待重新夹紧" : ProgramPhase(phase);
-            ErrorText.Text = p[programError];
+            string plcError = p[programError];
+            if (!string.IsNullOrWhiteSpace(plcError))
+                ErrorText.Text = plcError;
+            else if (p.Length > 39 && uint.TryParse(p[39], NumberStyles.Integer, CultureInfo.InvariantCulture, out uint statusError) && statusError != 0)
+                ErrorText.Text = statusError == 0x7101
+                    ? "PLC拒绝进入程序递送：旧双机构尚未处于待机，请先停止旧模式并等待终态"
+                    : statusError == 0x7102
+                        ? "PLC拒绝切换模式：程序递送仍在运行或准备中，请先中止并等待终态"
+                        : "PLC状态错误ID：" + statusError.ToString(CultureInfo.InvariantCulture);
             if (p.Length > 58 && int.Parse(p[39], CultureInfo.InvariantCulture) != 0 && p[54] != "0")
             {
                 string source = p[54] == "1" ? "准备定位" : p[54] == "2" ? "前向至触发位置" : p[54] == "3" ? "回退" : p[54] == "4" ? "最终前向" : p[54] == "5" ? "主从耦合" : p[54] == "6" ? "主从解除" : "未知动作";
@@ -664,6 +688,7 @@ namespace DualClampExperimentUI
         {
             uint value = uint.Parse(box.Text, CultureInfo.InvariantCulture);
             if (value > 65535) throw new ArgumentOutOfRangeException(box.Name, "电缸开闭值必须在0至65535之间");
+            if (value < 5) value = 5;
             return value.ToString(CultureInfo.InvariantCulture);
         }
         private string RecordSuffix() => (RecordSuffixText.Text ?? "experiment").Replace("|", " ").Replace("\r", " ").Replace("\n", " ").Trim();

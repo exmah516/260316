@@ -19,6 +19,8 @@ public:
 	std::string last_error() const;
 
 	bool select_mode(ProgrammedDeliveryMode mode);
+	bool read_mode_phase(ProgrammedDeliveryMode& mode, ProgrammedDeliveryPhase& phase,
+		std::uint32_t& status_error_id);
 	bool read_live(ProgrammedDeliveryLiveFrame& frame);
 	bool write_config(const ProgrammedDeliveryConfig& config, bool setup_request);
 	bool request_start();

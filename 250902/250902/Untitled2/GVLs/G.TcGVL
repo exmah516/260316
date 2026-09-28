@@ -156,12 +156,12 @@ VAR_GLOBAL
 	dual_clamp_recovery_mode		: BOOL := TRUE;
 	dual_clamp_cylinder1_open_word : WORD := 1000;
 	dual_clamp_cylinder2_clamp_word : WORD := 600;
-	dual_clamp_cylinder2_release_word : WORD := 0;
+	dual_clamp_cylinder2_release_word : WORD := 5;
 	dual_clamp_cylinder3_open_word : WORD := 1000;
 	dual_clamp_cylinder4_clamp_word : WORD := 500;
-	dual_clamp_cylinder4_release_word : WORD := 0;
-	dual_clamp_cylinder2_cmd		: WORD := 0;
-	dual_clamp_cylinder4_cmd		: WORD := 0;
+	dual_clamp_cylinder4_release_word : WORD := 5;
+	dual_clamp_cylinder2_cmd		: WORD := 5;
+	dual_clamp_cylinder4_cmd		: WORD := 5;
 	dual_clamp_setup_target_axis1_abs : LREAL := 0.0;
 	dual_clamp_setup_target_axis6_abs : LREAL := 0.0;
 	dual_clamp_return_target_abs	: LREAL := 0.0;
@@ -189,7 +189,8 @@ VAR_GLOBAL
 	dual_clamp_sample_cylinder4	: ARRAY[0..32767] OF WORD;
 
 	// 程序递送测试接口，与旧 dual_clamp_* 接口完全独立。
-	// program_test_mode: 0=旧双机构模式，1=导管，2=导丝，4=外源验证；记录来源3保留给独立记录。
+	// program_test_mode: 0=旧双机构模式，1=导管，2=导丝，4=外源验证；
+	// 记录来源3保留给独立记录。
 	program_test_mode			: USINT := 0;
 	program_test_setup_req		: BOOL := FALSE;
 	program_test_start_req		: BOOL := FALSE;
@@ -206,9 +207,9 @@ VAR_GLOBAL
 	program_test_cylinder1_coupling_enable : BOOL := TRUE;
 	program_test_cylinder3_coupling_enable : BOOL := TRUE;
 	// 程序递送模式的运动端电缸开闭量。开值用于释放，闭值用于夹紧。
-	program_test_cylinder2_open_word : WORD := 0;
+	program_test_cylinder2_open_word : WORD := 5;
 	program_test_cylinder2_close_word : WORD := 600;
-	program_test_cylinder4_open_word : WORD := 0;
+	program_test_cylinder4_open_word : WORD := 5;
 	program_test_cylinder4_close_word : WORD := 500;
 	program_test_release_wait_ms : UDINT := 150;
 	program_test_reclamp_wait_ms : UDINT := 150;

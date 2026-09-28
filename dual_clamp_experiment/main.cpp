@@ -44,13 +44,22 @@ namespace
 		if (length == 0 || length >= std::size(module_path)) return false;
 
 		const std::filesystem::path backend_path(module_path, module_path + length);
-		// Debug输出位于 dual_clamp_experiment\x64\Debug，向上三层是项目根目录。
-		const std::filesystem::path project_path = backend_path.parent_path().parent_path().parent_path();
+		std::filesystem::path project_path;
+		for (auto current = backend_path.parent_path(); !current.empty(); current = current.parent_path())
+		{
+			if (std::filesystem::exists(current / L"DualClampExperiment.sln"))
+			{
+				project_path = current;
+				break;
+			}
+			if (current == current.parent_path()) break;
+		}
 		const std::vector<std::filesystem::path> candidate_paths = {
-			project_path / L"AdsControlUI" / L"bin" / L"x64" / L"Debug" / L"net472" / L"DualClampExperimentUI.exe",
-			project_path / L"AdsControlUI" / L"bin" / L"x64" / L"Release" / L"net472" / L"DualClampExperimentUI.exe",
+			// 优先当前标准Debug输出，避免误启动旧的x64/Debug UI副本。
 			project_path / L"AdsControlUI" / L"bin" / L"Debug" / L"net472" / L"DualClampExperimentUI.exe",
+			project_path / L"AdsControlUI" / L"bin" / L"x64" / L"Debug" / L"net472" / L"DualClampExperimentUI.exe",
 			project_path / L"AdsControlUI" / L"bin" / L"Release" / L"net472" / L"DualClampExperimentUI.exe",
+			project_path / L"AdsControlUI" / L"bin" / L"x64" / L"Release" / L"net472" / L"DualClampExperimentUI.exe",
 			// 兼容后端被复制到项目根目录或其他输出目录的情况。
 			backend_path.parent_path() / L"DualClampExperimentUI.exe",
 			backend_path.parent_path() / L"net472" / L"DualClampExperimentUI.exe"
