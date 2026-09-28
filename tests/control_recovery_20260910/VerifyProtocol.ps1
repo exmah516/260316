@@ -49,8 +49,8 @@ foreach ($declaration in ($body -split ';')) {
     $offset += $sizes[$type] * $count
     $index++
 }
-if ($index -ne $fields.Count -or $offset -ne 841 -or
-    [Runtime.InteropServices.Marshal]::SizeOf([Activator]::CreateInstance($state)) -ne 841) { throw '字段数量或总大小不同' }
+if ($index -ne $fields.Count -or $offset -ne 867 -or
+    [Runtime.InteropServices.Marshal]::SizeOf([Activator]::CreateInstance($state)) -ne 867) { throw '字段数量或总大小不同' }
 $enumBody = [regex]::Match($header, '(?s)enum class VisCommandType : int\s*\{(.*?)\};').Groups[1].Value
 $enumBody = [regex]::Replace($enumBody, '//[^\r\n]*', '')
 $entries = [regex]::Matches($enumBody, '(\w+)\s*=\s*(\d+)')
@@ -63,4 +63,4 @@ if ([Enum]::GetNames($commands).Count -ne $entries.Count) { throw '命令数量�
 foreach ($hole in @(14, 15, 16, 17, 19, 23)) {
     if ([Enum]::IsDefined($commands, $hole)) { throw "历史命令编号被复用: $hole" }
 }
-Write-Output "PASS: $index 个字段的类型、顺序、数组、布尔封送及偏移一致，841 字节；$($entries.Count) 个命令编号一致。"
+Write-Output "PASS: $index 个字段的类型、顺序、数组、布尔封送及偏移一致，867 字节；$($entries.Count) 个命令编号一致。"

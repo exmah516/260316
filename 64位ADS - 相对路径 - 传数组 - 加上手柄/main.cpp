@@ -1416,7 +1416,18 @@ int main(int argc, char* argv[])
 		catheter_mode_button_pressed_prev = catheter_b7_pressed;
 		guidewire_mode_button_pressed_prev = guidewire_b7_pressed;
 
-		bool axis1_reverse_pressed = physical_mode_source == PhysicalModeSource::Catheter
+		// 初始控制尚未按过 B7 时，按当前实际模式推断方向键来源。
+		// 只在本拍使用，不写回 physical_mode_source，避免改变原有模式切换语义。
+		const PhysicalModeSource effective_physical_mode_source =
+			physical_mode_source != PhysicalModeSource::None
+			? physical_mode_source
+			: vis_reverse_override_active
+			? PhysicalModeSource::None
+			: (guidewire_mode == GuidewireMode::Independent
+				? PhysicalModeSource::Guidewire
+				: PhysicalModeSource::Catheter);
+
+		bool axis1_reverse_pressed = effective_physical_mode_source == PhysicalModeSource::Catheter
 			? catheter_b6_pressed
 			: ((vis_reverse_override_active && vis_reverse_override_target == 0)
 				? vis_reverse_override_value : false);
@@ -1447,7 +1458,7 @@ int main(int argc, char* argv[])
 			(void)cancel_active_return_motion(true);
 		}
 		// 物理模式源下 B6 按当前电平决定方向；没有物理模式源时沿用UI/单手柄方向。
-		bool axis6_effective_reverse_pressed = physical_mode_source == PhysicalModeSource::Guidewire
+		bool axis6_effective_reverse_pressed = effective_physical_mode_source == PhysicalModeSource::Guidewire
 			? guidewire_b6_pressed
 			: ((vis_reverse_override_active && vis_reverse_override_target == 1)
 				? vis_reverse_override_value : (single_handle_mode ? axis1_reverse_pressed : false));
@@ -4330,6 +4341,13 @@ int main(int argc, char* argv[])
 			vs.plc_restart_count = ads_stats.plc_restart_count;
 			vs.host_comm_timeout = ads_events.host_comm_timeout;
 			const ArmManualSnapshot arm_snapshot = arm_manual_ads.snapshot();
+			vs.arm_snapshot_valid = arm_snapshot.valid;
+			vs.arm_at_program_zero = arm_snapshot.at_program_zero;
+			vs.arm_cartesian_status = arm_snapshot.cartesian_status;
+			vs.arm_cartesian_error = arm_snapshot.cartesian_error;
+			vs.arm_curve_state = arm_snapshot.curve_state;
+			vs.arm_curve_progress = arm_snapshot.curve_progress;
+			vs.arm_home_request_id = arm_snapshot.home_request_id;
 			vs.arm_manual_enable = arm_snapshot.manual_enable;
 			for (int i = 0; i < 5; ++i)
 			{
@@ -4596,6 +4614,21 @@ int main(int argc, char* argv[])
 					break;
 				case VisCommandType::SetArmManualEnable:
 					arm_manual_ads.set_manual_enable(vcmd.param1 != 0);
+					break;
+				case VisCommandType::SetArmCartesianJog:
+					arm_manual_ads.set_cartesian_jog(vcmd.param1, vcmd.param2 / 1000.0);
+					break;
+				case VisCommandType::ReturnArmProgramZero:
+					arm_manual_ads.request_program_zero();
+					break;
+				case VisCommandType::StopArmCartesian:
+					arm_manual_ads.stop_cartesian();
+					break;
+				case VisCommandType::SetArmCartesianParameter:
+					arm_manual_ads.set_cartesian_parameter(vcmd.param1, vcmd.param2 / 1000.0);
+					break;
+				case VisCommandType::KeepArmCartesianAlive:
+					arm_manual_ads.keep_cartesian_alive();
 					break;
 				case VisCommandType::SetArmAxisEnable:
 					if (vcmd.param1 >= 1 && vcmd.param1 <= 5)

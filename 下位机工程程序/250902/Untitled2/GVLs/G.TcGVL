@@ -90,6 +90,16 @@ VAR_GLOBAL
 	arm_motion_error_id	: ARRAY[1..5] OF UDINT := [0,0,0,0,0];
 	arm_cmd_dir		: ARRAY[1..5] OF SINT := [0,0,0,0,0];	// -1=反向，0=停止，1=正向
 	arm_cmd_conflict	: ARRAY[1..5] OF BOOL := [FALSE,FALSE,FALSE,FALSE,FALSE];	// 正反向同时请求
+	// 单一协调曲线接口，先写数据再递增request；PLC锁存后不再读取曲线输入。
+	arm_curve_data : ARRAY[0..16] OF LREAL;
+	arm_curve_request : UDINT;
+	arm_curve_ack : UDINT;
+	arm_curve_cancel : BOOL := TRUE;
+	arm_curve_heartbeat : UDINT;
+	arm_curve_owned : BOOL;
+	arm_curve_state : UDINT; // 0空闲，1执行，2完成，3取消，4错误
+	arm_curve_error : UDINT;
+	arm_curve_progress : LREAL;
 
 	// ========== Axis15 同步接口 ==========
 	// 独立链接到 NC Axis 15，与业务轴2（NC Axis 7）同步旋转。

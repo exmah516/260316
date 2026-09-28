@@ -154,7 +154,7 @@ internal static class UiSmoke
         view.UpdateLayout();
         for (int i = 0; i < 100 && !Server.IsConnected; ++i) Pump(20);
         Check(Server.IsConnected, "Mock pipe connection");
-        Check(Marshal.SizeOf<VisState>() == 841, "Protocol size");
+        Check(Marshal.SizeOf<VisState>() == 867, "Protocol size");
 
         object boxed = new VisState();
         foreach (var field in typeof(VisState).GetFields())
@@ -217,6 +217,63 @@ internal static class UiSmoke
         Check(!vm.SetCylinderManualPosition(4, 1000), "Invalid index rejected");
         state.cylinder_manual_allowed = true;
         Publish(state);
+        // 新增定位臂界面只连接模拟管道，验证单位、命令和窗口内归零状态。
+        Check(!vm.ArmCartesianAvailable, "No arm controls without valid arm feedback");
+        state.arm_snapshot_valid = true;
+        state.arm_manual_enable = true;
+        state.arm_at_program_zero = true;
+        state.arm_act_pos = new double[] { 100, 90, 180, 180, 0 };
+        Publish(state);
+        Check(vm.ArmCartesianAvailable, "Valid arm feedback enables Cartesian controls");
+        Check(vm.ArmZeroText.Contains("已到位"), "Program zero displayed");
+        Check(vm.ArmProgramAnglesText.Contains("0.00"), "Mechanical offsets displayed as program angles");
+        var mode = (ComboBox)window.FindName("ArmCartesianMode");
+        Check(mode.Items.Count == 5, "Five Cartesian jog modes");
+        var settings = typeof(MainWindow).GetMethod("SendCartesianSettings",
+            BindingFlags.Instance | BindingFlags.NonPublic);
+        Check(!(bool)settings.Invoke(window, new object[] { false }) && Commands.IsEmpty,
+            "Missing lift calibration sends no command");
+        ((TextBox)window.FindName("ArmLiftMin")).Text = "-25.125";
+        ((TextBox)window.FindName("ArmHomeTravel")).Text = "15";
+        ((TextBox)window.FindName("ArmHomeTip")).Text = "100";
+        ((TextBox)window.FindName("ArmHomeRotation")).Text = "20";
+        Check((bool)settings.Invoke(window, new object[] { true }), "Explicit home settings accepted");
+        int[] parameters = { -25125, 15000, 100000, 20000 };
+        for (int field = 0; field < 4; ++field) {
+            var command = NextCommand();
+            Check(command[0] == 44 && command[1] == field && command[2] == parameters[field],
+                "Cartesian parameter index and fixed-point units");
+        }
+        for (int axis = 1; axis <= 5; ++axis) {
+            Check(vm.SetArmCartesianJog(axis, -1250), "Cartesian command sent");
+            var command = NextCommand();
+            Check(command[0] == 41 && command[1] == axis && command[2] == -1250,
+                "Cartesian mode and signed speed transmitted");
+        }
+        typeof(MainWindow).GetMethod("ArmProgramZero_Click",
+            BindingFlags.Instance | BindingFlags.NonPublic).Invoke(window,
+                new object[] { null, new RoutedEventArgs() });
+        for (int field = 0; field < 4; ++field) Check(NextCommand()[0] == 44, "Home sends settings first");
+        Check(NextCommand()[0] == 42, "Home button sends program-zero command");
+        state.arm_home_request_id = 1;
+        state.arm_cartesian_status = 3;
+        Publish(state);
+        Check(vm.ArmCartesianStatusText.Contains("未移动"), "Zero window reports no movement");
+        Check(!(bool)typeof(MainWindow).GetField("_programReturnActive",
+            BindingFlags.Instance | BindingFlags.NonPublic).GetValue(window), "Home lease ends after response");
+        while (Commands.TryDequeue(out var heartbeat))
+            Check(heartbeat[0] == 45, "Only home heartbeat may follow home request");
+        vm.StopArmCartesian();
+        Check(NextCommand()[0] == 43, "Cartesian stop command");
+        state.arm_cartesian_error = 1104;
+        Publish(state);
+        Check(vm.ArmCartesianStatusText.Contains("奇异"), "Singularity error is visible");
+        state.arm_snapshot_valid = false;
+        Publish(state);
+        Check(!vm.ArmCartesianAvailable, "Stale feedback disables Cartesian controls");
+        state.arm_snapshot_valid = true;
+        state.arm_cartesian_error = 0;
+        Publish(state);
         foreach (var size in new[] { new Size(1040, 860), new Size(920, 700) })
         {
             window.Width = size.Width;
@@ -234,6 +291,27 @@ internal static class UiSmoke
             Directory.CreateDirectory(args[0]);
             using (var file = File.Create(Path.Combine(args[0], "cylinders-" + size.Width + ".png")))
                 encoder.Save(file);
+            var armGroup = FindCylinderGroup(mode);
+            Check(armGroup.ActualWidth > 300 && mode.ActualWidth >= 80,
+                "Arm controls fit both window widths");
+            var armPanel = (FrameworkElement)VisualTreeHelper.GetParent(VisualTreeHelper.GetParent(mode));
+            image = new RenderTargetBitmap((int)Math.Ceiling(armPanel.ActualWidth),
+                (int)Math.Ceiling(armPanel.ActualHeight), 96, 96, PixelFormats.Pbgra32);
+            var drawing = new DrawingVisual();
+            using (var context = drawing.RenderOpen()) {
+                var bounds = new Rect(0, 0, image.PixelWidth, image.PixelHeight);
+                context.DrawRectangle(Brushes.White, null, bounds);
+                context.DrawRectangle(new VisualBrush(armPanel), null, bounds);
+            }
+            image.Render(drawing);
+            var pixels = new byte[image.PixelWidth * image.PixelHeight * 4];
+            image.CopyPixels(pixels, image.PixelWidth * 4, 0);
+            Check(pixels.Where((value, index) => index % 4 != 3 && value < 200).Count() > 500,
+                "Arm panel render contains visible controls");
+            encoder = new PngBitmapEncoder();
+            encoder.Frames.Add(BitmapFrame.Create(image));
+            using (var file = File.Create(Path.Combine(args[0], "arm-" + size.Width + ".png")))
+                encoder.Save(file);
         }
         vm.Dispose();
         Console.WriteLine("Client disposed.");
@@ -241,7 +319,7 @@ internal static class UiSmoke
         Server.Dispose();
         Check(serverTask.Wait(2000), "Mock server stopped");
         app.Shutdown();
-        Console.WriteLine("PASS: " + Checks + " WPF/protocol checks; 2 offscreen renders; no hardware.");
+        Console.WriteLine("PASS: " + Checks + " WPF/protocol checks; 4 offscreen renders; no hardware.");
     }
 
     private static GroupBox FindCylinderGroup(DependencyObject child)

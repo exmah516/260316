@@ -18,6 +18,10 @@ namespace AdsControlUI
 		private int _activeAxis4JogDirection;
 		private int _activeInjectorJogAxis;
 		private int _activeInjectorJogDirection;
+		private int _cartesianMode;
+		private int _cartesianSpeed;
+		private bool _programReturnActive;
+		private uint _homeRequestBaseline;
 
         public MainWindow()
         {
@@ -128,6 +132,7 @@ namespace AdsControlUI
 				return;
 			}
 
+			if (_cartesianMode != 0 || _programReturnActive) return;
 			if (_activeArmJogAxis != 0 && _activeArmJogAxis != axisNumber)
 				_vm.SetArmAxisJog(_activeArmJogAxis, 0);
 			_activeArmJogAxis = axisNumber;
@@ -245,6 +250,8 @@ namespace AdsControlUI
 
 		private void StopAllManualJogs()
 		{
+			_cartesianMode = 0;
+			_programReturnActive = false;
 			_activeArmJogAxis = 0;
 			_activeArmJogDirection = 0;
 			_activeAxis4JogDirection = 0;
@@ -255,12 +262,90 @@ namespace AdsControlUI
 
 		private void ManualJogKeepaliveTimer_Tick(object sender, System.EventArgs e)
 		{
+			if (_cartesianMode != 0)
+				_vm.SetArmCartesianJog(_cartesianMode, _cartesianSpeed);
+			if (_programReturnActive)
+				_vm.KeepArmCartesianAlive();
 			if (_activeArmJogAxis != 0 && _activeArmJogDirection != 0)
 				_vm.SetArmAxisJog(_activeArmJogAxis, _activeArmJogDirection);
 			if (_activeAxis4JogDirection != 0)
 				_vm.SetAxis4ManualJog(_activeAxis4JogDirection);
 			if (_activeInjectorJogAxis != 0 && _activeInjectorJogDirection != 0)
 				_vm.SetInjectorManualJog(_activeInjectorJogAxis, _activeInjectorJogDirection);
+		}
+
+		private bool SendCartesianSettings(bool home)
+		{
+			TextBox[] inputs = { ArmLiftMin, ArmHomeTravel, ArmHomeTip, ArmHomeRotation };
+			int count = home ? inputs.Length : 1;
+			int[] fixedValues = new int[count];
+			for (int i = 0; i < count; ++i) {
+				if (!double.TryParse(inputs[i].Text, System.Globalization.NumberStyles.Float,
+					System.Globalization.CultureInfo.InvariantCulture, out double value)
+					|| double.IsNaN(value) || double.IsInfinity(value) || System.Math.Abs(value) > 100000
+					|| (i != 0 && value <= 0)) {
+					ArmCartesianError.Text = "请填写轴1下端读数；归零还需填写正数的行程、位移和转角上限。";
+					return false;
+				}
+				fixedValues[i] = (int)System.Math.Round(value * 1000);
+			}
+			for (int i = 0; i < count; ++i) {
+				if (!_vm.SetArmCartesianParameter(i, fixedValues[i])) {
+					ArmCartesianError.Text = "参数发送失败。";
+					return false;
+				}
+			}
+			return true;
+		}
+
+		private void CartesianJog_Down(object sender, MouseButtonEventArgs e)
+		{
+			if (!(sender is Button button) || _cartesianMode != 0 || _programReturnActive
+				|| _activeArmJogAxis != 0) return;
+			ArmCartesianError.Text = "";
+			if (!double.TryParse(ArmCartesianSpeed.Text, System.Globalization.NumberStyles.Float,
+				System.Globalization.CultureInfo.InvariantCulture, out double speed)
+				|| double.IsNaN(speed) || double.IsInfinity(speed) || speed < 0.001 || speed > 100) {
+				ArmCartesianError.Text = "速度须在0.001至100之间，单位为mm/s或°/s。";
+				return;
+			}
+			if (!SendCartesianSettings(false)) return;
+			int direction = int.Parse((string)button.CommandParameter,
+				System.Globalization.CultureInfo.InvariantCulture);
+			_cartesianMode = ArmCartesianMode.SelectedIndex + 1;
+			_cartesianSpeed = direction * (int)System.Math.Round(speed * 1000);
+			if (!_vm.SetArmCartesianJog(_cartesianMode, _cartesianSpeed)) {
+				_cartesianMode = 0;
+				ArmCartesianError.Text = "点动命令发送失败。";
+				return;
+			}
+			button.CaptureMouse();
+			e.Handled = true;
+		}
+		private void CartesianJog_Up(object sender, MouseButtonEventArgs e) => StopCartesianJog(sender);
+		private void CartesianJog_Lost(object sender, MouseEventArgs e) => StopCartesianJog(sender);
+		private void StopCartesianJog(object sender)
+		{
+			if (_cartesianMode == 0) return;
+			_cartesianMode = 0;
+			_vm.StopArmCartesian();
+			if (sender is Button button && button.IsMouseCaptured) button.ReleaseMouseCapture();
+		}
+		private void ArmProgramZero_Click(object sender, RoutedEventArgs e)
+		{
+			if (_cartesianMode != 0 || _activeArmJogAxis != 0 || _programReturnActive) return;
+			_programReturnActive = false;
+			ArmCartesianError.Text = "";
+			if (!SendCartesianSettings(true)) return;
+			_homeRequestBaseline = _vm.LatestState.arm_home_request_id;
+			_programReturnActive = _vm.ReturnArmProgramZero();
+			if (!_programReturnActive) ArmCartesianError.Text = "归零命令发送失败。";
+		}
+		private void ArmCartesianStop_Click(object sender, RoutedEventArgs e)
+		{
+			_cartesianMode = 0;
+			_programReturnActive = false;
+			_vm.StopArmCartesian();
 		}
 
 		private void ApplyArmJogParameters_Click(object sender, RoutedEventArgs e)
@@ -406,6 +491,9 @@ namespace AdsControlUI
 
         private void Vm_StateUpdated(VisState state)
         {
+			if (_programReturnActive && state.arm_home_request_id != _homeRequestBaseline
+				&& state.arm_cartesian_status != 1)
+				_programReturnActive = false;
             _forceWindow?.AddState(state);
 			_cleanForceWindow?.AddState(state);
 			_cameraPreviewWindow?.OnState(state);

@@ -124,6 +124,13 @@ namespace AdsControlUI
 		// 与 C++ 状态末尾一致：位0..3分别表示四个电缸的手动覆盖。
 		public byte cylinder_manual_mask;
 		[MarshalAs(UnmanagedType.I1)] public bool cylinder_manual_allowed;
+		[MarshalAs(UnmanagedType.I1)] public bool arm_snapshot_valid;
+		[MarshalAs(UnmanagedType.I1)] public bool arm_at_program_zero;
+		public int arm_cartesian_status;
+		public int arm_cartesian_error;
+		public uint arm_curve_state;
+		public double arm_curve_progress;
+		public uint arm_home_request_id;
 	}
 
     public enum VisCommandType : int
@@ -164,5 +171,10 @@ namespace AdsControlUI
 		EmergencyRetractDevice = 38,
 		SetCylinderManualPosition = 39,
 		ResetCylinderManual = 40,
+		SetArmCartesianJog = 41,
+		ReturnArmProgramZero = 42,
+		StopArmCartesian = 43,
+		SetArmCartesianParameter = 44,
+		KeepArmCartesianAlive = 45,
 	}
 }

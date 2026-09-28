@@ -125,7 +125,7 @@
                                                VerticalAlignment="Center"
                                                ToolTip="导管轴1完成回退后，正常递送前10 mm按比例增加该值，范围 0~5 mm"/>
                                     <TextBox x:Name="TbAxis1PostReturnLead"
-                                             Text="4.00" Width="72" Margin="8,2,0,2"
+                                             Text="1.50" Width="72" Margin="8,2,0,2"
                                              VerticalContentAlignment="Center"
                                              ToolTip="单位 mm，允许范围 0~5；输入 0 可关闭映射"/>
                                     <Button Content="应用" Click="ApplyAxis1PostReturnLead_Click"
@@ -246,6 +246,49 @@
                                        VerticalAlignment="Center" TextWrapping="Wrap"/>
                         </Grid>
 
+                        <StackPanel Margin="2,0,2,12">
+                            <TextBlock Text="末端点动" FontWeight="SemiBold" Margin="0,0,0,6"/>
+                            <WrapPanel>
+                                <TextBlock Text="方向" VerticalAlignment="Center"/>
+                                <ComboBox x:Name="ArmCartesianMode" SelectedIndex="0" Width="84" Margin="6,0,10,0">
+                                    <ComboBoxItem Content="X"/>
+                                    <ComboBoxItem Content="Y"/>
+                                    <ComboBoxItem Content="Z"/>
+                                    <ComboBoxItem Content="俯仰"/>
+                                    <ComboBoxItem Content="偏航"/>
+                                </ComboBox>
+                                <TextBlock Text="速度" VerticalAlignment="Center"/>
+                                <TextBox x:Name="ArmCartesianSpeed" Width="58" Margin="6,0" ToolTip="平移mm/s，转动deg/s"/>
+                                <TextBlock Text="mm/s 或 °/s" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                                <Button Content="−" CommandParameter="-1" Width="36" Height="32" Margin="2"
+                                        ToolTip="负向点动" IsEnabled="{Binding ArmCartesianAvailable}"
+                                        PreviewMouseLeftButtonDown="CartesianJog_Down"
+                                        PreviewMouseLeftButtonUp="CartesianJog_Up" LostMouseCapture="CartesianJog_Lost"/>
+                                <Button Content="+" CommandParameter="1" Width="36" Height="32" Margin="2"
+                                        ToolTip="正向点动；俯仰正向为抬头" IsEnabled="{Binding ArmCartesianAvailable}"
+                                        PreviewMouseLeftButtonDown="CartesianJog_Down"
+                                        PreviewMouseLeftButtonUp="CartesianJog_Up" LostMouseCapture="CartesianJog_Lost"/>
+                                <Button Content="程序归零" Click="ArmProgramZero_Click" Margin="8,2,2,2"
+                                        IsEnabled="{Binding ArmCartesianAvailable}"/>
+                                <Button Content="停止" Click="ArmCartesianStop_Click" Margin="2"/>
+                            </WrapPanel>
+                            <WrapPanel Margin="0,6,0,0">
+                                <TextBlock Text="轴1下端 mm" VerticalAlignment="Center"/>
+                                <TextBox x:Name="ArmLiftMin" Width="64" Margin="6,0,8,0"/>
+                                <TextBlock Text="归零最大轴行程 °" VerticalAlignment="Center"/>
+                                <TextBox x:Name="ArmHomeTravel" Width="58" Margin="6,0,8,0"/>
+                            </WrapPanel>
+                            <WrapPanel Margin="0,6,0,0">
+                                <TextBlock Text="前端偏离上限 mm" VerticalAlignment="Center"/>
+                                <TextBox x:Name="ArmHomeTip" Width="58" Margin="6,0,8,0"/>
+                                <TextBlock Text="姿态偏离上限 °" VerticalAlignment="Center"/>
+                                <TextBox x:Name="ArmHomeRotation" Width="58" Margin="6,0,8,0"/>
+                            </WrapPanel>
+                            <TextBlock Text="{Binding ArmProgramAnglesText}" Margin="0,6,0,0" TextWrapping="Wrap"/>
+                            <TextBlock Text="{Binding ArmZeroText}" TextWrapping="Wrap"/>
+                            <TextBlock Text="{Binding ArmCartesianStatusText}" TextWrapping="Wrap"/>
+                            <TextBlock x:Name="ArmCartesianError" Style="{StaticResource ErrorText}" TextWrapping="Wrap"/>
+                        </StackPanel>
                         <ItemsControl ItemsSource="{Binding ArmAxes}">
                             <ItemsControl.ItemTemplate>
                                 <DataTemplate>

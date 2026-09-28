@@ -115,7 +115,7 @@ struct ControlConfig
 	double guidewire_entry_axis6_from_left_max_mm = 667.0;
 	// 普通导管正向递送中，axis1 每次计划回退后前 10 mm 手柄输入的附加映射量。
 	// 0 表示关闭；默认 4 mm，UI 与内部均限制在 [0, 5] mm。
-	double axis1_post_return_lead_mm = 4.0;
+	double axis1_post_return_lead_mm = 1.5;
 	double axis1_post_return_lead_limit_mm = 5.0;
 	double axis1_post_return_mapping_span_mm = 10.0;
 	// axis6 距自身左限位的上位机内部软限位。达到预测越限条件后仅锁止上位机链路，
@@ -205,16 +205,16 @@ struct CylinderPreset
 	// cyl1/cyl2 属于导管侧夹爪对，
 	// cyl3/cyl4 属于导丝侧夹爪对。
 	unsigned short cyl1_open = 400;
-	unsigned short cyl1_clamp = 00;
+	unsigned short cyl1_clamp = 5;
 	unsigned short cyl1_preclamp = 320;
-	unsigned short cyl2_open = 0;
+	unsigned short cyl2_open = 5;
 	unsigned short cyl2_clamp = 600;
 	unsigned short cyl2_preopen = 150;
 	unsigned short cyl2_preclamp = 400;
 	unsigned short cyl3_open = 250;
 	unsigned short cyl3_clamp = 50;
 	unsigned short cyl3_preclamp = 200;
-	unsigned short cyl4_open = 0;
+	unsigned short cyl4_open = 5;
 	unsigned short cyl4_clamp = 500;
 	unsigned short cyl4_preopen = 300;
 	unsigned short cyl4_preclamp = 300;

@@ -6,6 +6,7 @@
 #include <mutex>
 #include <thread>
 #include <condition_variable>
+#include "arm_cartesian_motion.h"
 
 class AdsCommunicationService;
 
@@ -13,6 +14,14 @@ struct ArmManualSnapshot
 {
 	bool valid = false;
 	bool manual_enable = false;
+	std::uint32_t curve_sequence = 0;
+	std::uint32_t curve_state = 0;
+	std::uint32_t curve_error = 0;
+	double curve_progress = 0;
+	int cartesian_status = 0;
+	int cartesian_error = 0;
+	bool at_program_zero = false;
+	std::uint32_t home_request_id = 0;
 	std::array<bool, 5> enable_req{};
 	std::array<bool, 5> power_done{};
 	std::array<bool, 5> power_busy{};
@@ -54,6 +63,11 @@ public:
 	void request_reset(int axis_one_based);
 	void set_jog_direction(int axis_one_based, int direction);
 	bool set_jog_parameter(int axis_one_based, int parameter_kind, double value);
+	void set_cartesian_jog(int mode, double speed);
+	void request_program_zero();
+	void stop_cartesian();
+	void keep_cartesian_alive();
+	void set_cartesian_parameter(int field, double value);
 
 private:
 	void run();
@@ -62,6 +76,7 @@ private:
 	void clear_requests_locked(bool clear_manual_enable);
 	void update_auto_enable_gate();
 	void expire_jog_deadman();
+	void update_cartesian();
 
 	AdsCommunicationService& ads_service_;
 	mutable std::mutex mutex_;
@@ -88,4 +103,17 @@ private:
 	bool jog_neg_dirty_ = true;
 	bool params_dirty_ = true;
 	ArmManualSnapshot snapshot_{};
+	ArmCartesianSettings cartesian_settings_;
+	int cartesian_mode_ = 0;
+	double cartesian_speed_ = 0;
+	bool home_requested_ = false;
+	bool cartesian_stop_ = false;
+	bool cartesian_blocked_ = false;
+	bool curve_pending_ = false;
+	std::uint32_t sent_curve_sequence_ = 0;
+	std::uint32_t curve_heartbeat_ = 0;
+	std::uint64_t cartesian_epoch_ = 0;
+	std::chrono::steady_clock::time_point cartesian_deadline_{};
+	std::chrono::steady_clock::time_point curve_sent_at_{};
+	std::chrono::steady_clock::time_point snapshot_at_{};
 };

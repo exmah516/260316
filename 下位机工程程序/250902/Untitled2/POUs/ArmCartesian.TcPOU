@@ -1,0 +1,234 @@
+<?xml version="1.0" encoding="utf-8"?>
+<TcPlcObject Version="1.1.0.1" ProductVersion="3.1.4024.15">
+  <POU Name="ArmCartesian" Id="{713355bc-7855-44d6-b270-717a93d9e329}" SpecialFunc="None">
+    <Declaration><![CDATA[FUNCTION_BLOCK ArmCartesian
+VAR
+    stage : INT;
+    i : INT;
+    k : INT;
+    curve : ARRAY[0..16] OF LREAL;
+    p : ARRAY[1..5] OF LREAL;
+    v : ARRAY[1..5] OF LREAL;
+    a : ARRAY[1..5] OF LREAL;
+    dir : ARRAY[1..5] OF DINT;
+    velocity_limit : ARRAY[1..5] OF LREAL;
+    acceleration_limit : ARRAY[1..5] OF LREAL;
+    deceleration_limit : ARRAY[1..5] OF LREAL;
+    jerk_limit : ARRAY[1..5] OF LREAL;
+    elapsed : LREAL;
+    phase_elapsed : LREAL;
+    cycle_seconds : LREAL;
+    u : LREAL;
+    path_progress : LREAL;
+    ds : LREAL;
+    dds : LREAL;
+    delta : LREAL;
+    bend : LREAL;
+    slope_bound : LREAL;
+    allowed : BOOL;
+    all_enabled : BOOL;
+    all_disabled : BOOL;
+    all_stopped : BOOL;
+    all_released : BOOL;
+    arrived : BOOL;
+    last_heartbeat : UDINT;
+    heartbeat_age : LREAL;
+    finish_state : UDINT;
+    fb_enable : ARRAY[1..5] OF MC_ExtSetPointGenEnable;
+    fb_disable : ARRAY[1..5] OF MC_ExtSetPointGenDisable;
+    fb_stop : ARRAY[1..5] OF MC_Stop;
+END_VAR]]></Declaration>
+    <Implementation>
+      <ST><![CDATA[// 固定在MAIN的1ms PLC任务执行，与NC SAF同周期；任务周期变化即拒绝。
+cycle_seconds := UDINT_TO_LREAL(TwinCAT_SystemInfoVarList._TaskInfo[1].CycleTime) * 0.0000001;
+IF TwinCAT_SystemInfoVarList._TaskInfo[1].FirstCycle THEN
+    G.arm_curve_ack := G.arm_curve_request;
+    G.arm_curve_cancel := TRUE;
+    G.arm_curve_owned := FALSE;
+    G.arm_curve_state := 0;
+    G.arm_curve_error := 0;
+    stage := 0;
+END_IF
+IF G.arm_curve_heartbeat <> last_heartbeat THEN
+    last_heartbeat := G.arm_curve_heartbeat;
+    heartbeat_age := 0;
+ELSE
+    heartbeat_age := heartbeat_age + cycle_seconds;
+END_IF
+
+allowed := G.arm_manual_enable AND NOT G.host_comm_timeout AND NOT G.estop_hold_req
+    AND (heartbeat_age < 0.5) AND (ABS(cycle_seconds - 0.001) < 0.00000001);
+FOR i := 1 TO 5 DO
+    allowed := allowed AND G.arm_power_output[i].Done AND G.arm_enable_req[i]
+        AND NOT G.arm_axis[i].Status.Error AND NOT G.arm_reset_req[i]
+        AND NOT G.arm_jog_pos_req[i] AND NOT G.arm_jog_neg_req[i];
+END_FOR
+
+IF G.arm_curve_request <> G.arm_curve_ack THEN
+    G.arm_curve_ack := G.arm_curve_request;
+    IF stage <> 0 THEN
+        G.arm_curve_error := 2001;
+        finish_state := 4;
+        stage := 40;
+    ELSE
+        G.arm_curve_error := 0;
+        G.arm_curve_progress := 0;
+        FOR k := 0 TO 16 DO
+            curve[k] := G.arm_curve_data[k];
+            // 同时拒绝NaN、无穷和不合理数据，不替换为默认值。
+            IF NOT ((curve[k] >= -100000.0) AND (curve[k] <= 100000.0)) THEN
+                G.arm_curve_error := 2002;
+            END_IF
+        END_FOR
+        IF NOT allowed OR G.arm_curve_cancel THEN G.arm_curve_error := 2003; END_IF
+        IF (curve[15] < 0.02) OR (curve[15] > 120.0) THEN G.arm_curve_error := 2002; END_IF
+        FOR i := 1 TO 5 DO
+            p[i] := curve[i-1];
+            v[i] := 0;
+            a[i] := 0;
+            delta := curve[i+4] - curve[i-1];
+            bend := curve[i+9];
+            dir[i] := 0;
+            IF delta > 0 THEN dir[i] := 1; END_IF
+            IF delta < 0 THEN dir[i] := -1; END_IF
+            velocity_limit[i] := G.arm_jog_velocity[i];
+            acceleration_limit[i] := G.arm_jog_acc[i];
+            deceleration_limit[i] := G.arm_jog_dec[i];
+            jerk_limit[i] := G.arm_jog_jerk[i];
+            IF G.arm_motion_busy[i] OR (ABS(G.arm_act_vel[i]) > 0.01)
+                OR (ABS(G.arm_act_pos[i] - p[i]) > 0.05)
+                OR (ABS(bend) > ABS(delta) / 4.0 + 0.000000001)
+                OR NOT ((velocity_limit[i] > 0) AND (velocity_limit[i] <= 10000))
+                OR NOT ((acceleration_limit[i] > 0) AND (acceleration_limit[i] <= 10000))
+                OR NOT ((deceleration_limit[i] > 0) AND (deceleration_limit[i] <= 10000))
+                OR NOT ((jerk_limit[i] > 0) AND (jerk_limit[i] <= 10000)) THEN
+                G.arm_curve_error := 2004;
+            END_IF
+            IF curve[15] >= 0.02 THEN
+                slope_bound := ABS(delta) + 4.0 * ABS(bend);
+                IF (1.875 * slope_bound / curve[15] > velocity_limit[i] + 0.0000001)
+                    OR ((6.0*slope_bound + 28.125*ABS(bend))/(curve[15]*curve[15])
+                        > acceleration_limit[i] + 0.0000001) THEN
+                    G.arm_curve_error := 2005;
+                END_IF
+            END_IF
+        END_FOR
+        IF (MIN(curve[0],curve[5]) < curve[16]) OR (MAX(curve[0],curve[5]) > curve[16]+200)
+            OR (MIN(curve[1],curve[6]) < 0) OR (MAX(curve[1],curve[6]) > 180) THEN
+            G.arm_curve_error := 2006;
+        END_IF
+        IF G.arm_curve_error = 0 THEN
+            stage := 10;
+            elapsed := 0;
+            phase_elapsed := 0;
+            finish_state := 2;
+            G.arm_curve_state := 1;
+            G.arm_curve_owned := TRUE;
+        ELSE
+            G.arm_curve_state := 4;
+        END_IF
+    END_IF
+END_IF
+
+IF (stage > 0) AND (stage < 40) THEN
+    IF G.arm_curve_cancel THEN
+        finish_state := 3;
+        stage := 40;
+        phase_elapsed := 0;
+    ELSIF NOT allowed THEN
+        G.arm_curve_error := 2003;
+        finish_state := 4;
+        stage := 40;
+        phase_elapsed := 0;
+    END_IF
+END_IF
+IF stage > 0 THEN phase_elapsed := phase_elapsed + cycle_seconds; END_IF
+IF (stage = 10 OR stage = 30) AND (phase_elapsed > 2.0) THEN
+    G.arm_curve_error := 2007;
+    finish_state := 4;
+    stage := 40;
+END_IF
+
+IF stage = 20 THEN
+    u := MIN(1.0, elapsed / curve[15]);
+    path_progress := u*u*u*(10.0 + u*(-15.0 + 6.0*u));
+    ds := 30.0*u*u*(1.0-u)*(1.0-u)/curve[15];
+    dds := 60.0*u*(1.0-u)*(1.0-2.0*u)/(curve[15]*curve[15]);
+    FOR i := 1 TO 5 DO
+        delta := curve[i+4]-curve[i-1];
+        bend := curve[i+9];
+        p[i] := curve[i-1]+path_progress*delta+4.0*path_progress*(1.0-path_progress)*bend;
+        v[i] := (delta+4.0*(1.0-2.0*path_progress)*bend)*ds;
+        a[i] := (delta+4.0*(1.0-2.0*path_progress)*bend)*dds-8.0*bend*ds*ds;
+        IF (ABS(v[i]) > velocity_limit[i]+0.000001)
+            OR (ABS(a[i]) > acceleration_limit[i]+0.000001)
+            OR (ABS(G.arm_act_pos[i]-p[i]) > 1.0) THEN
+            G.arm_curve_error := 2008;
+            finish_state := 4;
+            stage := 40;
+        END_IF
+    END_FOR
+    G.arm_curve_progress := u;
+    elapsed := elapsed + cycle_seconds;
+    IF (u >= 1.0) AND (stage = 20) THEN
+        stage := 30;
+        phase_elapsed := 0;
+    END_IF
+END_IF
+
+all_enabled := TRUE;
+all_disabled := TRUE;
+all_stopped := TRUE;
+all_released := TRUE;
+arrived := TRUE;
+FOR i := 1 TO 5 DO
+    // Direction在运动前后均保持非零至少一周期，防止首尾设定点被NC忽略。
+    IF G.arm_curve_owned THEN
+        MC_ExtSetPointGenFeed(Axis:=G.arm_axis[i], Position:=p[i],
+            Velocity:=v[i], Acceleration:=a[i], Direction:=dir[i]);
+    END_IF
+    fb_enable[i](Axis:=G.arm_axis[i], Execute:=(stage=10),
+        Position:=curve[i+4], PositionType:=POSITIONTYPE_ABSOLUTE);
+    fb_disable[i](Axis:=G.arm_axis[i], Execute:=(stage=40));
+    fb_stop[i](Axis:=G.arm_axis[i], Execute:=(stage=50),
+        Deceleration:=deceleration_limit[i], Jerk:=jerk_limit[i]);
+    all_enabled := all_enabled AND fb_enable[i].Enabled;
+    all_disabled := all_disabled AND NOT fb_enable[i].Enabled
+        AND NOT fb_disable[i].Busy AND NOT fb_disable[i].Error;
+    all_stopped := all_stopped AND fb_stop[i].Done AND NOT fb_stop[i].Error;
+    all_released := all_released AND NOT fb_stop[i].Busy AND NOT fb_stop[i].Error;
+    arrived := arrived AND (ABS(G.arm_act_pos[i]-curve[i+4]) <= 0.05)
+        AND (ABS(G.arm_act_vel[i]) <= 0.01);
+    IF G.arm_curve_owned AND (fb_enable[i].Error OR fb_disable[i].Error OR fb_stop[i].Error) THEN
+        IF fb_enable[i].Error THEN G.arm_curve_error := fb_enable[i].ErrorID; END_IF
+        IF fb_disable[i].Error THEN G.arm_curve_error := fb_disable[i].ErrorID; END_IF
+        IF fb_stop[i].Error THEN G.arm_curve_error := fb_stop[i].ErrorID; END_IF
+        finish_state := 4;
+        IF stage < 40 THEN stage := 40; END_IF
+        // 停止链路自身出错时只保留错误和控制权，不自动复位或释放给其他命令。
+    END_IF
+END_FOR
+
+CASE stage OF
+10:
+    IF all_enabled THEN stage := 20; elapsed := 0; phase_elapsed := 0; END_IF
+30:
+    IF arrived AND (phase_elapsed >= 2.0*cycle_seconds) THEN stage := 40; END_IF
+40:
+    IF all_disabled THEN
+        IF finish_state = 2 THEN stage := 60; ELSE stage := 50; END_IF
+    END_IF
+50:
+    IF all_stopped THEN stage := 60; END_IF
+60:
+    // Execute下降后再释放控制权，避免MC_Stop仍锁轴时接受下一条命令。
+    IF all_released THEN
+        G.arm_curve_owned := FALSE;
+        G.arm_curve_state := finish_state;
+        stage := 0;
+    END_IF
+END_CASE
+IF G.arm_curve_error <> 0 THEN G.arm_curve_state := 4; END_IF]]></ST>
+    </Implementation>
+  </POU>
+</TcPlcObject>

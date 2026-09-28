@@ -10,6 +10,7 @@ VAR
 	reset_		:		reset;
 	self_check_ :       SelfCheck;
 	arm_manual_ :       ArmManual;
+	arm_cartesian_ :    ArmCartesian;
 	axis2_sync_ :       Axis2Sync;
 	injector_manual_ :  InjectorManual;
 	axis6_enable_negative : BOOL := TRUE;
@@ -48,6 +49,7 @@ IF TwinCAT_SystemInfoVarList._TaskInfo[1].FirstCycle THEN
 END_IF
 	
 arm_manual_();
+arm_cartesian_();
 axis2_sync_();
 injector_manual_();
 

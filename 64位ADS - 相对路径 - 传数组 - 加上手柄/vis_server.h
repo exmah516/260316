@@ -128,9 +128,16 @@ struct VisState
 	// 电缸选中状态表示手动覆盖，不再由开合阈值推断。
 	std::uint8_t cylinder_manual_mask;
 	bool cylinder_manual_allowed;
+	bool arm_snapshot_valid;
+	bool arm_at_program_zero;
+	int arm_cartesian_status;
+	int arm_cartesian_error;
+	std::uint32_t arm_curve_state;
+	double arm_curve_progress;
+	std::uint32_t arm_home_request_id;
 };
 #pragma pack(pop)
-static_assert(sizeof(VisState) == 841, "VisState 管道布局发生变化，请同步更新 WPF 协议结构。");
+static_assert(sizeof(VisState) == 867, "VisState 管道布局发生变化，请同步更新 WPF 协议结构。");
 
 enum class VisCommandType : int
 {
@@ -169,6 +176,11 @@ enum class VisCommandType : int
 	EmergencyRetractDevice = 38, // 极简器械撤出：固定夹爪组合，轴3/5/6退回启动准备完成位
 	SetCylinderManualPosition = 39, // param1: 电缸下标0..3，param2: 位置0..2000
 	ResetCylinderManual = 40, // param1: 电缸下标0..3，撤销覆盖并恢复当前流程位置
+	SetArmCartesianJog = 41, // param1: 1=X,2=Y,3=Z,4=俯仰,5=偏航；param2=带符号速度*1000
+	ReturnArmProgramZero = 42,
+	StopArmCartesian = 43,
+	SetArmCartesianParameter = 44, // 0=升降下端mm，1=归零行程deg，2=前端偏离mm，3=转角deg
+	KeepArmCartesianAlive = 45,
 };
 
 #pragma pack(push, 1)

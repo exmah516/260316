@@ -71,11 +71,15 @@ END_VAR
 	G.arm_power_output[i].ErrorID := fb_power[i].ErrorID;
 
 	IF G.arm_reset_req[i] AND NOT reset_exec[i] THEN
+		IF G.arm_curve_owned THEN
+			G.arm_curve_cancel := TRUE;
+		ELSE
 		reset_exec[i] := TRUE;
 		move_exec[i] := FALSE;
 		stop_exec[i] := TRUE;
 		axis_state[i] := 20;
 		current_dir[i] := 0;
+		END_IF
 	END_IF
 
 	// 复位请求先等待 MC_Stop 完成，避免清错瞬间释放尚未停止的旧运动命令。
@@ -110,6 +114,7 @@ END_VAR
 	END_IF
 
 	allow_jog := G.arm_manual_enable
+		AND NOT G.arm_curve_owned
 		AND G.arm_power_output[i].Done
 		AND NOT reset_exec[i]
 		AND NOT G.arm_cmd_conflict[i]

@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <PropertyGroup>
+    <PositioningArmRoot>$(MSBuildThisFileDirectory)..\</PositioningArmRoot>
+    <PositioningArmBuildRoot Condition="'$(PositioningArmBuildRoot)'==''">$(PositioningArmRoot)build-v142\</PositioningArmBuildRoot>
+    <PositioningArmEigenRoot Condition="'$(PositioningArmEigenRoot)'==''">$(PositioningArmRoot).deps\Library\</PositioningArmEigenRoot>
+    <PositioningArmLibrary>$(PositioningArmBuildRoot)\$(Configuration)\PositioningArmKinematics.lib</PositioningArmLibrary>
+  </PropertyGroup>
+  <ItemDefinitionGroup>
+    <ClCompile>
+      <AdditionalIncludeDirectories>$(PositioningArmRoot)include;$(PositioningArmEigenRoot)\include\eigen3;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <LanguageStandard>stdcpp17</LanguageStandard>
+      <RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>
+    </ClCompile>
+    <Link>
+      <AdditionalDependencies>$(PositioningArmLibrary);%(AdditionalDependencies)</AdditionalDependencies>
+    </Link>
+  </ItemDefinitionGroup>
+  <Target Name="ValidatePositioningArmKinematics" BeforeTargets="PrepareForBuild">
+    <Error Condition="'$(Platform)'!='x64'" Text="PositioningArmKinematics requires x64." />
+    <Error Condition="!Exists('$(PositioningArmLibrary)')" Text="Build the standalone PositioningArmKinematics library first using BuildAndTest.ps1." />
+    <Error Condition="!Exists('$(PositioningArmEigenRoot)\include\eigen3\Eigen')" Text="PositioningArmEigenRoot must point to an Eigen installation." />
+  </Target>
+</Project>

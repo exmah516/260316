@@ -344,6 +344,10 @@ namespace AdsControlUI
 			OnPropertyChanged(nameof(ArmManualAvailable));
 			OnPropertyChanged(nameof(ArmAxisControlsEnabled));
 			OnPropertyChanged(nameof(ArmManualStatusText));
+			OnPropertyChanged(nameof(ArmCartesianAvailable));
+			OnPropertyChanged(nameof(ArmCartesianStatusText));
+			OnPropertyChanged(nameof(ArmProgramAnglesText));
+			OnPropertyChanged(nameof(ArmZeroText));
 			OnPropertyChanged(nameof(Axis4ManualControlAllowed));
 			OnPropertyChanged(nameof(Axis4ManualStatusText));
 		}
@@ -473,6 +477,56 @@ namespace AdsControlUI
 		public bool ArmManualEnabled => _state.arm_manual_enable;
 		public bool ArmManualAvailable => AdsHealthy;
 		public bool ArmAxisControlsEnabled => ArmManualAvailable && ArmManualEnabled;
+		public bool ArmCartesianAvailable => ArmAxisControlsEnabled && _state.arm_snapshot_valid && !EstopHold;
+		public string ArmZeroText => !_state.arm_snapshot_valid ? "程序零位：无反馈"
+			: _state.arm_at_program_zero ? "程序零位：已到位" : "程序零位：未到位";
+		public string ArmProgramAnglesText => !_state.arm_snapshot_valid ? "程序角：--"
+			: $"程序角  {(GetArmAngle(1)-90):F2}°  {(GetArmAngle(2)-180):F2}°  {(GetArmAngle(3)-180):F2}°  {GetArmAngle(4):F2}°";
+		private double GetArmAngle(int index) => _state.arm_act_pos[index];
+		public string ArmCartesianStatusText
+		{
+			get
+			{
+				if (!_state.arm_snapshot_valid) return "定位臂协调接口无有效反馈";
+				if (_state.arm_cartesian_error != 0)
+					return $"协调运动错误 {_state.arm_cartesian_error}：{ArmMotionError(_state.arm_cartesian_error)}";
+				switch (_state.arm_cartesian_status) {
+				case 1: return $"协调运动 {_state.arm_curve_progress:P0}";
+				case 2: return "协调运动完成";
+				case 3: return "已在零位窗口内，未移动";
+				case 4: return _state.arm_curve_state == 1 ? "正在停止" : "已取消";
+				default: return "协调运动待命";
+				}
+			}
+		}
+		private static string ArmMotionError(int code)
+		{
+			switch (code) {
+			case 1001: return "参数未填写或无效";
+			case 1002: case 1102: case 1203: case 2006: return "轴位置越限";
+			case 1003: return "ADS命令失败";
+			case 1004: return "反馈失效或总使能关闭";
+			case 1005: return "操作续约超时";
+			case 1006: return "轴未上电、故障或存在单轴点动";
+			case 1007: return "PLC未确认命令";
+			case 1008: return "轴尚未静止";
+			case 1103: case 2005: return "速度或加速度限制";
+			case 1104: return "接近机械奇异位";
+			case 1105: return "逆解未收敛";
+			case 1202: return "归零参数无效";
+			case 1204: return "超过归零关节行程";
+			case 1205: return "超过末端位移或转角预算";
+			case 1206: return "归零轨迹过长";
+			case 1207: return "归零数值计算失败";
+			case 2001: return "PLC正在执行另一条曲线";
+			case 2002: return "曲线数据或时间无效";
+			case 2003: return "PLC使能、心跳、急停或周期条件不满足";
+			case 2004: return "曲线起点或轴参数不匹配";
+			case 2007: return "PLC切换或到位超时";
+			case 2008: return "PLC跟随误差或曲线导数越限";
+			default: return "PLC/NC执行错误";
+			}
+		}
 		public string ArmManualStatusText
 		{
 			get
@@ -935,6 +989,13 @@ namespace AdsControlUI
 
 		public void SetArmManualEnable(bool enabled) =>
 			_client.SendCommand(VisCommandType.SetArmManualEnable, enabled ? 1 : 0);
+		public bool SetArmCartesianJog(int mode, int speed) =>
+			_client.SendCommand(VisCommandType.SetArmCartesianJog, mode, speed);
+		public bool ReturnArmProgramZero() => _client.SendCommand(VisCommandType.ReturnArmProgramZero);
+		public void StopArmCartesian() => _client.SendCommand(VisCommandType.StopArmCartesian);
+		public void KeepArmCartesianAlive() => _client.SendCommand(VisCommandType.KeepArmCartesianAlive);
+		public bool SetArmCartesianParameter(int field, int value) =>
+			_client.SendCommand(VisCommandType.SetArmCartesianParameter, field, value);
 
 		public void SetArmAxisEnable(int axisNumber, bool enabled)
 		{
@@ -986,6 +1047,7 @@ namespace AdsControlUI
 
 		public void StopManualJogs()
 		{
+			StopArmCartesian();
 			SetAxis4ManualJog(0);
 			SetInjectorManualJog(1, 0);
 			SetInjectorManualJog(2, 0);

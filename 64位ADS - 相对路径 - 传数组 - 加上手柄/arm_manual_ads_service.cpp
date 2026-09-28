@@ -170,6 +170,8 @@ void ArmManualAdsService::set_axis_enable(int axis_one_based, bool enabled)
 		}
 		if (!enabled)
 		{
+			++cartesian_epoch_;
+			cartesian_stop_ = true;
 			desired_jog_pos_req_[index] = false;
 			desired_jog_neg_req_[index] = false;
 			jog_pos_dirty_ = true;
@@ -185,6 +187,8 @@ void ArmManualAdsService::request_reset(int axis_one_based)
 	{
 		std::lock_guard<std::mutex> lock(mutex_);
 		desired_reset_req_[axis_one_based - 1] = true;
+		++cartesian_epoch_;
+		cartesian_stop_ = true;
 		reset_dirty_ = true;
 	}
 	wake_cv_.notify_all();
@@ -195,6 +199,8 @@ void ArmManualAdsService::set_jog_direction(int axis_one_based, int direction)
 	if (!valid_axis(axis_one_based) || direction < -1 || direction > 1) return;
 	{
 		std::lock_guard<std::mutex> lock(mutex_);
+		if (direction != 0 && (curve_pending_ || home_requested_ || cartesian_mode_ != 0))
+			return;
 		const int index = axis_one_based - 1;
 		const bool pos = direction > 0;
 		const bool neg = direction < 0;
@@ -213,6 +219,164 @@ void ArmManualAdsService::set_jog_direction(int axis_one_based, int direction)
 		}
 	}
 	wake_cv_.notify_all();
+}
+
+void ArmManualAdsService::set_cartesian_jog(int mode, double speed)
+{
+	std::lock_guard<std::mutex> lock(mutex_);
+	if (mode < 1 || mode > 5 || !std::isfinite(speed) || speed == 0 || std::abs(speed) > 100)
+		return;
+	if (cartesian_blocked_ || home_requested_
+		|| (curve_pending_ && cartesian_mode_ == 0)) return;
+	if (cartesian_mode_ != 0 && (cartesian_mode_ != mode || cartesian_speed_ != speed)) {
+		cartesian_stop_ = true;
+		return;
+	}
+	cartesian_mode_ = mode;
+	cartesian_speed_ = speed;
+	cartesian_deadline_ = std::chrono::steady_clock::now() + std::chrono::milliseconds(kJogLeaseMs);
+}
+
+void ArmManualAdsService::request_program_zero()
+{
+	std::lock_guard<std::mutex> lock(mutex_);
+	if (curve_pending_ || cartesian_mode_ != 0 || home_requested_) return;
+	cartesian_blocked_ = false;
+	home_requested_ = true;
+	++snapshot_.home_request_id;
+	snapshot_.cartesian_status = 1;
+	snapshot_.cartesian_error = 0;
+	cartesian_deadline_ = std::chrono::steady_clock::now() + std::chrono::milliseconds(kJogLeaseMs);
+}
+
+void ArmManualAdsService::stop_cartesian()
+{
+	std::lock_guard<std::mutex> lock(mutex_);
+	++cartesian_epoch_;
+	cartesian_stop_ = true;
+	cartesian_mode_ = 0;
+	home_requested_ = false;
+	cartesian_blocked_ = false;
+}
+
+void ArmManualAdsService::keep_cartesian_alive()
+{
+	std::lock_guard<std::mutex> lock(mutex_);
+	if (!cartesian_blocked_ && (curve_pending_ || home_requested_))
+		cartesian_deadline_ = std::chrono::steady_clock::now() + std::chrono::milliseconds(kJogLeaseMs);
+}
+
+void ArmManualAdsService::set_cartesian_parameter(int field, double value)
+{
+	std::lock_guard<std::mutex> lock(mutex_);
+	if (curve_pending_ || home_requested_ || cartesian_mode_ != 0 || !std::isfinite(value)) return;
+	switch (field) {
+	case 0: cartesian_settings_.lift_min_mm = value; break;
+	case 1: cartesian_settings_.home_travel_deg = value; break;
+	case 2: cartesian_settings_.home_tip_mm = value; break;
+	case 3: cartesian_settings_.home_rotation_deg = value; break;
+	default: return;
+	}
+}
+
+void ArmManualAdsService::update_cartesian()
+{
+	// 网络等待只占用本工作线程，不阻塞主控制线程的UI命令分发。
+	std::unique_lock<std::mutex> lock(mutex_);
+	const auto epoch = cartesian_epoch_;
+	const auto now = std::chrono::steady_clock::now();
+	auto write = [&](const char* name, unsigned long size, const void* value) {
+		const char* names[] = {name};
+		const unsigned long sizes[] = {size};
+		const void* values[] = {value};
+		lock.unlock();
+		const bool ok = ads_service_.write_sum(names, sizes, values, 1, kAdsTimeoutMs);
+		lock.lock();
+		return ok;
+	};
+	auto abort = [&](int error) {
+		const bool cancel = true;
+		const bool stopped = write("G.arm_curve_cancel", sizeof(cancel), &cancel);
+		cartesian_mode_ = 0;
+		home_requested_ = false;
+		curve_pending_ = false;
+		cartesian_blocked_ = error != 0 || !stopped;
+		snapshot_.cartesian_status = error == 0 && stopped ? 4 : 5;
+		snapshot_.cartesian_error = stopped ? error : 1003;
+	};
+	if (cartesian_stop_) {
+		cartesian_stop_ = false;
+		abort(0);
+		return;
+	}
+	if (!curve_pending_ && !home_requested_ && cartesian_mode_ == 0) return;
+	if (!snapshot_.valid || now - snapshot_at_ > std::chrono::milliseconds(200)
+		|| !desired_manual_enable_ || !snapshot_.manual_enable) {
+		abort(1004); return;
+	}
+	if (now > cartesian_deadline_) { abort(1005); return; }
+	for (int i = 0; i < 5; ++i) {
+		if (!snapshot_.power_done[i] || snapshot_.power_error[i] || snapshot_.motion_error[i]
+			|| !desired_enable_req_[i] || desired_reset_req_[i]
+			|| desired_jog_pos_req_[i] || desired_jog_neg_req_[i]) {
+			abort(1006); return;
+		}
+	}
+	const auto heartbeat = ++curve_heartbeat_;
+	if (!write("G.arm_curve_heartbeat", sizeof(heartbeat), &heartbeat)) {
+		abort(1003); return;
+	}
+	if (epoch != cartesian_epoch_) { abort(0); return; }
+	if (curve_pending_) {
+		if (snapshot_.curve_sequence != sent_curve_sequence_) {
+			if (now - curve_sent_at_ > std::chrono::seconds(2)) abort(1007);
+			return;
+		}
+		if (snapshot_.curve_state == 4) { abort(static_cast<int>(snapshot_.curve_error)); return; }
+		if (snapshot_.curve_state == 3) { abort(0); return; }
+		if (snapshot_.curve_state != 2) return;
+		curve_pending_ = false;
+		snapshot_.cartesian_status = 2;
+		snapshot_.cartesian_error = 0;
+		if (cartesian_mode_ == 0) return;
+	}
+	for (int i = 0; i < 5; ++i) {
+		if (snapshot_.motion_busy[i] || !std::isfinite(snapshot_.act_vel[i])
+			|| std::abs(snapshot_.act_vel[i]) > 0.01) { abort(1008); return; }
+	}
+	const int mode = home_requested_ ? 0 : cartesian_mode_;
+	home_requested_ = false;
+	const auto plan = plan_arm_curve(snapshot_.act_pos, snapshot_.jog_velocity,
+		snapshot_.jog_acc, cartesian_settings_, mode, cartesian_speed_);
+	if (plan.error != 0) { abort(plan.error); return; }
+	if (plan.already_home) {
+		snapshot_.cartesian_status = 3;
+		snapshot_.cartesian_error = 0;
+		return;
+	}
+	// 先写完整曲线，成功后单独提交序号；PLC只在序号改变时锁存曲线。
+	const bool cancel = false;
+	const char* names[] = {"G.arm_curve_data", "G.arm_curve_cancel"};
+	const unsigned long sizes[] = {sizeof(plan.curve.values), sizeof(cancel)};
+	const void* values[] = {plan.curve.values.data(), &cancel};
+	curve_pending_ = true;
+	lock.unlock();
+	const bool staged = ads_service_.write_sum(names, sizes, values, 2, kAdsTimeoutMs);
+	lock.lock();
+	if (!staged) { abort(1003); return; }
+	if (epoch != cartesian_epoch_ || std::chrono::steady_clock::now() > cartesian_deadline_) {
+		abort(epoch != cartesian_epoch_ ? 0 : 1005); return;
+	}
+	sent_curve_sequence_ = snapshot_.curve_sequence + 1;
+	if (sent_curve_sequence_ == 0) sent_curve_sequence_ = 1;
+	if (!write("G.arm_curve_request", sizeof(sent_curve_sequence_), &sent_curve_sequence_)) {
+		abort(1003); return;
+	}
+	if (epoch != cartesian_epoch_) { abort(0); return; }
+	curve_pending_ = true;
+	curve_sent_at_ = now;
+	snapshot_.cartesian_status = 1;
+	snapshot_.cartesian_error = 0;
 }
 
 bool ArmManualAdsService::set_jog_parameter(int axis_one_based, int parameter_kind, double value)
@@ -237,6 +401,12 @@ bool ArmManualAdsService::set_jog_parameter(int axis_one_based, int parameter_ki
 
 void ArmManualAdsService::clear_requests_locked(bool clear_manual_enable)
 {
+	if (curve_pending_ || home_requested_ || cartesian_mode_ != 0) {
+		++cartesian_epoch_;
+		cartesian_stop_ = true;
+		cartesian_mode_ = 0;
+		home_requested_ = false;
+	}
 	if (clear_manual_enable && desired_manual_enable_)
 	{
 		desired_manual_enable_ = false;
@@ -324,7 +494,10 @@ void ArmManualAdsService::run()
 			has_dirty = manual_dirty_ || enable_dirty_ || reset_dirty_ || jog_pos_dirty_ || jog_neg_dirty_ || params_dirty_;
 		}
 		const bool write_ok = !has_dirty || write_dirty_request();
-		if (stopping) break;
+		if (stopping) {
+			update_cartesian();
+			break;
+		}
 		if (!write_ok)
 		{
 			// ADS 不可用时保留脏请求供恢复后下发，但避免失败路径空转占用 CPU。
@@ -340,6 +513,7 @@ void ArmManualAdsService::run()
 		if (now >= next_read)
 		{
 			(void)read_snapshot();
+			update_cartesian();
 			next_read = now + std::chrono::milliseconds(kReadPeriodMs);
 		}
 
@@ -457,6 +631,10 @@ bool ArmManualAdsService::read_snapshot()
 	append(kMotionErrorId, sizeof(next.motion_error_id), next.motion_error_id.data());
 	append(kCmdDir, sizeof(next.cmd_dir), next.cmd_dir.data());
 	append(kCmdConflict, sizeof(next.cmd_conflict), next.cmd_conflict.data());
+	append("G.arm_curve_ack", sizeof(next.curve_sequence), &next.curve_sequence);
+	append("G.arm_curve_state", sizeof(next.curve_state), &next.curve_state);
+	append("G.arm_curve_error", sizeof(next.curve_error), &next.curve_error);
+	append("G.arm_curve_progress", sizeof(next.curve_progress), &next.curve_progress);
 	for (int axis = 1; axis <= kArmAxisCount; ++axis)
 	{
 		const int index = axis - 1;
@@ -474,7 +652,17 @@ bool ArmManualAdsService::read_snapshot()
 	next.valid = ads_service_.read_sum(
 		symbols.data(), lengths.data(), outputs.data(), static_cast<unsigned long>(symbols.size()), kAdsTimeoutMs);
 	std::lock_guard<std::mutex> lock(mutex_);
-	if (next.valid) snapshot_ = next;
+	if (next.valid) {
+		next.cartesian_status = snapshot_.cartesian_status;
+		next.cartesian_error = snapshot_.cartesian_error;
+		next.home_request_id = snapshot_.home_request_id;
+		next.at_program_zero = std::isfinite(next.act_pos[1]) && std::isfinite(next.act_pos[2])
+			&& std::isfinite(next.act_pos[3]) && std::isfinite(next.act_pos[4])
+			&& std::abs(next.act_pos[1] - 90) <= 3 && std::abs(next.act_pos[2] - 180) <= 3
+			&& std::abs(next.act_pos[3] - 180) <= 3 && std::abs(next.act_pos[4]) <= 1;
+		snapshot_ = next;
+		snapshot_at_ = std::chrono::steady_clock::now();
+	}
 	else snapshot_.valid = false;
 	return next.valid;
 }

@@ -37,6 +37,9 @@
     <Compile Include="POUs\ArmManual.TcPOU">
       <SubType>Code</SubType>
     </Compile>
+    <Compile Include="POUs\ArmCartesian.TcPOU">
+      <SubType>Code</SubType>
+    </Compile>
     <Compile Include="POUs\Axis2Sync.TcPOU">
       <SubType>Code</SubType>
     </Compile>
