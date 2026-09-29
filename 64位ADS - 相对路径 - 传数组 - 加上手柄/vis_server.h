@@ -135,9 +135,10 @@ struct VisState
 	std::uint32_t arm_curve_state;
 	double arm_curve_progress;
 	std::uint32_t arm_home_request_id;
+	int selfcheck_status;
 };
 #pragma pack(pop)
-static_assert(sizeof(VisState) == 867, "VisState 管道布局发生变化，请同步更新 WPF 协议结构。");
+static_assert(sizeof(VisState) == 871, "VisState 管道布局发生变化，请同步更新 WPF 协议结构。");
 
 enum class VisCommandType : int
 {
@@ -181,6 +182,8 @@ enum class VisCommandType : int
 	StopArmCartesian = 43,
 	SetArmCartesianParameter = 44, // 0=升降下端mm，1=归零行程deg，2=前端偏离mm，3=转角deg
 	KeepArmCartesianAlive = 45,
+	SetSelfCheckAxisPos = 46, // param1=轴号，param2=距左限位毫米×100
+	StartSelfCheck = 47,
 };
 
 #pragma pack(push, 1)

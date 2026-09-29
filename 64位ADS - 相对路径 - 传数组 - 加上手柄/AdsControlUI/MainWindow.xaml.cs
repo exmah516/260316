@@ -551,6 +551,31 @@ namespace AdsControlUI
 			_cleanForceWindow?.AddState(_vm.LatestState);
 		}
 
+        private void StartSelfCheck_Click(object sender, RoutedEventArgs e)
+        {
+            SelfCheckError.Text = "";
+            if (!double.TryParse(TbSelfCheckAxis1.Text, out double a1) ||
+                !double.TryParse(TbSelfCheckAxis3.Text, out double a3) ||
+                !double.TryParse(TbSelfCheckAxis5.Text, out double a5) ||
+                !double.TryParse(TbSelfCheckAxis6.Text, out double a6) ||
+                double.IsNaN(a1) || double.IsNaN(a3) || double.IsNaN(a5) || double.IsNaN(a6))
+            {
+                SelfCheckError.Text = "输入格式错误，请输入有效数字。";
+                return;
+            }
+            if (a1 < 5 || a1 > 96) { SelfCheckError.Text = "轴1必须在5-96mm之间。"; return; }
+            if (a3 < 10 || a3 > 650) { SelfCheckError.Text = "轴3必须在10-650mm之间。"; return; }
+            if (a5 < 10 || a5 > 670) { SelfCheckError.Text = "轴5必须在10-670mm之间。"; return; }
+            if (a6 < 10 || a6 > 670) { SelfCheckError.Text = "轴6必须在10-670mm之间。"; return; }
+            if (a1 > a3 || a3 > a5 || a5 > a6)
+            {
+                SelfCheckError.Text = "目标位置必须满足轴1≤轴3≤轴5≤轴6。";
+                return;
+            }
+            if (!_vm.StartSelfCheck(a1, a3, a5, a6))
+                SelfCheckError.Text = "命令未发送，请检查连接和自检状态。";
+        }
+
         private void ExecuteStartup_Click(object sender, RoutedEventArgs e)
         {
             StartupError.Text = "";

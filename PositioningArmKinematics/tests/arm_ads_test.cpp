@@ -14,6 +14,7 @@ std::vector<std::string> writes;
 std::string fail_symbol;
 bool fail_read = false;
 bool stage_written = false;
+bool fake_busy = false;
 void check(bool value, const char* message)
 {
     if (!value) throw std::runtime_error(message);
@@ -79,6 +80,7 @@ bool AdsCommunicationService::read_sum(const char* const* names, const unsigned 
         const std::string name(names[i]);
         std::memset(values[i], 0, sizes[i]);
         if (name == "G.arm_act_pos") std::memcpy(values[i], actual.data(), sizes[i]);
+        else if (name == "G.arm_motion_busy") std::memset(values[i], fake_busy, sizes[i]);
         else if (name == "G.arm_curve_ack") std::memcpy(values[i], &acknowledged, sizes[i]);
         else if (name == "G.arm_curve_state") std::memcpy(values[i], &plc_state, sizes[i]);
         else if (name == "G.arm_curve_error") std::memcpy(values[i], &plc_error, sizes[i]);
@@ -108,9 +110,27 @@ int main()
         plan = plan_arm_curve(actual, velocity, acceleration, settings, 3, 1);
         check(plan.error == 0 && std::abs(plan.curve.values[5] - 100.1) < 1e-9,
             "Millimeter jog conversion");
+        plan = plan_arm_curve(actual, velocity, acceleration, settings, 3, 4.5);
+        check(plan.error == 0 && plan.curve.values[5] > 100.19
+            && plan.curve.values[5] <= 100.2,
+            "Millimeter jog step limit");
         plan = plan_arm_curve(actual, velocity, acceleration, settings, 4, 1);
         check(plan.error == 0 && std::abs(plan.curve.values[9] + 0.1) < 1e-9,
             "Pitch sign conversion");
+        plan = plan_arm_curve(actual, velocity, acceleration, settings, 4, 2.5);
+        check(plan.error == 0 && plan.curve.values[9] < -0.19
+            && plan.curve.values[9] >= -0.2,
+            "Pitch jog step limit");
+        const std::array<double, 5> bent{{100, 35, 80, 20, 0}};
+        for (int axis : {1, 2}) {
+            plan = plan_arm_curve(bent, velocity, acceleration, settings, axis, 3);
+            check(plan.error == 0, "Planar jog rejected");
+            for (int i = 0; i < 5; ++i)
+                check(std::abs(plan.curve.values[i + 5] - bent[i]) <= 0.2 + 1e-9,
+                    "Planar jog exceeded joint step limit");
+            check(std::abs(plan.curve.values[6] + plan.curve.values[7]
+                + plan.curve.values[8] - 135) < 1e-4, "Planar jog changed yaw");
+        }
         check(plan_arm_curve(actual, velocity, acceleration, settings, 1, 1).error == 1104,
             "Folded-zero Cartesian jog not rejected");
         check(plan_arm_curve(actual, velocity, acceleration, {}, 3, 1).error == 1001,
@@ -130,7 +150,13 @@ int main()
         until([&] { return service.snapshot().cartesian_status == 3; });
         check(count("G.arm_curve_request") == 0, "Already-home caused movement");
 
+        { std::lock_guard<std::mutex> lock(fake_mutex); fake_busy = true; }
+        until([&] { return service.snapshot().motion_busy[0]; });
         service.set_cartesian_jog(3, 1);
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        check(count("G.arm_curve_request") == 0 && service.snapshot().cartesian_error != 1008,
+            "Transient busy aborted Cartesian jog");
+        { std::lock_guard<std::mutex> lock(fake_mutex); fake_busy = false; }
         until([&] { return count("G.arm_curve_request") == 1; });
         service.stop_cartesian();
         until([&] { return service.snapshot().cartesian_status == 4; });

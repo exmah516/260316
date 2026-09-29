@@ -174,6 +174,11 @@ namespace AdsControlUI
             }
             if (prev.startup_waiting != state.startup_waiting || prev.startup_completed != state.startup_completed)
                 OnPropertyChanged(nameof(PhaseText));
+            if (prev.selfcheck_status != state.selfcheck_status || prev.self_check_done != state.self_check_done)
+            {
+                OnPropertyChanged(nameof(CanStartSelfCheck));
+                OnPropertyChanged(nameof(SelfCheckStatusText));
+            }
 
             if (prev.axis6_soft_limit_hold != state.axis6_soft_limit_hold)
             {
@@ -221,6 +226,8 @@ namespace AdsControlUI
 			OnPropertyChanged(nameof(TrackingCompensationToggleEnabled));
 			OnPropertyChanged(nameof(TrackingParametersEditable));
 			OnPropertyChanged(nameof(TrackingStatusText));
+            OnPropertyChanged(nameof(CanStartSelfCheck));
+            OnPropertyChanged(nameof(SelfCheckStatusText));
 			NotifyExperimentProperties();
 			NotifyAdsProperties();
 
@@ -330,6 +337,8 @@ namespace AdsControlUI
 			OnPropertyChanged(nameof(AdsHealthy));
 			OnPropertyChanged(nameof(HostCommTimeout));
 			OnPropertyChanged(nameof(AdsStateText));
+            OnPropertyChanged(nameof(CanStartSelfCheck));
+            OnPropertyChanged(nameof(SelfCheckStatusText));
 			NotifyManualControlProperties();
 		}
 
@@ -437,7 +446,19 @@ namespace AdsControlUI
         public bool IsConnected => _client.IsConnected;
 		public int AdsState => _state.ads_state;
 		public bool HostCommTimeout => _state.host_comm_timeout;
-		public bool AdsHealthy => IsConnected && AdsState == 2 && !HostCommTimeout;
+        public bool AdsHealthy => IsConnected && AdsState == 2 && !HostCommTimeout;
+        public bool CanStartSelfCheck => IsConnected && AdsState == 2 &&
+            (_state.selfcheck_status == 1 || _state.selfcheck_status == 3 || _state.selfcheck_status == 4);
+        public string SelfCheckStatusText => _state.self_check_done ? "自检完成" :
+            !IsConnected || AdsState != 2 ? "等待 ADS 通信" : _state.selfcheck_status switch
+        {
+            1 => "等待开始自检",
+            2 => "自检运行中",
+            3 => "PLC 拒绝目标参数",
+            4 => "上位机拒绝命令或 ADS 写入失败",
+            5 => "请求已发送，等待 PLC 确认",
+            _ => "等待 PLC 初始化"
+        };
 
 		public string AdsStateText
 		{
@@ -951,6 +972,16 @@ namespace AdsControlUI
             _client.SendCommand(VisCommandType.SetStartupAxisDeg, 7, (int)(a7deg * 100));
             _client.SendCommand(VisCommandType.SetStartupSpeed, (int)(speed * 100000));
             _client.SendCommand(VisCommandType.ExecuteStartup);
+        }
+
+        public bool StartSelfCheck(double a1, double a3, double a5, double a6)
+        {
+            if (!CanStartSelfCheck) return false;
+            return _client.SendCommand(VisCommandType.SetSelfCheckAxisPos, 1, (int)Math.Round(a1 * 100)) &&
+                _client.SendCommand(VisCommandType.SetSelfCheckAxisPos, 3, (int)Math.Round(a3 * 100)) &&
+                _client.SendCommand(VisCommandType.SetSelfCheckAxisPos, 5, (int)Math.Round(a5 * 100)) &&
+                _client.SendCommand(VisCommandType.SetSelfCheckAxisPos, 6, (int)Math.Round(a6 * 100)) &&
+                _client.SendCommand(VisCommandType.StartSelfCheck);
         }
 
 		public void StartExperimentRecording(string experimentName) =>

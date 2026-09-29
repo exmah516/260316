@@ -154,7 +154,7 @@ internal static class UiSmoke
         view.UpdateLayout();
         for (int i = 0; i < 100 && !Server.IsConnected; ++i) Pump(20);
         Check(Server.IsConnected, "Mock pipe connection");
-        Check(Marshal.SizeOf<VisState>() == 867, "Protocol size");
+        Check(Marshal.SizeOf<VisState>() == 871, "Protocol size");
 
         object boxed = new VisState();
         foreach (var field in typeof(VisState).GetFields())
@@ -172,6 +172,47 @@ internal static class UiSmoke
         state.cylinder_cmd = new ushort[] { 400, 600, 400, 500 };
         Publish(state);
         var vm = (AdsControlViewModel)window.DataContext;
+        var selfCheckButton = (Button)window.FindName("StartSelfCheckButton");
+        var selfCheckError = (TextBlock)window.FindName("SelfCheckError");
+        var selfCheckClick = typeof(MainWindow).GetMethod("StartSelfCheck_Click",
+            BindingFlags.Instance | BindingFlags.NonPublic);
+        state.self_check_done = false;
+        Publish(state);
+        Check(!selfCheckButton.IsEnabled, "Self-check waits for PLC init");
+        state.selfcheck_status = 1;
+        state.host_comm_timeout = true;
+        Publish(state);
+        Check(selfCheckButton.IsEnabled && vm.SelfCheckStatusText.Contains("等待"),
+            "PLC ready enables self-check before handle watchdog starts");
+        ((TextBox)window.FindName("TbSelfCheckAxis1")).Text = "97";
+        selfCheckClick.Invoke(window, new object[] { selfCheckButton, new RoutedEventArgs() });
+        Check(!string.IsNullOrEmpty(selfCheckError.Text) && Commands.IsEmpty,
+            "Invalid self-check range sends no commands");
+        ((TextBox)window.FindName("TbSelfCheckAxis1")).Text = "96";
+        ((TextBox)window.FindName("TbSelfCheckAxis3")).Text = "590";
+        selfCheckClick.Invoke(window, new object[] { selfCheckButton, new RoutedEventArgs() });
+        Check(!string.IsNullOrEmpty(selfCheckError.Text) && Commands.IsEmpty,
+            "Invalid self-check order sends no commands");
+        ((TextBox)window.FindName("TbSelfCheckAxis3")).Text = "500";
+        selfCheckClick.Invoke(window, new object[] { selfCheckButton, new RoutedEventArgs() });
+        int[] selfCheckAxes = { 1, 3, 5, 6 };
+        int[] selfCheckTargets = { 9600, 50000, 53000, 58000 };
+        for (int i = 0; i < 4; ++i) {
+            var command = NextCommand();
+            Check(command[0] == 46 && command[1] == selfCheckAxes[i] &&
+                command[2] == selfCheckTargets[i], "Self-check target and fixed-point units");
+        }
+        Check(NextCommand()[0] == 47, "Self-check request follows all targets");
+        state.selfcheck_status = 2;
+        Publish(state);
+        Check(!selfCheckButton.IsEnabled && vm.SelfCheckStatusText.Contains("运行"),
+            "Running self-check cannot be started again");
+        state.self_check_done = true;
+        state.selfcheck_status = 0;
+        state.host_comm_timeout = false;
+        Publish(state);
+        Check(!selfCheckButton.IsEnabled && vm.SelfCheckStatusText.Contains("完成"),
+            "Completed self-check stays disabled");
         Check(vm.CylinderManualAllowed, "Snapshot enables cylinder controls");
         view.UpdateLayout();
         var click = typeof(MainWindow).GetMethod("SetCylinderState", BindingFlags.Instance | BindingFlags.NonPublic);

@@ -99,6 +99,7 @@ struct AdsPlannedReturnCommand
 struct AdsEventState
 {
 	bool self_check_done = false;
+	int selfcheck_status = 0;
 	bool handle_reinit_req = false;
 	bool handle_reinit_done = false;
 	bool estop_hold_req = false;

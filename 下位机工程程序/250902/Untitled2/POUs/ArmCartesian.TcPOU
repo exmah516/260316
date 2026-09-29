@@ -1,4 +1,4 @@
-<?xml version="1.0" encoding="utf-8"?>
+﻿<?xml version="1.0" encoding="utf-8"?>
 <TcPlcObject Version="1.1.0.1" ProductVersion="3.1.4024.15">
   <POU Name="ArmCartesian" Id="{713355bc-7855-44d6-b270-717a93d9e329}" SpecialFunc="None">
     <Declaration><![CDATA[FUNCTION_BLOCK ArmCartesian
@@ -95,7 +95,7 @@ IF G.arm_curve_request <> G.arm_curve_ack THEN
             acceleration_limit[i] := G.arm_jog_acc[i];
             deceleration_limit[i] := G.arm_jog_dec[i];
             jerk_limit[i] := G.arm_jog_jerk[i];
-            IF G.arm_motion_busy[i] OR (ABS(G.arm_act_vel[i]) > 0.01)
+            IF G.arm_motion_busy[i] OR (ABS(G.arm_act_vel[i]) > 0.1)
                 OR (ABS(G.arm_act_pos[i] - p[i]) > 0.05)
                 OR (ABS(bend) > ABS(delta) / 4.0 + 0.000000001)
                 OR NOT ((velocity_limit[i] > 0) AND (velocity_limit[i] <= 10000))
@@ -198,7 +198,7 @@ FOR i := 1 TO 5 DO
     all_stopped := all_stopped AND fb_stop[i].Done AND NOT fb_stop[i].Error;
     all_released := all_released AND NOT fb_stop[i].Busy AND NOT fb_stop[i].Error;
     arrived := arrived AND (ABS(G.arm_act_pos[i]-curve[i+4]) <= 0.05)
-        AND (ABS(G.arm_act_vel[i]) <= 0.01);
+        AND (ABS(G.arm_act_vel[i]) <= 0.5);
     IF G.arm_curve_owned AND (fb_enable[i].Error OR fb_disable[i].Error OR fb_stop[i].Error) THEN
         IF fb_enable[i].Error THEN G.arm_curve_error := fb_enable[i].ErrorID; END_IF
         IF fb_disable[i].Error THEN G.arm_curve_error := fb_disable[i].ErrorID; END_IF
@@ -230,5 +230,9 @@ CASE stage OF
 END_CASE
 IF G.arm_curve_error <> 0 THEN G.arm_curve_state := 4; END_IF]]></ST>
     </Implementation>
+    <LineIds Name="ArmCartesian">
+      <LineId Id="3" Count="188" />
+      <LineId Id="2" Count="0" />
+    </LineIds>
   </POU>
 </TcPlcObject>

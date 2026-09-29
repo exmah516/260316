@@ -77,10 +77,23 @@ inline ArmCurvePlan plan_arm_curve(const std::array<double, 5>& actual,
         duration = r.duration;
     } else {
         // UI次序：X、Y、Z、俯仰、偏航。每段从反馈位置重新求解，不累计盲发目标。
-        const auto r = arm.solveJog(current, {
-            static_cast<JogAxis>(mode - 1), speed * (mode <= 3 ? 0.001 : rad), duration});
-        if (!r.success()) { out.error = 1100 + static_cast<int>(r.status); return out; }
-        target = r.target;
+        const double unit = mode <= 3 ? 0.001 : rad;
+        const auto axis = static_cast<JogAxis>(mode - 1);
+        double jog_duration = std::min(duration, 0.99 * 0.2 / std::abs(speed));
+        bool planned = false;
+        for (int attempt = 0; attempt < 12; ++attempt) {
+            const auto r = arm.solveJog(current, {axis, speed * unit, jog_duration});
+            if (!r.success()) { out.error = 1100 + static_cast<int>(r.status); return out; }
+            target = r.target;
+            double ratio = 1.0;
+            for (int i = 0; i < 5; ++i) {
+                const double max_step = i == 0 ? 0.2 * 0.001 : 0.2 * rad;
+                ratio = std::max(ratio, std::abs(target[i] - current[i]) / max_step);
+            }
+            if (ratio <= 1.0 + 1e-10) { planned = true; break; }
+            jog_duration *= 0.99 / ratio;
+        }
+        if (!planned) { out.error = 1103; return out; }
         const auto distance = (target - current).cwiseAbs().eval();
         for (int i = 0; i < 5; ++i) {
             duration = std::max(duration, 1.875 * distance[i] / c.max_velocity[i]);

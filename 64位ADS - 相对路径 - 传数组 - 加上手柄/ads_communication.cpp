@@ -39,6 +39,7 @@ namespace
 	constexpr std::uint32_t kNotifyAxis6ReturnDone = 17;
 	constexpr std::uint32_t kNotifyAxis6ReturnError = 18;
 	constexpr std::uint32_t kNotifyAxis6ReturnErrorId = 19;
+	constexpr std::uint32_t kNotifySelfCheckStatus = 20;
 
 	enum FastWriteHandleIndex : std::size_t
 	{
@@ -678,6 +679,9 @@ void AdsCommunicationService::on_notification(
 	case kNotifySelfCheckDone:
 		updated = notification_value(data, size, event_state_.self_check_done);
 		break;
+	case kNotifySelfCheckStatus:
+		updated = notification_value(data, size, event_state_.selfcheck_status);
+		break;
 	case kNotifyHandleReinitReq:
 		updated = notification_value(data, size, event_state_.handle_reinit_req);
 		break;
@@ -1118,6 +1122,7 @@ bool AdsCommunicationService::initialize_connection()
 	// 注册完成后主动读取一次初值，避免依赖下一次变化。
 	const char* symbols[] = {
 		AdsSymbol::self_check_done,
+		"G.selfcheck_status",
 		AdsSymbol::handle_reinit_req,
 		"G.handle_reinit_done",
 		AdsSymbol::estop_hold_req,
@@ -1139,7 +1144,8 @@ bool AdsCommunicationService::initialize_connection()
 	};
 	AdsEventState initial{};
 	const unsigned long lengths[] = {
-		sizeof(initial.self_check_done), sizeof(initial.handle_reinit_req),
+		sizeof(initial.self_check_done), sizeof(initial.selfcheck_status),
+		sizeof(initial.handle_reinit_req),
 		sizeof(initial.handle_reinit_done), sizeof(initial.estop_hold_req),
 		sizeof(initial.host_comm_timeout), sizeof(initial.startup_loading_ready),
 		sizeof(initial.axis4_manual_busy), sizeof(initial.axis4_manual_done),
@@ -1151,7 +1157,8 @@ bool AdsCommunicationService::initialize_connection()
 		sizeof(initial.axis6_return_error_id)
 	};
 	void* outputs[] = {
-		&initial.self_check_done, &initial.handle_reinit_req, &initial.handle_reinit_done,
+		&initial.self_check_done, &initial.selfcheck_status,
+		&initial.handle_reinit_req, &initial.handle_reinit_done,
 		&initial.estop_hold_req, &initial.host_comm_timeout, &initial.startup_loading_ready,
 		&initial.axis4_manual_busy, &initial.axis4_manual_done, &initial.axis4_manual_error,
 		&initial.axis4_manual_error_id, &initial.gen_state,
@@ -1169,6 +1176,7 @@ bool AdsCommunicationService::initialize_connection()
 			return (notification_update_mask_ & (1u << event_id)) == 0;
 		};
 		if (untouched(kNotifySelfCheckDone)) event_state_.self_check_done = initial.self_check_done;
+		if (untouched(kNotifySelfCheckStatus)) event_state_.selfcheck_status = initial.selfcheck_status;
 		if (untouched(kNotifyHandleReinitReq)) event_state_.handle_reinit_req = initial.handle_reinit_req;
 		if (untouched(kNotifyHandleReinitDone)) event_state_.handle_reinit_done = initial.handle_reinit_done;
 		if (untouched(kNotifyEstopHold)) event_state_.estop_hold_req = initial.estop_hold_req;
@@ -1873,6 +1881,7 @@ bool AdsCommunicationService::register_notifications()
 	};
 	const Registration registrations[] = {
 		{ AdsSymbol::self_check_done, sizeof(bool), kNotifySelfCheckDone },
+		{ "G.selfcheck_status", sizeof(int), kNotifySelfCheckStatus },
 		{ AdsSymbol::handle_reinit_req, sizeof(bool), kNotifyHandleReinitReq },
 		{ "G.handle_reinit_done", sizeof(bool), kNotifyHandleReinitDone },
 		{ AdsSymbol::estop_hold_req, sizeof(bool), kNotifyEstopHold },

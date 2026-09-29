@@ -377,8 +377,35 @@
                         <RowDefinition Height="Auto"/>
                     </Grid.RowDefinitions>
 
+                    <StackPanel Grid.Row="0">
+                    <GroupBox Header="自检" Margin="0,0,0,8">
+                        <StackPanel Margin="2">
+                            <Grid Margin="0,2,0,4">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="128"/>
+                                    <ColumnDefinition Width="*"/>
+                                </Grid.ColumnDefinitions>
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto"/><RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="Auto"/><RowDefinition Height="Auto"/>
+                                </Grid.RowDefinitions>
+                                <TextBlock Grid.Row="0" Text="轴1 (5–96 mm)" Style="{StaticResource FieldLabelText}"/>
+                                <TextBox Grid.Row="0" Grid.Column="1" x:Name="TbSelfCheckAxis1" Text="96" Margin="8,3"/>
+                                <TextBlock Grid.Row="1" Text="轴3 (10–650 mm)" Style="{StaticResource FieldLabelText}"/>
+                                <TextBox Grid.Row="1" Grid.Column="1" x:Name="TbSelfCheckAxis3" Text="500" Margin="8,3"/>
+                                <TextBlock Grid.Row="2" Text="轴5 (10–670 mm)" Style="{StaticResource FieldLabelText}"/>
+                                <TextBox Grid.Row="2" Grid.Column="1" x:Name="TbSelfCheckAxis5" Text="530" Margin="8,3"/>
+                                <TextBlock Grid.Row="3" Text="轴6 (10–670 mm)" Style="{StaticResource FieldLabelText}"/>
+                                <TextBox Grid.Row="3" Grid.Column="1" x:Name="TbSelfCheckAxis6" Text="580" Margin="8,3"/>
+                            </Grid>
+                            <TextBlock Text="{Binding SelfCheckStatusText}" Style="{StaticResource CaptionText}" Margin="0,0,0,4"/>
+                            <TextBlock x:Name="SelfCheckError" Style="{StaticResource ErrorText}" Margin="0,0,0,4"/>
+                            <Button x:Name="StartSelfCheckButton" Content="开始自检" Click="StartSelfCheck_Click" IsEnabled="{Binding CanStartSelfCheck}"
+                                    Style="{StaticResource PrimaryButton}" Padding="16,8" HorizontalAlignment="Left"/>
+                        </StackPanel>
+                    </GroupBox>
                     <!-- 启动准备 -->
-                    <GroupBox Grid.Row="0" Header="启动准备">
+                    <GroupBox Header="启动准备">
                         <StackPanel Margin="2">
                             <Grid Margin="0,2,0,4">
                                 <Grid.ColumnDefinitions>
@@ -418,6 +445,7 @@
                         </StackPanel>
                     </GroupBox>
 
+                    </StackPanel>
                     <!-- 力反馈 -->
                     <GroupBox Grid.Row="1" Header="力反馈">
                         <StackPanel Margin="2">

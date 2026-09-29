@@ -131,6 +131,7 @@ namespace AdsControlUI
 		public uint arm_curve_state;
 		public double arm_curve_progress;
 		public uint arm_home_request_id;
+		public int selfcheck_status;
 	}
 
     public enum VisCommandType : int
@@ -176,5 +177,7 @@ namespace AdsControlUI
 		StopArmCartesian = 43,
 		SetArmCartesianParameter = 44,
 		KeepArmCartesianAlive = 45,
+		SetSelfCheckAxisPos = 46,
+		StartSelfCheck = 47,
 	}
 }

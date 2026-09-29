@@ -473,7 +473,7 @@ int main(int argc, char* argv[])
 	bool self_check_done = true;
 	bool has_self_check_flag = false;
 
-	bool control_active = !has_self_check_flag || self_check_done;
+	bool control_active = false;
 	bool last_self_check_done = self_check_done;
 	bool handle_reinit_req = false;
 	bool last_handle_reinit_req = false;
@@ -922,6 +922,10 @@ int main(int argc, char* argv[])
 		double axis7_deg = 0.0;
 		double speed_scale = 0.0;
 	} pending_startup;
+	double pending_selfcheck_target[7] = { 96.0, 0.0, 500.0, 0.0, 530.0, 580.0, 0.0 };
+	unsigned int pending_selfcheck_axes = 0;
+	bool selfcheck_command_error = false;
+	bool selfcheck_start_pending = false;
 	pending_startup.axis1_from_left_mm = startup.final_axis1_from_left_mm;
 	pending_startup.axis3_from_left_mm = startup.final_axis3_from_left_mm;
 	pending_startup.axis5_from_left_mm = startup.final_axis5_from_left_mm;
@@ -1000,6 +1004,12 @@ int main(int argc, char* argv[])
 			}
 		}
 		self_check_done = ads_events.self_check_done;
+		if (ads_events.selfcheck_status == 2 || ads_events.selfcheck_status == 0 ||
+			ads_events.selfcheck_status == 3 ||
+			ads_stats.state != AdsConnectionState::Running)
+			selfcheck_start_pending = false;
+		if (ads_events.selfcheck_status == 2 || self_check_done)
+			selfcheck_command_error = false;
 		handle_reinit_req = ads_events.handle_reinit_req;
 		estop_hold_req = ads_events.estop_hold_req;
 		if (ads_stats.reconnect_count != handled_reconnect_count)
@@ -1017,12 +1027,13 @@ int main(int argc, char* argv[])
 			ads_stats.state == AdsConnectionState::Running &&
 			self_check_done && ads_events.handle_reinit_done &&
 			!ads_snapshot.host_comm_timeout && !ads_events.host_comm_timeout;
-		if (ads_motion_cycle_valid && !has_self_check_flag)
+		if (has_new_ads_snapshot && ads_snapshot.position_valid &&
+			ads_stats.state == AdsConnectionState::Running && !has_self_check_flag)
 		{
-			// ADS 服务的连接初始化已完成这些符号的解析和初值读取，
-			// 首个有效快照到达后再启用自检/启动流程状态，不访问未就绪的 ADS。
+			// 首个有效快照即确认自检状态，等待按键期间不得进入启动准备。
 			has_self_check_flag = true;
 			last_self_check_done = self_check_done;
+			if (!self_check_done) control_active = false;
 			startup.loading_ready_symbol_available = true;
 			startup.loading_ready_plc = ads_events.startup_loading_ready;
 		}
@@ -1662,7 +1673,7 @@ int main(int argc, char* argv[])
 					{
 						std::cout << "直接控制启动已忽略：ADS 当前处于软保持或重连状态。" << std::endl;
 					}
-					else if (has_self_check_flag && !self_check_done)
+					else if (!has_self_check_flag || !self_check_done)
 					{
 						std::cout << "直接控制启动已忽略：PLC 自检尚未完成。" << std::endl;
 					}
@@ -1703,7 +1714,7 @@ int main(int argc, char* argv[])
 					{
 						std::cout << "启动准备已忽略：ADS 当前处于软保持或重连状态。" << std::endl;
 					}
-					else if (has_self_check_flag && !self_check_done)
+					else if (!has_self_check_flag || !self_check_done)
 					{
 						std::cout << "启动准备已忽略：PLC 自检尚未完成。" << std::endl;
 					}
@@ -2005,7 +2016,7 @@ int main(int argc, char* argv[])
 				sync_all(30))
 			{
 				control_active = startup.completed && (startup.phase == StartupPhase::Done);
-				if (!startup.completed && (!has_self_check_flag || self_check_done) && !startup.prompted)
+				if (!startup.completed && has_self_check_flag && self_check_done && !startup.prompted)
 				{
 					prompt_startup_mode();
 				}
@@ -2029,7 +2040,7 @@ int main(int argc, char* argv[])
 				 !estop_hold_active &&
 				 !ads_soft_hold_active &&
 				 !startup.prompted &&
-				 (!has_self_check_flag || self_check_done))
+				 has_self_check_flag && self_check_done)
 		{
 			prompt_startup_mode();
 		}
@@ -4276,6 +4287,8 @@ int main(int argc, char* argv[])
 			vs.axis1_fast_return = axis1_fast_return;
 			vs.axis6_fast_retract = axis6_fast_retract;
 			vs.self_check_done = self_check_done;
+			vs.selfcheck_status = selfcheck_command_error && !self_check_done ? 4 :
+				selfcheck_start_pending ? 5 : ads_events.selfcheck_status;
 			vs.ff_enabled = ff.enabled;
 			vs.cal_zeroed = cal_state.zeroed;
 			vs.axis1_reverse = axis1_reverse_pressed;
@@ -4397,6 +4410,50 @@ int main(int argc, char* argv[])
 			{
 				switch (vcmd.type)
 				{
+				case VisCommandType::SetSelfCheckAxisPos:
+				{
+					const int axis = vcmd.param1;
+					if (axis == 1 || axis == 3 || axis == 5 || axis == 6)
+					{
+						pending_selfcheck_target[axis - 1] = vcmd.param2 / 100.0;
+						pending_selfcheck_axes |= (1u << axis);
+						selfcheck_command_error = false;
+					}
+					break;
+				}
+				case VisCommandType::StartSelfCheck:
+				{
+					const double a1 = pending_selfcheck_target[0];
+					const double a3 = pending_selfcheck_target[2];
+					const double a5 = pending_selfcheck_target[4];
+					const double a6 = pending_selfcheck_target[5];
+					const bool valid = pending_selfcheck_axes == ((1u << 1) | (1u << 3) | (1u << 5) | (1u << 6)) &&
+						a1 >= 5.0 && a1 <= 96.0 && a3 >= 10.0 && a3 <= 650.0 &&
+						a5 >= 10.0 && a5 <= 670.0 && a6 >= 10.0 && a6 <= 670.0 &&
+						a1 <= a3 && a3 <= a5 && a5 <= a6;
+					pending_selfcheck_axes = 0;
+					if (!valid || selfcheck_start_pending ||
+						(ads_events.selfcheck_status != 1 && ads_events.selfcheck_status != 3) ||
+						ads_stats.state != AdsConnectionState::Running)
+					{
+						selfcheck_command_error = true;
+						std::cout << "自检启动被拒绝：参数不完整、越界或 PLC 未就绪。" << std::endl;
+						break;
+					}
+					const bool request = true;
+					if (!ads_communication.write("G.selfcheck_target_from_left",
+						sizeof(pending_selfcheck_target), pending_selfcheck_target) ||
+						!ads_communication.write("G.selfcheck_start_req", sizeof(request), &request))
+					{
+						selfcheck_command_error = true;
+						std::cout << "自检启动 ADS 写入失败，未自动重试。" << std::endl;
+						break;
+					}
+					selfcheck_command_error = false;
+					selfcheck_start_pending = true;
+					std::cout << "自检启动请求已发送，等待 PLC 确认。" << std::endl;
+					break;
+				}
 				case VisCommandType::SetCylinderManualPosition:
 				case VisCommandType::ResetCylinderManual:
 				{
@@ -4787,7 +4844,7 @@ int main(int argc, char* argv[])
 					}
 					if (!startup.completed && startup.phase == StartupPhase::WaitForEnter &&
 						!estop_hold_active && !ads_soft_hold_active &&
-						(!has_self_check_flag || self_check_done))
+						has_self_check_flag && self_check_done)
 					{
 						startup.final_axis1_from_left_mm = pending_startup.axis1_from_left_mm;
 						startup.final_axis3_from_left_mm = pending_startup.axis3_from_left_mm;
@@ -4811,7 +4868,7 @@ int main(int argc, char* argv[])
 						startup.phase == StartupPhase::WaitForEnter &&
 						!estop_hold_active &&
 						!ads_soft_hold_active &&
-						(!has_self_check_flag || self_check_done))
+						has_self_check_flag && self_check_done)
 					{
 						if (restore_startup_v_limit() &&
 							consume_startup_loading_ready() &&

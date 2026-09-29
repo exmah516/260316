@@ -22,4 +22,11 @@ foreach ($name in @('cycle_seconds', 'path_progress')) {
         throw "Missing LREAL declaration or assignment: $name"
     }
 }
+
+$service = Get-Content -LiteralPath (Join-Path $PSScriptRoot '../../64位ADS - 相对路径 - 传数组 - 加上手柄/arm_manual_ads_service.cpp') -Encoding UTF8 -Raw
+if ($service -notmatch 'snapshot_\.motion_busy\[i\]\s*\|\|\s*std::abs\(snapshot_\.act_vel\[i\]\)\s*>\s*0\.1\)\s*return' -or
+    $code -notmatch 'ABS\(G\.arm_act_vel\[i\]\)\s*>\s*0\.1' -or
+    $code -notmatch 'ABS\(G\.arm_act_vel\[i\]\)\s*<=\s*0\.5') {
+    throw '协调运动起动阈值应为0.1，到位阈值应为0.5。'
+}
 Write-Output 'PASS: ArmCartesian XML and DT/S naming regression; not a TwinCAT compiler check.'

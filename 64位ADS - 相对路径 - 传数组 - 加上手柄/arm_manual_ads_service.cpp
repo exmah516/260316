@@ -341,8 +341,8 @@ void ArmManualAdsService::update_cartesian()
 		if (cartesian_mode_ == 0) return;
 	}
 	for (int i = 0; i < 5; ++i) {
-		if (snapshot_.motion_busy[i] || !std::isfinite(snapshot_.act_vel[i])
-			|| std::abs(snapshot_.act_vel[i]) > 0.01) { abort(1008); return; }
+		if (!std::isfinite(snapshot_.act_vel[i])) { abort(1004); return; }
+		if (snapshot_.motion_busy[i] || std::abs(snapshot_.act_vel[i]) > 0.1) return;
 	}
 	const int mode = home_requested_ ? 0 : cartesian_mode_;
 	home_requested_ = false;
