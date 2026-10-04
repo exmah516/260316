@@ -105,9 +105,10 @@ struct ControlConfig
 	// 基于左限位参考的爬行窗口。
 	double axis1_window_left_from_left_mm = 8.0;
 	double axis1_window_right_from_left_mm = 28.0;
-	double axis6_window_size_mm = 22.0;
-	// 轴6距左限位坐标相对轴5的窗口为[4,26] mm，宽度22 mm。
-	double axis6_window_min_gap_from_axis5_mm = 4.0;
+	double catheter_axis6_window_size_mm = 22.0;
+	double catheter_axis6_window_min_gap_from_axis5_mm = 4.0;
+	double guidewire_axis6_window_size_mm = 26.0;
+	double guidewire_axis6_window_min_gap_from_axis5_mm = 0.0;
 	// 标准启动中间夹持阶段的轴5/6间距；与运行时20 mm窗口宽度相互独立。
 	double axis56_ready_gap_mm = 15.0;
 	double axis3_delivery_stop_from_left_mm = 20.0;
@@ -172,7 +173,7 @@ struct ControlConfig
 	unsigned short tcp_force_daq_port = 502;
 	// 可选：指定 ITCP 从哪块本机网卡出去；留空时由 Windows 路由表决定。
 	const char* tcp_force_daq_local_ip = "";
-	// 启动准备阶段目标。
+	// 开始控制时的低速定位仅使用于已完成自检的目标校正。
 	DWORD startup_clamp_settle_delay_ms = 300;
 	DWORD startup_recovery_stage_delay_ms = 2000;
 	double startup_motion_speed_scale = 0.005;
@@ -191,9 +192,9 @@ struct ControlConfig
 	double startup_axis5_ready_from_left_mm = startup_loading_axis3_from_left_mm + 10.0; ;
 	// 未经 UI 覆盖时采用的最终启动目标。
 	double startup_final_axis1_default_from_left_mm = 28.0;
-	double startup_final_axis3_default_from_left_mm = 635.0; 
-	double startup_final_axis5_default_from_left_mm = 640.0;
-	double startup_final_axis6_default_from_left_mm = 640.0;
+	double startup_final_axis3_default_from_left_mm = 610.0; 
+	double startup_final_axis5_default_from_left_mm = 615.0;
+	double startup_final_axis6_default_from_left_mm = 641.0;
 	double startup_rot_arrive_tol_deg = 0.2;
 	// 在 axis3 完全到达目标前提前触发 cylinder2 夹紧；现场调参使其领先约 0.5 s。
 	double startup_axis3_cyl2_clamp_advance_mm = 10.0;
@@ -422,6 +423,8 @@ struct SpacingRecoveryState
 enum class StartupPhase
 {
 	WaitForEnter,
+	PositionAxis156,
+	PositionAxis356,
 	ReleaseClamps,
 	MoveAxis56ToLeftReady,
 	ClampCylinder34Wait,
@@ -578,6 +581,7 @@ struct StartupState
 	StartupPhase phase = StartupPhase::WaitForEnter;
 	bool completed = false;
 	bool prompted = false;
+	bool direct_positioning = false;
 	DWORD phase_t0 = 0;
 
 	double axis1_hold_rel = 0.0;
@@ -590,6 +594,8 @@ struct StartupState
 	double axis3_move_base_rel = 0.0;
 	double axis5_move_base_rel = 0.0;
 	double axis6_move_base_rel = 0.0;
+	double direct_axis5_stage_from_left_mm = 0.0;
+	double direct_axis6_stage_from_left_mm = 0.0;
 
 	double final_axis1_from_left_mm = 20.0;
 	double final_axis3_from_left_mm = 649.0;

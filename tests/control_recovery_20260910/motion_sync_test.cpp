@@ -54,6 +54,7 @@ struct Fixture
 	Handle handle{};
 	HandleFilterState filter1{}, filter6{};
 	CrawlState crawl1{}, crawl6{};
+	GuidewireMode guidewire_mode = GuidewireMode::None;
 	double pos[7]{}, actual[7]{}, init[7]{}, left[7]{};
 #define SCALAR_FIELDS(X) \
 	X(axis3_base_rel) X(axis5_base_rel) X(axis6_mirror_base_rel) \
@@ -82,6 +83,7 @@ struct Fixture
 		ctx.axis6_handle_filter = &filter6;
 		ctx.axis1_crawl = &crawl1;
 		ctx.axis6_crawl = &crawl6;
+		ctx.guidewire_mode = &guidewire_mode;
 		ctx.pos = pos;
 		ctx.plc_act_pos = actual;
 		ctx.plc_init_pos = init;
@@ -103,6 +105,35 @@ struct Fixture
 
 int main()
 {
+	{
+		Fixture f;
+		// 回退后滤波标志丢失时，使用当前已采样手柄值重建，不停控。
+		f.actual[1] = 18;
+		f.actual[6] = -23;
+		f.handle.fJoints2[0] = 2.5;
+		f.handle.fJoints2[1] = -1.25;
+		assert(motion_sync::rebase_axis1_after_return(f.ctx));
+		assert(f.filter1.inited);
+		assert(f.crawl1.handle_ref == 2.5);
+		assert(f.crawl1.rot_ref == -1.25);
+	}
+	{
+		Fixture f;
+		// 独立模式窗口锁定标志丢失时，按当前轴5反馈重建窗口，不停控。
+		f.guidewire_mode = GuidewireMode::Independent;
+		f.actual[4] = 30;
+		f.actual[5] = 24;
+		f.actual[6] = 7;
+		f.handle.fJoints2[0] = 3.0;
+		f.handle.fJoints2[1] = 0.5;
+		f.axis6_locked_window_start_abs = 0.0;
+		f.axis6_locked_window_end_abs = 0.0;
+		f.filter6.inited = false;
+		assert(motion_sync::rebase_axis6_after_return(f.ctx));
+		assert(f.filter6.inited);
+		assert(f.crawl6.start_abs == 30 && f.crawl6.end_abs == 56);
+		assert(f.crawl6.rot_base_rel == 7);
+	}
 	{
 		Fixture f;
 		// 复现旧 PLC：绝对位置已为零，但偏置仍为自检前角度。
@@ -172,10 +203,11 @@ int main()
 		f.actual[4] += 5;
 		motion_sync::calculate_axis6_window_from_axis5(f.ctx, lo, hi);
 		assert(lo == 609 && hi == 631);
+		motion_sync::calculate_axis6_window_from_axis5(f.ctx, lo, hi);
 	}
 	{
 		Fixture f;
-		// 独立导丝回退只重建基准，轴5反馈变化不能移动入模时锁定的窗口。
+		// 普通模式回退按当前轴5反馈重建窗口。
 		f.actual[4] = 20;
 		assert(motion_sync::rebuild_axis6_window_from_axis5(f.ctx, false));
 		f.actual[4] = 30;
@@ -185,10 +217,10 @@ int main()
 		f.filter6.axis0_filtered = 12;
 		f.filter6.axis1_filtered = 3;
 		assert(motion_sync::rebase_axis6_after_return(f.ctx));
-		assert(f.crawl6.start_abs == 24 && f.crawl6.end_abs == 46);
+		assert(f.crawl6.start_abs == 34 && f.crawl6.end_abs == 56);
 		assert(f.axis6_follow_cmd_abs == 24 && f.axis6_prev_linear_filtered == 12);
-		assert(f.crawl6.rot_base_rel == 7 && f.independent_axis5_hold_rel == 30);
-		assert(f.crawl6.window_active && f.axis6_prev_abs_valid);
+		assert(f.crawl6.rot_base_rel == 7);
+		assert(!f.crawl6.window_active && f.axis6_prev_abs_valid);
 		assert(writes.empty());
 	}
 	{
@@ -204,6 +236,7 @@ int main()
 		assert(f.axis1_follow_cmd_abs == 28 && f.axis1_prev_linear_filtered == 9);
 		assert(f.axis3_base_rel == 31 && f.axis5_base_rel == 35);
 		assert(f.axis6_mirror_base_rel == 42 && f.pos[5] == 42);
+		assert(f.axis6_follow_cmd_abs == 42 && f.crawl6.enabled);
 		assert(writes.empty());
 	}
 	std::cout << "PASS: 9 motion recovery regression cases (no hardware)." << std::endl;

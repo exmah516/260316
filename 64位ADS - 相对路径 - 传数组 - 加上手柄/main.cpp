@@ -37,6 +37,8 @@ int main(int argc, char* argv[])
 	constexpr DWORD ads_snapshot_wait_timeout_ms = 300;
 	// WPF 状态只用于显示；降低推送频率不会改变 100 Hz ADS、运动或实验记录节拍。
 	constexpr std::int64_t vis_publish_rate_hz = 15;
+	// 球囊递送时，轴4每运动一秒，轴6沿位置减少方向递进10 mm。
+	constexpr double axis4_coupled_axis6_speed_mm_s = 10.0;
 	// TRUE：交换两只物理手柄的角色，用 587 承担导管/axis1/582语义，用 582 承担导丝/axis6/587语义。
 	constexpr bool swap_handle_roles = true;
 	const DWORD serial_axis1_handle = swap_handle_roles ? physical_handle_587_serial : physical_handle_582_serial;
@@ -278,6 +280,8 @@ int main(int argc, char* argv[])
 	double axis6_prev_rot_filtered = 0.0;
 	double axis1_follow_cmd_abs = 0.0;
 	double axis6_follow_cmd_abs = 0.0;
+	ULONGLONG axis4_axis6_coupling_last_ms = 0;
+	bool axis4_axis6_coupling_active_prev = false;
 	// 普通导管递送在 axis1 计划回退完成后，前 10 mm 手柄输入的比例映射状态。
 	bool axis1_delivery_mapping_active = false;
 	double axis1_delivery_mapping_progress_mm = 0.0;
@@ -310,9 +314,7 @@ int main(int argc, char* argv[])
 	PlannedReturnCoordinator planned_return;
 	SpacingRecoveryState spacing_recovery;
 	axis1_crawl.enabled = true;
-	// 最终启动默认姿态与标准启动的中间夹持位置分开设置。
-	// 635/635/640 可保持缩短后的 0 mm、1 mm 相对差，同时让完整
-	// axis6 运行窗口 [axis5+1, axis5+21] 不超过 670 mm 软上限。
+	// 开始控制默认目标：轴1=28，轴3=610，轴5=615，轴6=641 mm。
 	startup.final_axis1_from_left_mm = cfg.startup_final_axis1_default_from_left_mm;
 	startup.final_axis3_from_left_mm = cfg.startup_final_axis3_default_from_left_mm;
 	startup.final_axis5_from_left_mm = cfg.startup_final_axis5_default_from_left_mm;
@@ -401,6 +403,47 @@ int main(int argc, char* argv[])
 	auto consume_startup_loading_ready = [&]() -> bool { return startup_sequence::consume_startup_loading_ready(ctx); };
 	auto restore_startup_v_limit = [&]() -> bool { return startup_sequence::restore_startup_v_limit(ctx); };
 	auto prompt_startup_mode = [&]() { startup_sequence::prompt_startup_mode(ctx); };
+	bool control_active = false;
+	auto begin_direct_positioning = [&]() -> bool
+	{
+		if (!read_plc_state())
+		{
+			std::cout << "开始控制失败：无法读取当前轴位置。" << std::endl;
+			return false;
+		}
+
+		const double axis3_from_left_mm =
+			(plc_act_pos[2] + plc_init_pos[2]) - plc_leftlimit[2];
+		const double stage_axis5_from_left_mm = axis3_from_left_mm + 5.0;
+		const double stage_axis6_from_left_mm = axis3_from_left_mm + 31.0;
+		if (!std::isfinite(axis3_from_left_mm) ||
+			stage_axis5_from_left_mm < 10.0 ||
+			stage_axis5_from_left_mm > 670.0 ||
+			stage_axis6_from_left_mm < 10.0 ||
+			stage_axis6_from_left_mm > cfg.axis6_soft_limit_from_left_mm)
+		{
+			std::cout << "开始控制失败：当前轴3位置无法建立安全的轴5/轴6相对位置。" << std::endl;
+			return false;
+		}
+
+		startup.direct_axis5_stage_from_left_mm = stage_axis5_from_left_mm;
+		startup.direct_axis6_stage_from_left_mm = stage_axis6_from_left_mm;
+		startup.axis1_hold_rel = plc_act_pos[0];
+		startup.axis3_hold_rel = plc_act_pos[2];
+		startup.axis5_hold_rel = plc_act_pos[4];
+		startup.axis6_hold_rel = plc_act_pos[5];
+		startup.axis2_hold_rel = plc_act_pos[1];
+		startup.axis7_hold_rel = plc_act_pos[6];
+		startup.direct_positioning = true;
+		startup.recovery_mode = false;
+		startup.phase = StartupPhase::PositionAxis156;
+		startup.phase_t0 = GetTickCount();
+		startup.completed = false;
+		startup.prompted = false;
+		control_active = false;
+		std::cout << "开始控制：轴1与轴5/6先调整到安全相对位置，随后轴3/5/6共同到达目标。" << std::endl;
+		return true;
+	};
 	bool emergency_retract_active = false;
 	double emergency_retract_axis1_hold_rel = 0.0;
 	double emergency_retract_axis2_hold_rel = 0.0;
@@ -448,8 +491,8 @@ int main(int argc, char* argv[])
 		emergency_retract_v_limit_scaled = false;
 		return true;
 	};
-	// 递送只接受手柄“推”产生的负轴向增量，撤出只接受“拉”产生的正轴向增量。
-	// 被拒绝的增量仍会在循环末尾刷新采样基准，因此不会积压到后续控制拍。
+	// 尚未进入窗口时保留原有入窗方向；进入窗口后由窗口夹紧负责限制越界，
+	// 允许手柄在窗口内产生正负两个方向的有效增量。
 	auto gate_linear_increment_for_mode = [](double increment_mm, bool reverse_mode) -> double
 	{
 		if ((!reverse_mode && increment_mm < 0.0) || (reverse_mode && increment_mm > 0.0))
@@ -473,7 +516,6 @@ int main(int argc, char* argv[])
 	bool self_check_done = true;
 	bool has_self_check_flag = false;
 
-	bool control_active = false;
 	bool last_self_check_done = self_check_done;
 	bool handle_reinit_req = false;
 	bool last_handle_reinit_req = false;
@@ -492,8 +534,6 @@ int main(int argc, char* argv[])
 	unsigned long axis4_manual_error_id_prev = 0;
 	bool axis4_ui_forward_pressed = false;
 	bool axis4_ui_reverse_pressed = false;
-	ULONGLONG axis4_ui_jog_deadline_ms = 0;
-	constexpr ULONGLONG axis4_ui_jog_lease_ms = 300;
 	bool y_valve_open = false;
 	int injector_ui_direction[2] = {};
 	ULONGLONG injector_ui_jog_deadline_ms[2] = {};
@@ -1259,7 +1299,6 @@ int main(int argc, char* argv[])
 					axis2_hold_rel = plc_act_pos[1];
 					axis7_hold_rel = plc_act_pos[6];
 					independent_axis2_hold_rel = plc_act_pos[1];
-					prompt_startup_mode();
 					std::cout << "系统初始同步完成，进入就绪状态。" << std::endl;
 				}
 			}
@@ -1526,14 +1565,6 @@ int main(int argc, char* argv[])
 		}
 		// 正式控制阶段：启动流程已完成，B6 不再承担暂停/电缸5语义，而只作为所选手柄的方向电平。
 		const bool formal_control_stage = startup.completed && (startup.phase == StartupPhase::Done);
-		if ((axis4_ui_forward_pressed || axis4_ui_reverse_pressed) &&
-			axis4_ui_jog_deadline_ms != 0 &&
-			GetTickCount64() >= axis4_ui_jog_deadline_ms)
-		{
-			axis4_ui_forward_pressed = false;
-			axis4_ui_reverse_pressed = false;
-			axis4_ui_jog_deadline_ms = 0;
-		}
 		for (int injector_index = 0; injector_index < 2; ++injector_index)
 		{
 			if (injector_ui_direction[injector_index] != 0 &&
@@ -1553,6 +1584,11 @@ int main(int argc, char* argv[])
 		const bool axis4_direction_conflict = axis4_forward_semantic && axis4_reverse_semantic;
 		const bool axis4_forward_request = axis4_jog_allowed && axis4_forward_semantic && !axis4_direction_conflict;
 		const bool axis4_reverse_request = axis4_jog_allowed && axis4_reverse_semantic && !axis4_direction_conflict;
+		if (!axis4_jog_allowed || guidewire_mode != GuidewireMode::None || planned_return.active())
+		{
+			axis4_axis6_coupling_active_prev = false;
+			axis4_axis6_coupling_last_ms = 0;
+		}
 		bool injector_push_request[2] = {};
 		bool injector_pull_request[2] = {};
 		for (int injector_index = 0; injector_index < 2; ++injector_index)
@@ -1704,38 +1740,11 @@ int main(int argc, char* argv[])
 			}
 			else if (ch == 's' || ch == 'S')
 			{
-				if (!startup.completed && startup.phase == StartupPhase::WaitForEnter)
-				{
-					if (estop_hold_active)
-					{
-						std::cout << "启动准备已忽略：处于 PLC 急停状态。" << std::endl;
-					}
-					else if (ads_soft_hold_active)
-					{
-						std::cout << "启动准备已忽略：ADS 当前处于软保持或重连状态。" << std::endl;
-					}
-					else if (!has_self_check_flag || !self_check_done)
-					{
-						std::cout << "启动准备已忽略：PLC 自检尚未完成。" << std::endl;
-					}
-					else if (start_startup_sequence())
-					{
-						clear_cylinder_manual_overrides();
-						control_active = false;
-						std::cout << "启动准备流程已开始。" << std::endl;
-					}
-					else
-					{
-						std::cout << "启动准备流程启动失败：ADS 重同步失败。" << std::endl;
-					}
-				}
+				std::cout << "已取消键盘启动准备，请在界面输入目标后点击“开始控制”。" << std::endl;
 			}
 			else if (ch == '\r')
 			{
-				if (!startup.completed && startup.phase == StartupPhase::WaitForEnter)
-				{
-					prompt_startup_mode();
-				}
+				std::cout << "请在界面输入目标后点击“开始控制”。" << std::endl;
 			}
 			else if (ch == 'f' || ch == 'F')
 			{
@@ -1987,15 +1996,16 @@ int main(int argc, char* argv[])
 				guidewire_mode = GuidewireMode::None;
 				axis6_crawl.enabled = false;
 				axis6_window_locked = false;
-				startup.phase = StartupPhase::WaitForEnter;
-				startup.completed = false;
+				startup.phase = StartupPhase::Done;
+				startup.completed = true;
+				startup.direct_positioning = false;
 				startup.prompted = false;
 				if (coordinates_refreshed && !estop_hold_active &&
 					!ads_soft_hold_active && sync_all(30))
 				{
-					control_active = false;
-					std::cout << "PLC 自检已完成。" << std::endl;
-					prompt_startup_mode();
+					control_active = true;
+					plc_restart_recovery_latched = false;
+					std::cout << "PLC 自检已完成，已自动进入手柄控制。" << std::endl;
 				}
 				else
 				{
@@ -2016,10 +2026,6 @@ int main(int argc, char* argv[])
 				sync_all(30))
 			{
 				control_active = startup.completed && (startup.phase == StartupPhase::Done);
-				if (!startup.completed && has_self_check_flag && self_check_done && !startup.prompted)
-				{
-					prompt_startup_mode();
-				}
 			}
 		}
 		last_handle_reinit_req = handle_reinit_req;
@@ -2034,15 +2040,6 @@ int main(int argc, char* argv[])
 			{
 				control_active = true;
 			}
-		}
-		else if (!startup.completed &&
-				 !motion_startup_active &&
-				 !estop_hold_active &&
-				 !ads_soft_hold_active &&
-				 !startup.prompted &&
-				 has_self_check_flag && self_check_done)
-		{
-			prompt_startup_mode();
 		}
 		unsigned short cylinder1_cmd = cyl.cyl1_open;
 		unsigned short cylinder2_cmd = cyl.cyl2_clamp;
@@ -2086,7 +2083,9 @@ int main(int argc, char* argv[])
 				? axis1_linear_increment_raw_mm
 				: 0.0;
 			const double axis1_directional_increment_mm =
-				gate_linear_increment_for_mode(axis1_linear_increment_mm, axis1_reverse_pressed);
+				axis1_crawl.window_active
+				? axis1_linear_increment_mm
+				: gate_linear_increment_for_mode(axis1_linear_increment_mm, axis1_reverse_pressed);
 			const bool axis1_directional_increment_active =
 				std::abs(axis1_directional_increment_mm) > 0.0;
 			const double axis1_window_left_abs_now = axis1_crawl.start_abs;
@@ -2105,7 +2104,9 @@ int main(int argc, char* argv[])
 				? axis6_linear_increment_raw_mm
 				: 0.0;
 			const double axis6_directional_increment_mm =
-				gate_linear_increment_for_mode(axis6_linear_increment_mm, axis6_effective_reverse_pressed);
+				axis6_crawl.window_active
+				? axis6_linear_increment_mm
+				: gate_linear_increment_for_mode(axis6_linear_increment_mm, axis6_effective_reverse_pressed);
 			const bool axis6_directional_increment_active =
 				std::abs(axis6_directional_increment_mm) > 0.0;
 
@@ -3122,7 +3123,8 @@ int main(int argc, char* argv[])
 				const double axis6_from_left_mm = axis6_abs - plc_leftlimit[5];
 				const double axis56_gap_mm = axis6_from_left_mm - axis5_from_left_mm;
 				const double axis56_max_gap_mm =
-					cfg.axis6_window_min_gap_from_axis5_mm + cfg.axis6_window_size_mm;
+					cfg.catheter_axis6_window_min_gap_from_axis5_mm +
+					cfg.catheter_axis6_window_size_mm;
 				const bool prerequisites_ok =
 					startup.completed && startup.phase == StartupPhase::Done &&
 					control_active && !axis6_soft_limit_hold &&
@@ -3142,7 +3144,7 @@ int main(int argc, char* argv[])
 					spacing_recovery.reset();
 				}
 				else if (axis5_from_left_mm + cfg.crawl_arrive_tol_mm < axis3_from_left_mm ||
-					axis56_gap_mm < (cfg.axis6_window_min_gap_from_axis5_mm - cfg.crawl_arrive_tol_mm) ||
+					axis56_gap_mm < (cfg.catheter_axis6_window_min_gap_from_axis5_mm - cfg.crawl_arrive_tol_mm) ||
 					axis56_gap_mm > (axis56_max_gap_mm + cfg.crawl_arrive_tol_mm))
 				{
 					std::cout << "屈曲恢复进入被拒绝：轴3/5/6当前相对位置不满足安全窗口。" << std::endl;
@@ -3194,6 +3196,8 @@ int main(int argc, char* argv[])
 			else if (axis6_soft_limit_hold && !motion_startup_active)
 			{
 				// 实际越限时继续冻结；启动准备的安全目标允许把 axis6 拉回限制内。
+				axis4_axis6_coupling_active_prev = false;
+				axis4_axis6_coupling_last_ms = 0;
 				hold_axis6_related_axes();
 			}
 			else if (spacing_recovery.active())
@@ -3266,13 +3270,13 @@ int main(int argc, char* argv[])
 			}
 			else if (motion_startup_active)
 			{
-				// 标准启动中 axis2/7 从第一拍执行目标；中断恢复由恢复阶段覆盖 axis1/6 等目标。
+				// 合并后的开始控制只做两阶段定位，不执行旧启动准备的夹爪时序。
 				pos[0] = startup.axis1_hold_rel;
-				pos[1] = startup.final_axis2_deg;
+				pos[1] = startup.direct_positioning ? 0.0 : startup.final_axis2_deg;
 				pos[2] = startup.axis3_hold_rel;
 				pos[4] = startup.axis5_hold_rel;
 				pos[5] = startup.axis6_hold_rel;
-				pos[6] = startup.final_axis7_deg;
+				pos[6] = startup.direct_positioning ? 0.0 : startup.final_axis7_deg;
 
 				const double startup_axis1_ready_abs = from_left_to_abs(0, cfg.startup_axis1_ready_from_left_mm);
 				const double startup_axis5_ready_abs = from_left_to_abs(4, cfg.startup_axis5_ready_from_left_mm);
@@ -3329,7 +3333,63 @@ int main(int argc, char* argv[])
 					}
 				};
 
-				if (startup.recovery_mode)
+				if (startup.direct_positioning)
+				{
+					const double final_axis1_abs =
+						from_left_to_abs(0, startup.final_axis1_from_left_mm);
+					const double final_axis3_abs =
+						from_left_to_abs(2, startup.final_axis3_from_left_mm);
+					const double final_axis5_abs =
+						from_left_to_abs(4, startup.final_axis5_from_left_mm);
+					const double final_axis6_abs =
+						from_left_to_abs(5, startup.final_axis6_from_left_mm);
+					const bool axis156_reached =
+						std::abs(axis1_abs - final_axis1_abs) <= cfg.crawl_arrive_tol_mm &&
+						std::abs(axis5_abs - from_left_to_abs(4, startup.direct_axis5_stage_from_left_mm)) <= cfg.crawl_arrive_tol_mm &&
+						std::abs(axis6_abs_now - from_left_to_abs(5, startup.direct_axis6_stage_from_left_mm)) <= cfg.crawl_arrive_tol_mm;
+					const bool final_targets_reached =
+						std::abs(axis1_abs - final_axis1_abs) <= cfg.crawl_arrive_tol_mm &&
+						std::abs(axis3_abs - final_axis3_abs) <= cfg.crawl_arrive_tol_mm &&
+						std::abs(axis5_abs - final_axis5_abs) <= cfg.crawl_arrive_tol_mm &&
+						std::abs(axis6_abs_now - final_axis6_abs) <= cfg.crawl_arrive_tol_mm &&
+						std::abs(axis2_rel) <= cfg.startup_rot_arrive_tol_deg &&
+						std::abs(axis7_rel) <= cfg.startup_rot_arrive_tol_deg;
+
+					if (startup.phase == StartupPhase::PositionAxis156)
+					{
+						pos[0] = from_left_to_rel(0, startup.final_axis1_from_left_mm);
+						pos[1] = 0.0;
+						pos[4] = from_left_to_rel(4, startup.direct_axis5_stage_from_left_mm);
+						pos[5] = from_left_to_rel(5, startup.direct_axis6_stage_from_left_mm);
+						if (axis156_reached)
+						{
+							startup.phase = StartupPhase::PositionAxis356;
+							std::cout << "开始控制：轴1与轴5/6相对位置已就绪，轴3/5/6开始共同到位。" << std::endl;
+						}
+					}
+					else
+					{
+						pos[0] = from_left_to_rel(0, startup.final_axis1_from_left_mm);
+						pos[1] = 0.0;
+						pos[2] = from_left_to_rel(2, startup.final_axis3_from_left_mm);
+						pos[4] = from_left_to_rel(4, startup.final_axis5_from_left_mm);
+						pos[5] = from_left_to_rel(5, startup.final_axis6_from_left_mm);
+						if (final_targets_reached)
+						{
+							startup.direct_positioning = false;
+							startup.phase = StartupPhase::Done;
+							startup.completed = true;
+							startup.prompted = false;
+							control_active = sync_all(20);
+							plc_restart_recovery_latched = false;
+							std::cout << (control_active
+								? "开始控制定位完成，已进入手柄控制。"
+								: "开始控制定位完成，但重同步失败。")
+								<< std::endl;
+						}
+					}
+				}
+				else if (startup.recovery_mode)
 				{
 					// 上位机中断恢复：全程保持正常抓持组合，不再执行标准装卸夹爪阶段。
 					cylinder1_cmd = cyl.cyl1_open;
@@ -3449,6 +3509,8 @@ int main(int argc, char* argv[])
 			else if (planned_return.active())
 			{
 				// 四种普通业务模式的计划回退和交接统一由单一协调器推进。
+				axis4_axis6_coupling_active_prev = false;
+				axis4_axis6_coupling_last_ms = 0;
 				step_planned_return();
 			}
 			else if (guidewire_mode == GuidewireMode::Independent)
@@ -3507,7 +3569,7 @@ int main(int argc, char* argv[])
 				// 常规导管模式：
 				// - axis1/2 由导管手柄控制（双物理手柄配置下为 587）
 				// - 轴 3/5 在 Follow 阶段镜像 axis1 平移
-				// - axis6 在导管模式 Follow 阶段保持不动
+				// - 轴4点动时，axis6按固定速度同步递进，并限制在轴5相对窗口内
 				// - axis1 触发快退时，axis6 按反向等位移联动，并限制在轴5相对窗口内
 				double axis6_catheter_window_start_abs = axis6_abs;
 				double axis6_catheter_window_end_abs = axis6_abs;
@@ -3530,6 +3592,42 @@ int main(int argc, char* argv[])
 					axis1_crawl.window_active = true;
 				}
 
+				// 轴4前进对应axis6位置减少，轴4后退对应axis6位置增加。
+				// 轴6仍复用既有窗口夹紧、触发回退和夹爪时序。
+				const bool axis4_axis6_coupling_active =
+					guidewire_mode == GuidewireMode::None &&
+					(axis4_forward_request || axis4_reverse_request);
+				if (axis4_axis6_coupling_active)
+				{
+					const ULONGLONG coupling_now_ms = GetTickCount64();
+					if (!axis4_axis6_coupling_active_prev)
+					{
+						// 计划回退交接后以当前实际位置重新起算，首拍只重建时间基准。
+						axis6_follow_cmd_abs = axis6_abs;
+						axis4_axis6_coupling_last_ms = coupling_now_ms;
+					}
+					else
+					{
+						const double elapsed_s = static_cast<double>(
+							coupling_now_ms - axis4_axis6_coupling_last_ms) / 1000.0;
+						axis4_axis6_coupling_last_ms = coupling_now_ms;
+						const double axis6_increment_mm =
+							(axis4_forward_request ? -1.0 : 1.0) *
+							axis4_coupled_axis6_speed_mm_s * elapsed_s;
+						run_axis6_crawl_state(
+							axis6_follow_cmd_abs + axis6_increment_mm,
+							axis6_increment_mm,
+							axis4_reverse_request);
+					}
+					// 保持联动基准有效；计划回退结束后的第一次循环不能丢失后续点动。
+					axis4_axis6_coupling_active_prev = true;
+				}
+				else
+				{
+					axis4_axis6_coupling_last_ms = 0;
+					axis4_axis6_coupling_active_prev = false;
+				}
+
 				{
 					const double axis1_raw_cmd_abs = axis1_follow_cmd_abs + axis1_directional_increment_mm;
 					const bool axis1_follow_enabled = axis1_reverse_pressed || !axis1_delivery_stop_latched;
@@ -3539,7 +3637,9 @@ int main(int argc, char* argv[])
 						axis1_delivery_stop_prompted = false;
 					}
 
-					if (axis1_delivery_stop_latched && axis1_reverse_pressed && axis1_directional_increment_active)
+					if (axis1_delivery_stop_latched &&
+						axis1_reverse_pressed &&
+						axis1_directional_increment_mm > 0.0)
 					{
 						axis1_delivery_stop_latched = false;
 						axis1_delivery_stop_prompted = false;
@@ -3658,8 +3758,11 @@ int main(int argc, char* argv[])
 					// 轴3/5镜像跟随名义目标（扣除轴1已累计的先行附加量），使轴1相对后方各轴产生真正先行效果
 					apply_axis1_mirror_from_abs(axis1_cmd_abs + axis1_delivery_mapping_applied_extra_mm, false);
 					{
-						// 导管模式下 axis6 不再随 axis1 跟随，保持在导管基准位。
-						pos[5] = axis6_mirror_base_rel;
+						// 非轴4联动时，导管模式保持axis6基准位；联动时保留爬行状态机目标。
+						if (!axis4_axis6_coupling_active)
+						{
+							pos[5] = axis6_mirror_base_rel;
+						}
 						cylinder3_cmd = cyl.cyl3_follow_release;
 						cylinder4_cmd = cyl.cyl4_clamp;
 					}
@@ -3811,6 +3914,8 @@ int main(int argc, char* argv[])
 		}
 		else
 		{
+			axis4_axis6_coupling_active_prev = false;
+			axis4_axis6_coupling_last_ms = 0;
 			TrackingInvalidReason inactive_reason = TrackingInvalidReason::NotForwardDelivery;
 			if (return_ads_fault_hold) inactive_reason = TrackingInvalidReason::AdsReturnFault;
 			else if (motion_startup_active) inactive_reason = TrackingInvalidReason::StartupActive;
@@ -4152,8 +4257,12 @@ int main(int argc, char* argv[])
 		ads_output.cylinder[3] = cylinder4_cmd;
 		ads_output.cylinder_valid = cylinder_output_enabled;
 		ads_output.cylinder5_press_req = cylinder_output_enabled && cylinder5_req;
-		ads_output.axis4_forward_req = ads_motion_cycle_valid && axis4_manual_forward_req;
-		ads_output.axis4_reverse_req = ads_motion_cycle_valid && axis4_manual_reverse_req;
+		const bool axis4_paused_by_axis6 =
+			planned_return.active() || axis6_soft_limit_hold;
+		ads_output.axis4_forward_req =
+			ads_motion_cycle_valid && !axis4_paused_by_axis6 && axis4_manual_forward_req;
+		ads_output.axis4_reverse_req =
+			ads_motion_cycle_valid && !axis4_paused_by_axis6 && axis4_manual_reverse_req;
 		for (int injector_index = 0; injector_index < 2; ++injector_index)
 		{
 			ads_output.inject_push_req[injector_index] = injector_push_request[injector_index];
@@ -4430,7 +4539,9 @@ int main(int argc, char* argv[])
 					const bool valid = pending_selfcheck_axes == ((1u << 1) | (1u << 3) | (1u << 5) | (1u << 6)) &&
 						a1 >= 5.0 && a1 <= 96.0 && a3 >= 10.0 && a3 <= 650.0 &&
 						a5 >= 10.0 && a5 <= 670.0 && a6 >= 10.0 && a6 <= 670.0 &&
-						a1 <= a3 && a3 <= a5 && a5 <= a6;
+					a1 <= a3 &&
+					std::abs(a5 - (a3 + 5.0)) < 1e-6 &&
+					std::abs(a6 - (a3 + 31.0)) < 1e-6;
 					pending_selfcheck_axes = 0;
 					if (!valid || selfcheck_start_pending ||
 						(ads_events.selfcheck_status != 1 && ads_events.selfcheck_status != 3) ||
@@ -4440,6 +4551,12 @@ int main(int argc, char* argv[])
 						std::cout << "自检启动被拒绝：参数不完整、越界或 PLC 未就绪。" << std::endl;
 						break;
 					}
+					startup.final_axis1_from_left_mm = a1;
+					startup.final_axis3_from_left_mm = a3;
+					startup.final_axis5_from_left_mm = a5;
+					startup.final_axis6_from_left_mm = a6;
+					startup.final_axis2_deg = 0.0;
+					startup.final_axis7_deg = 0.0;
 					const bool request = true;
 					if (!ads_communication.write("G.selfcheck_target_from_left",
 						sizeof(pending_selfcheck_target), pending_selfcheck_target) ||
@@ -4716,9 +4833,6 @@ int main(int argc, char* argv[])
 					{
 						axis4_ui_forward_pressed = vcmd.param1 > 0;
 						axis4_ui_reverse_pressed = vcmd.param1 < 0;
-						axis4_ui_jog_deadline_ms = vcmd.param1 == 0
-							? 0
-							: GetTickCount64() + axis4_ui_jog_lease_ms;
 					}
 					break;
 				case VisCommandType::SetYValveOpen:
@@ -4864,25 +4978,39 @@ int main(int argc, char* argv[])
 				}
 				case VisCommandType::SelectDirectControl:
 				{
-					if (!startup.completed &&
-						startup.phase == StartupPhase::WaitForEnter &&
+					const double a1 = pending_selfcheck_target[0];
+					const double a3 = pending_selfcheck_target[2];
+					const double a5 = pending_selfcheck_target[4];
+					const double a6 = pending_selfcheck_target[5];
+					const bool valid = pending_selfcheck_axes == ((1u << 1) | (1u << 3) | (1u << 5) | (1u << 6)) &&
+						a1 >= 5.0 && a1 <= 95.0 &&
+						a3 >= 10.0 && a3 <= 639.0 &&
+						std::abs(a5 - (a3 + 5.0)) < 1e-6 &&
+						std::abs(a6 - (a3 + 31.0)) < 1e-6 &&
+						a6 <= 670.0 &&
+						a1 <= a3;
+					pending_selfcheck_axes = 0;
+					if (valid &&
+						!startup.is_active() &&
 						!estop_hold_active &&
 						!ads_soft_hold_active &&
 						has_self_check_flag && self_check_done)
 					{
-						if (restore_startup_v_limit() &&
-							consume_startup_loading_ready() &&
-							sync_all(20))
-						{
+						startup.final_axis1_from_left_mm = a1;
+						startup.final_axis3_from_left_mm = a3;
+						startup.final_axis5_from_left_mm = a5;
+						startup.final_axis6_from_left_mm = a6;
+						startup.final_axis2_deg = 0.0;
+						startup.final_axis7_deg = 0.0;
 						clear_cylinder_manual_overrides();
-							startup.recovery_mode = false;
-							startup.phase = StartupPhase::Done;
-							startup.completed = true;
-							startup.prompted = false;
-							control_active = true;
-							plc_restart_recovery_latched = false;
-							std::cout << "已进入直接控制（UI 触发）。" << std::endl;
+						if (begin_direct_positioning())
+						{
+							std::cout << "已接受开始控制目标。" << std::endl;
 						}
+					}
+					else
+					{
+						std::cout << "开始控制被拒绝：目标不完整、越界、当前不在已自检待机状态或 ADS 未就绪。" << std::endl;
 					}
 					break;
 				}

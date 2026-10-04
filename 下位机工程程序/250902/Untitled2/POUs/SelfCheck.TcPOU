@@ -447,7 +447,19 @@ FOR i:=1 TO 7 DO
             G.init_pos[i] := G.axis[i].NcToPlc.ActPos;
         END_CASE
     ELSE
-        // 非目标轴（轴2/4/7）：绝对值编码器轴，直接运动到绝对位置 0
+        // 轴4保持当前位置；轴2/7回到绝对位置0。
+        IF i = 4 THEN
+            CASE stu[i] OF
+            0:
+                G.SetPointGenDisable[i](Axis:=G.axis[i], Execute:=TRUE);
+                IF G.power_output[i].Done AND (G.SetPointGenDisable[i].Done OR NOT G.SetPointGenDisable[i].Enabled) THEN
+                    G.SetPointGenDisable[i](Axis:=G.axis[i], Execute:=FALSE);
+                    stu[i] := 10;
+                END_IF
+            10:
+                G.init_pos[i] := G.axis[i].NcToPlc.ActPos;
+            END_CASE
+        ELSE
         CASE stu[i] OF
         0: // 禁用外部给定，避免与绝对定位冲突
             G.SetPointGenDisable[i](Axis:=G.axis[i], Execute:=TRUE);
@@ -492,6 +504,7 @@ FOR i:=1 TO 7 DO
                 stu[i] := 4;
             END_IF
         END_CASE
+        END_IF
     END_IF
     
     // 统一调用运动控制功能块 (在每个周期末尾)
@@ -536,8 +549,10 @@ IF all_done THEN
     FOR i:=1 TO 7 DO
         // 旋转轴已回到绝对零位，参考坐标必须同样采用绝对零点。
         // 不能保留 init 阶段采集的自检前角度，否则相对 0 会重新指向旧位置。
-        IF NOT target_axes[i] THEN
+        IF NOT target_axes[i] AND i <> 4 THEN
             G.init_pos[i] := 0.0;
+        ELSIF i = 4 THEN
+            G.init_pos[i] := G.axis[i].NcToPlc.ActPos;
         END_IF
         // 统一刷新相对坐标/参考，避免切换到 handle 后出现参考突变
         G.Act_pos[i] := G.axis[i].NcToPlc.ActPos - G.init_pos[i];

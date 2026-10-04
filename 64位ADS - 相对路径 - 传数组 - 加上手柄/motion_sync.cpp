@@ -49,9 +49,16 @@ namespace motion_sync
 		double& window_end_abs)
 	{
 		const double axis5_from_left_mm = axis5_abs - ctx.plc_leftlimit[4];
-		window_start_abs = ctx.plc_leftlimit[5] + axis5_from_left_mm +
-			ctx.cfg->axis6_window_min_gap_from_axis5_mm;
-		window_end_abs = window_start_abs + ctx.cfg->axis6_window_size_mm;
+		const bool guidewire_mode = ctx.guidewire_mode &&
+			*ctx.guidewire_mode == GuidewireMode::Independent;
+		const double gap_mm = guidewire_mode
+			? ctx.cfg->guidewire_axis6_window_min_gap_from_axis5_mm
+			: ctx.cfg->catheter_axis6_window_min_gap_from_axis5_mm;
+		const double size_mm = guidewire_mode
+			? ctx.cfg->guidewire_axis6_window_size_mm
+			: ctx.cfg->catheter_axis6_window_size_mm;
+		window_start_abs = ctx.plc_leftlimit[5] + axis5_from_left_mm + gap_mm;
+		window_end_abs = window_start_abs + size_mm;
 	}
 
 	void lock_axis6_window_from_current(AppContext& ctx)
@@ -147,9 +154,13 @@ namespace motion_sync
 	bool rebase_axis1_after_return(AppContext& ctx)
 	{
 		if (ctx.pos == nullptr || ctx.plc_act_pos == nullptr || ctx.plc_init_pos == nullptr ||
-			ctx.axis1_handle_filter == nullptr || !ctx.axis1_handle_filter->inited ||
+			ctx.axis1_handle_filter == nullptr ||
+			(!ctx.axis1_handle_filter->inited && ctx.axis1_input_handle == nullptr) ||
 			ctx.axis1_crawl == nullptr || ctx.axis2_hold_rel == nullptr ||
-			ctx.axis7_hold_rel == nullptr)
+			ctx.axis7_hold_rel == nullptr || ctx.axis6_crawl == nullptr ||
+			ctx.axis6_follow_cmd_abs == nullptr ||
+			ctx.axis6_prev_abs_for_trigger == nullptr ||
+			ctx.axis6_prev_abs_valid == nullptr)
 		{
 			return false;
 		}
@@ -162,6 +173,12 @@ namespace motion_sync
 		ctx.pos[1] = *ctx.axis2_hold_rel;
 		ctx.pos[6] = *ctx.axis7_hold_rel;
 
+		if (!ctx.axis1_handle_filter->inited && ctx.axis1_input_handle != nullptr)
+		{
+			ctx.axis1_handle_filter->reset(
+				ctx.axis1_input_handle->fJoints2[0],
+				ctx.axis1_input_handle->fJoints2[1]);
+		}
 		ctx.axis1_crawl->handle_ref = ctx.axis1_handle_filter->axis0_filtered;
 		ctx.axis1_crawl->rot_ref = ctx.axis1_handle_filter->axis1_filtered;
 		*ctx.axis1_prev_linear_filtered = ctx.axis1_handle_filter->axis0_filtered;
@@ -183,6 +200,21 @@ namespace motion_sync
 		*ctx.axis3_base_rel = ctx.plc_act_pos[2];
 		*ctx.axis5_base_rel = ctx.plc_act_pos[4];
 		*ctx.axis6_mirror_base_rel = ctx.plc_act_pos[5];
+
+		// 导管侧双腿回退包含 axis6 时，Axis1 重建也必须同步刷新
+		// axis6 的累计目标和窗口，否则下一拍联动会继续使用回退前的旧目标。
+		*ctx.axis6_follow_cmd_abs = ctx.plc_act_pos[5] + ctx.plc_init_pos[5];
+		calculate_axis6_window_from_axis5(ctx,
+			ctx.axis6_crawl->start_abs,
+			ctx.axis6_crawl->end_abs);
+		ctx.axis6_crawl->window_active = is_within_range(
+			*ctx.axis6_follow_cmd_abs,
+			ctx.axis6_crawl->min_abs(),
+			ctx.axis6_crawl->max_abs(),
+			ctx.cfg->crawl_arrive_tol_mm);
+		ctx.axis6_crawl->enabled = true;
+		*ctx.axis6_prev_abs_for_trigger = *ctx.axis6_follow_cmd_abs;
+		*ctx.axis6_prev_abs_valid = true;
 		return true;
 	}
 
@@ -190,7 +222,8 @@ namespace motion_sync
 	{
 		if (ctx.pos == nullptr || ctx.plc_act_pos == nullptr || ctx.plc_init_pos == nullptr ||
 			ctx.cfg == nullptr || ctx.axis6_handle_filter == nullptr ||
-			!ctx.axis6_handle_filter->inited || ctx.axis6_crawl == nullptr ||
+			(!ctx.axis6_handle_filter->inited && ctx.axis6_input_handle == nullptr) ||
+			ctx.axis6_crawl == nullptr ||
 			ctx.axis2_hold_rel == nullptr || ctx.axis7_hold_rel == nullptr ||
 			ctx.independent_axis1_hold_rel == nullptr || ctx.independent_axis2_hold_rel == nullptr ||
 			ctx.independent_axis3_hold_rel == nullptr || ctx.independent_axis5_hold_rel == nullptr ||
@@ -203,33 +236,40 @@ namespace motion_sync
 			return false;
 		}
 
-		// 独立模式的窗口在入模时锁定，回退交接不得按axis5重算。
-		// 缺少锁定窗口表示模式上下文已不完整，由上层转入安全保持。
-		if (!*ctx.axis6_window_locked ||
-			!std::isfinite(*ctx.axis6_locked_window_start_abs) ||
-			!std::isfinite(*ctx.axis6_locked_window_end_abs) ||
-			std::abs(*ctx.axis6_locked_window_end_abs - *ctx.axis6_locked_window_start_abs) <
-			ctx.cfg->crawl_arrive_tol_mm)
+		const bool independent_mode = ctx.guidewire_mode &&
+			*ctx.guidewire_mode == GuidewireMode::Independent;
+		if (!ctx.axis6_handle_filter->inited && ctx.axis6_input_handle != nullptr)
 		{
-			return false;
+			ctx.axis6_handle_filter->reset(
+				ctx.axis6_input_handle->fJoints2[0],
+				ctx.axis6_input_handle->fJoints2[1]);
 		}
 
 		// load_pos_from_actual只复制已由通信线程发布的内存快照，
 		// 不会发起ADS读写，也不会轮询手柄或等待。
 		plc_io::load_pos_from_actual(ctx);
 
-		// 独立导丝模式中导管侧始终冻结。用同一快照刷新保持位，
-		// 避免回退期间的跟随误差在交接首拍被重新下发。
-		*ctx.independent_axis1_hold_rel = ctx.plc_act_pos[0];
-		*ctx.independent_axis2_hold_rel = ctx.plc_act_pos[1];
-		*ctx.independent_axis3_hold_rel = ctx.plc_act_pos[2];
-		*ctx.independent_axis5_hold_rel = ctx.plc_act_pos[4];
 		*ctx.axis2_hold_rel = ctx.plc_act_pos[1];
 		*ctx.axis7_hold_rel = ctx.plc_act_pos[6];
-		ctx.pos[0] = *ctx.independent_axis1_hold_rel;
-		ctx.pos[1] = *ctx.independent_axis2_hold_rel;
-		ctx.pos[2] = *ctx.independent_axis3_hold_rel;
-		ctx.pos[4] = *ctx.independent_axis5_hold_rel;
+		if (independent_mode)
+		{
+			// 独立导丝模式中导管侧始终冻结。
+			*ctx.independent_axis1_hold_rel = ctx.plc_act_pos[0];
+			*ctx.independent_axis2_hold_rel = ctx.plc_act_pos[1];
+			*ctx.independent_axis3_hold_rel = ctx.plc_act_pos[2];
+			*ctx.independent_axis5_hold_rel = ctx.plc_act_pos[4];
+			ctx.pos[0] = *ctx.independent_axis1_hold_rel;
+			ctx.pos[1] = *ctx.independent_axis2_hold_rel;
+			ctx.pos[2] = *ctx.independent_axis3_hold_rel;
+			ctx.pos[4] = *ctx.independent_axis5_hold_rel;
+		}
+		else
+		{
+			ctx.pos[0] = ctx.plc_act_pos[0];
+			ctx.pos[1] = *ctx.axis2_hold_rel;
+			ctx.pos[2] = ctx.plc_act_pos[2];
+			ctx.pos[4] = ctx.plc_act_pos[4];
+		}
 		ctx.pos[6] = *ctx.axis7_hold_rel;
 
 		ctx.axis6_crawl->handle_ref = ctx.axis6_handle_filter->axis0_filtered;
@@ -239,7 +279,22 @@ namespace motion_sync
 		ctx.axis6_crawl->base_rel = ctx.plc_act_pos[5];
 		ctx.axis6_crawl->rot_base_rel = *ctx.axis7_hold_rel;
 		*ctx.axis6_follow_cmd_abs = ctx.plc_act_pos[5] + ctx.plc_init_pos[5];
-		apply_locked_axis6_window(ctx);
+		const bool locked_window_valid = *ctx.axis6_window_locked &&
+			std::isfinite(*ctx.axis6_locked_window_start_abs) &&
+			std::isfinite(*ctx.axis6_locked_window_end_abs) &&
+			std::abs(*ctx.axis6_locked_window_end_abs - *ctx.axis6_locked_window_start_abs) >=
+			ctx.cfg->crawl_arrive_tol_mm;
+		if (independent_mode && locked_window_valid)
+		{
+			apply_locked_axis6_window(ctx);
+		}
+		else
+		{
+			if (!rebuild_axis6_window_from_axis5(ctx, false))
+			{
+				return false;
+			}
+		}
 		ctx.axis6_crawl->window_active = is_within_range(
 			*ctx.axis6_follow_cmd_abs,
 			ctx.axis6_crawl->min_abs(),

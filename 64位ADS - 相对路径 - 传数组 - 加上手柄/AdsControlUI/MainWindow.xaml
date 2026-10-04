@@ -182,18 +182,14 @@
                                     <StackPanel Grid.Column="1" Orientation="Horizontal">
                                         <Button Content="后退" CommandParameter="-1"
                                                 IsEnabled="{Binding Axis4ManualControlAllowed}"
-                                                PreviewMouseLeftButtonDown="Axis4JogButton_PreviewMouseLeftButtonDown"
-                                                PreviewMouseLeftButtonUp="Axis4JogButton_PreviewMouseLeftButtonUp"
-                                                LostMouseCapture="Axis4JogButton_LostMouseCapture"
+                                                Click="Axis4JogButton_Click"
                                                 Padding="12,6" Margin="8,0,4,0"
-                                                ToolTip="按住时轴4后退，松开立即停止"/>
+                                                ToolTip="点击开始轴4后退，再次点击停止"/>
                                         <Button Content="前进" CommandParameter="1"
                                                 IsEnabled="{Binding Axis4ManualControlAllowed}"
-                                                PreviewMouseLeftButtonDown="Axis4JogButton_PreviewMouseLeftButtonDown"
-                                                PreviewMouseLeftButtonUp="Axis4JogButton_PreviewMouseLeftButtonUp"
-                                                LostMouseCapture="Axis4JogButton_LostMouseCapture"
+                                                Click="Axis4JogButton_Click"
                                                 Padding="12,6" Margin="4,0,0,0"
-                                                ToolTip="按住时轴4前进，松开立即停止"/>
+                                                ToolTip="点击开始轴4前进，再次点击停止"/>
                                     </StackPanel>
                                 </Grid>
                                 <TextBlock Text="{Binding Axis4ManualStatusText}"
@@ -378,67 +374,26 @@
                     </Grid.RowDefinitions>
 
                     <StackPanel Grid.Row="0">
-                    <GroupBox Header="自检" Margin="0,0,0,8">
+                    <GroupBox Header="自检与控制">
                         <StackPanel Margin="2">
                             <Grid Margin="0,2,0,4">
                                 <Grid.ColumnDefinitions>
                                     <ColumnDefinition Width="128"/>
                                     <ColumnDefinition Width="*"/>
                                 </Grid.ColumnDefinitions>
-                                <Grid.RowDefinitions>
-                                    <RowDefinition Height="Auto"/><RowDefinition Height="Auto"/>
-                                    <RowDefinition Height="Auto"/><RowDefinition Height="Auto"/>
-                                </Grid.RowDefinitions>
-                                <TextBlock Grid.Row="0" Text="轴1 (5–96 mm)" Style="{StaticResource FieldLabelText}"/>
-                                <TextBox Grid.Row="0" Grid.Column="1" x:Name="TbSelfCheckAxis1" Text="96" Margin="8,3"/>
-                                <TextBlock Grid.Row="1" Text="轴3 (10–650 mm)" Style="{StaticResource FieldLabelText}"/>
-                                <TextBox Grid.Row="1" Grid.Column="1" x:Name="TbSelfCheckAxis3" Text="500" Margin="8,3"/>
-                                <TextBlock Grid.Row="2" Text="轴5 (10–670 mm)" Style="{StaticResource FieldLabelText}"/>
-                                <TextBox Grid.Row="2" Grid.Column="1" x:Name="TbSelfCheckAxis5" Text="530" Margin="8,3"/>
-                                <TextBlock Grid.Row="3" Text="轴6 (10–670 mm)" Style="{StaticResource FieldLabelText}"/>
-                                <TextBox Grid.Row="3" Grid.Column="1" x:Name="TbSelfCheckAxis6" Text="580" Margin="8,3"/>
+                                <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+                                <TextBlock Grid.Row="0" Text="导管搓捻机构位置 (5–95 mm)" Style="{StaticResource FieldLabelText}"/>
+                                <TextBox Grid.Row="0" Grid.Column="1" x:Name="TbControlAxis1" Text="28" Margin="8,3"/>
+                                <TextBlock Grid.Row="1" Text="Y阀及导丝机构位置 (10–639 mm)" Style="{StaticResource FieldLabelText}"/>
+                                <TextBox Grid.Row="1" Grid.Column="1" x:Name="TbControlAxis3" Text="610" Margin="8,3"/>
                             </Grid>
+
                             <TextBlock Text="{Binding SelfCheckStatusText}" Style="{StaticResource CaptionText}" Margin="0,0,0,4"/>
-                            <TextBlock x:Name="SelfCheckError" Style="{StaticResource ErrorText}" Margin="0,0,0,4"/>
-                            <Button x:Name="StartSelfCheckButton" Content="开始自检" Click="StartSelfCheck_Click" IsEnabled="{Binding CanStartSelfCheck}"
-                                    Style="{StaticResource PrimaryButton}" Padding="16,8" HorizontalAlignment="Left"/>
-                        </StackPanel>
-                    </GroupBox>
-                    <!-- 启动准备 -->
-                    <GroupBox Header="启动准备">
-                        <StackPanel Margin="2">
-                            <Grid Margin="0,2,0,4">
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="128"/>
-                                    <ColumnDefinition Width="*"/>
-                                </Grid.ColumnDefinitions>
-                                <Grid.RowDefinitions>
-                                    <RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/>
-                                    <RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/>
-                                    <RowDefinition Height="Auto"/>
-                                </Grid.RowDefinitions>
-
-                                <TextBlock Grid.Row="0" Grid.Column="0" Text="轴1 (5–95 mm)" Style="{StaticResource FieldLabelText}"/>
-                                <TextBox   Grid.Row="0" Grid.Column="1" x:Name="TbAxis1" Text="28"  Margin="8,3"/>
-                                <TextBlock Grid.Row="1" Grid.Column="0" Text="轴3 (10–650 mm)" Style="{StaticResource FieldLabelText}"/>
-                                <TextBox   Grid.Row="1" Grid.Column="1" x:Name="TbAxis3" Text="635" Margin="8,3"/>
-                                <TextBlock Grid.Row="2" Grid.Column="0" Text="轴5 (10–670 mm)" Style="{StaticResource FieldLabelText}"/>
-                                <TextBox   Grid.Row="2" Grid.Column="1" x:Name="TbAxis5" Text="640" Margin="8,3"/>
-                                <TextBlock Grid.Row="3" Grid.Column="0" Text="轴6 (10–670 mm)" Style="{StaticResource FieldLabelText}"/>
-                                <TextBox   Grid.Row="3" Grid.Column="1" x:Name="TbAxis6" Text="640" Margin="8,3"/>
-                                <TextBlock Grid.Row="4" Grid.Column="0" Text="轴2 (−360~360°)" Style="{StaticResource FieldLabelText}"/>
-                                <TextBox   Grid.Row="4" Grid.Column="1" x:Name="TbAxis2" Text="0"   Margin="8,3"/>
-                                <TextBlock Grid.Row="5" Grid.Column="0" Text="轴7 (−360~360°)" Style="{StaticResource FieldLabelText}"/>
-                                <TextBox   Grid.Row="5" Grid.Column="1" x:Name="TbAxis7" Text="0"   Margin="8,3"/>
-                                <TextBlock Grid.Row="6" Grid.Column="0" Text="速度比例" Style="{StaticResource FieldLabelText}"/>
-                                <TextBox   Grid.Row="6" Grid.Column="1" x:Name="TbSpeed" Text="0.03" Margin="8,3"/>
-                            </Grid>
-
-                            <TextBlock x:Name="StartupError" Style="{StaticResource ErrorText}" Margin="0,4,0,8"/>
+                            <TextBlock x:Name="ControlStartError" Style="{StaticResource ErrorText}" Margin="0,4,0,8"/>
                             <StackPanel Orientation="Horizontal">
-                                <Button Content="执行启动准备 (S)" Click="ExecuteStartup_Click"
+                                <Button x:Name="StartControlButton" Content="开始控制" Click="StartControl_Click"
+                                        IsEnabled="{Binding CanStartControl}"
                                         Style="{StaticResource PrimaryButton}" Padding="16,8" Margin="0,0,8,0"/>
-                                <Button Content="直接控制 (C)" Click="DirectControl_Click" Padding="16,8" Margin="0,0,8,0"/>
                                 <Button Content="极简撤出" Click="EmergencyRetract_Click"
                                         IsEnabled="{Binding IsConnected}" Padding="16,8"/>
                             </StackPanel>

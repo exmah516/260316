@@ -176,7 +176,7 @@ namespace AdsControlUI
                 OnPropertyChanged(nameof(PhaseText));
             if (prev.selfcheck_status != state.selfcheck_status || prev.self_check_done != state.self_check_done)
             {
-                OnPropertyChanged(nameof(CanStartSelfCheck));
+                OnPropertyChanged(nameof(CanStartControl));
                 OnPropertyChanged(nameof(SelfCheckStatusText));
             }
 
@@ -226,7 +226,7 @@ namespace AdsControlUI
 			OnPropertyChanged(nameof(TrackingCompensationToggleEnabled));
 			OnPropertyChanged(nameof(TrackingParametersEditable));
 			OnPropertyChanged(nameof(TrackingStatusText));
-            OnPropertyChanged(nameof(CanStartSelfCheck));
+            OnPropertyChanged(nameof(CanStartControl));
             OnPropertyChanged(nameof(SelfCheckStatusText));
 			NotifyExperimentProperties();
 			NotifyAdsProperties();
@@ -337,7 +337,7 @@ namespace AdsControlUI
 			OnPropertyChanged(nameof(AdsHealthy));
 			OnPropertyChanged(nameof(HostCommTimeout));
 			OnPropertyChanged(nameof(AdsStateText));
-            OnPropertyChanged(nameof(CanStartSelfCheck));
+            OnPropertyChanged(nameof(CanStartControl));
             OnPropertyChanged(nameof(SelfCheckStatusText));
 			NotifyManualControlProperties();
 		}
@@ -447,8 +447,9 @@ namespace AdsControlUI
 		public int AdsState => _state.ads_state;
 		public bool HostCommTimeout => _state.host_comm_timeout;
         public bool AdsHealthy => IsConnected && AdsState == 2 && !HostCommTimeout;
-        public bool CanStartSelfCheck => IsConnected && AdsState == 2 &&
-            (_state.selfcheck_status == 1 || _state.selfcheck_status == 3 || _state.selfcheck_status == 4);
+        public bool CanStartControl => IsConnected && AdsState == 2 &&
+            (_state.self_check_done ||
+             _state.selfcheck_status == 1 || _state.selfcheck_status == 3 || _state.selfcheck_status == 4);
         public string SelfCheckStatusText => _state.self_check_done ? "自检完成" :
             !IsConnected || AdsState != 2 ? "等待 ADS 通信" : _state.selfcheck_status switch
         {
@@ -693,7 +694,7 @@ namespace AdsControlUI
                 if (_state.spacing_recovery_phase == 3) return "停止并同步";
                 if (_state.startup_completed) return "已就绪";
                 if (_state.startup_waiting) return "等待启动选择...";
-                return "启动准备中...";
+                return "待机中";
             }
         }
 
@@ -974,14 +975,17 @@ namespace AdsControlUI
             _client.SendCommand(VisCommandType.ExecuteStartup);
         }
 
-        public bool StartSelfCheck(double a1, double a3, double a5, double a6)
+        public bool StartControl(double a1, double a3, double a5, double a6)
         {
-            if (!CanStartSelfCheck) return false;
-            return _client.SendCommand(VisCommandType.SetSelfCheckAxisPos, 1, (int)Math.Round(a1 * 100)) &&
+            if (!CanStartControl) return false;
+            bool sent = _client.SendCommand(VisCommandType.SetSelfCheckAxisPos, 1, (int)Math.Round(a1 * 100)) &&
                 _client.SendCommand(VisCommandType.SetSelfCheckAxisPos, 3, (int)Math.Round(a3 * 100)) &&
                 _client.SendCommand(VisCommandType.SetSelfCheckAxisPos, 5, (int)Math.Round(a5 * 100)) &&
-                _client.SendCommand(VisCommandType.SetSelfCheckAxisPos, 6, (int)Math.Round(a6 * 100)) &&
-                _client.SendCommand(VisCommandType.StartSelfCheck);
+                _client.SendCommand(VisCommandType.SetSelfCheckAxisPos, 6, (int)Math.Round(a6 * 100));
+            if (!sent) return false;
+            return _state.self_check_done
+                ? _client.SendCommand(VisCommandType.SelectDirectControl)
+                : _client.SendCommand(VisCommandType.StartSelfCheck);
         }
 
 		public void StartExperimentRecording(string experimentName) =>

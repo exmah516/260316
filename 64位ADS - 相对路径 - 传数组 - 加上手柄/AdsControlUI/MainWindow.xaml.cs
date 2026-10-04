@@ -160,7 +160,7 @@ namespace AdsControlUI
 				button.ReleaseMouseCapture();
 		}
 
-		private void Axis4JogButton_PreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+		private void Axis4JogButton_Click(object sender, RoutedEventArgs e)
 		{
 			if (!(sender is Button button) ||
 				!TryGetJogDirection(button.CommandParameter, out int direction))
@@ -168,19 +168,9 @@ namespace AdsControlUI
 				return;
 			}
 
-			_activeAxis4JogDirection = direction;
-			_vm.SetAxis4ManualJog(direction);
-			button.CaptureMouse();
-		}
-
-		private void Axis4JogButton_PreviewMouseLeftButtonUp(object sender, MouseButtonEventArgs e)
-		{
-			StopAxis4Jog(sender);
-		}
-
-		private void Axis4JogButton_LostMouseCapture(object sender, MouseEventArgs e)
-		{
-			StopAxis4Jog(sender);
+			_activeAxis4JogDirection =
+				_activeAxis4JogDirection == direction ? 0 : direction;
+			_vm.SetAxis4ManualJog(_activeAxis4JogDirection);
 		}
 
 		private void InjectorJogButton_PreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
@@ -228,15 +218,6 @@ namespace AdsControlUI
 
 		private void YValveOpen_Click(object sender, RoutedEventArgs e) => _vm.SetYValveOpen(true);
 		private void YValveClose_Click(object sender, RoutedEventArgs e) => _vm.SetYValveOpen(false);
-
-		private void StopAxis4Jog(object sender)
-		{
-			if (!(sender is Button button)) return;
-			_activeAxis4JogDirection = 0;
-			_vm.SetAxis4ManualJog(0);
-			if (button.IsMouseCaptured)
-				button.ReleaseMouseCapture();
-		}
 
 		private void StopArmAxisJog(int axisNumber)
 		{
@@ -551,58 +532,28 @@ namespace AdsControlUI
 			_cleanForceWindow?.AddState(_vm.LatestState);
 		}
 
-        private void StartSelfCheck_Click(object sender, RoutedEventArgs e)
+        private void StartControl_Click(object sender, RoutedEventArgs e)
         {
-            SelfCheckError.Text = "";
-            if (!double.TryParse(TbSelfCheckAxis1.Text, out double a1) ||
-                !double.TryParse(TbSelfCheckAxis3.Text, out double a3) ||
-                !double.TryParse(TbSelfCheckAxis5.Text, out double a5) ||
-                !double.TryParse(TbSelfCheckAxis6.Text, out double a6) ||
-                double.IsNaN(a1) || double.IsNaN(a3) || double.IsNaN(a5) || double.IsNaN(a6))
+            ControlStartError.Text = "";
+            if (!double.TryParse(TbControlAxis1.Text, out double a1) ||
+                !double.TryParse(TbControlAxis3.Text, out double a3) ||
+                double.IsNaN(a1) || double.IsNaN(a3) ||
+                double.IsInfinity(a1) || double.IsInfinity(a3))
             {
-                SelfCheckError.Text = "输入格式错误，请输入有效数字。";
+                ControlStartError.Text = "输入格式错误，请输入有效数字。";
                 return;
             }
-            if (a1 < 5 || a1 > 96) { SelfCheckError.Text = "轴1必须在5-96mm之间。"; return; }
-            if (a3 < 10 || a3 > 650) { SelfCheckError.Text = "轴3必须在10-650mm之间。"; return; }
-            if (a5 < 10 || a5 > 670) { SelfCheckError.Text = "轴5必须在10-670mm之间。"; return; }
-            if (a6 < 10 || a6 > 670) { SelfCheckError.Text = "轴6必须在10-670mm之间。"; return; }
-            if (a1 > a3 || a3 > a5 || a5 > a6)
+            double a5 = a3 + 5.0;
+            double a6 = a5 + 26.0;
+            if (a1 < 5 || a1 > 95) { ControlStartError.Text = "轴1必须在5-95mm之间。"; return; }
+            if (a3 < 10 || a3 > 639) { ControlStartError.Text = "轴3必须在10-639mm之间，且轴6目标不得超过670mm。"; return; }
+            if (a1 > a3 || a3 > a5 || a5 > a6 || a6 > 670)
             {
-                SelfCheckError.Text = "目标位置必须满足轴1≤轴3≤轴5≤轴6。";
+                ControlStartError.Text = "派生目标必须满足轴1≤轴3≤轴5≤轴6，且轴6不得超过670mm。";
                 return;
             }
-            if (!_vm.StartSelfCheck(a1, a3, a5, a6))
-                SelfCheckError.Text = "命令未发送，请检查连接和自检状态。";
-        }
-
-        private void ExecuteStartup_Click(object sender, RoutedEventArgs e)
-        {
-            StartupError.Text = "";
-            if (!double.TryParse(TbAxis1.Text, out double a1) ||
-                !double.TryParse(TbAxis3.Text, out double a3) ||
-                !double.TryParse(TbAxis5.Text, out double a5) ||
-                !double.TryParse(TbAxis6.Text, out double a6) ||
-                !double.TryParse(TbAxis2.Text, out double a2) ||
-                !double.TryParse(TbAxis7.Text, out double a7) ||
-                !double.TryParse(TbSpeed.Text, out double speed))
-            {
-                StartupError.Text = "输入格式错误，请输入有效数字。";
-                return;
-            }
-
-            if (a1 < 5 || a1 > 95) { StartupError.Text = "轴1必须在5-95mm之间。"; return; }
-            if (a3 < 10 || a3 > 650) { StartupError.Text = "轴3必须在10-650mm之间。"; return; }
-            if (a5 < 10 || a5 > 670) { StartupError.Text = "轴5必须在10-670mm之间。"; return; }
-            if (a6 < 10 || a6 > 670) { StartupError.Text = "轴6必须在10-670mm之间。"; return; }
-            if (a2 < -360 || a2 > 360) { StartupError.Text = "轴2必须在-360~360度之间。"; return; }
-            if (a7 < -360 || a7 > 360) { StartupError.Text = "轴7必须在-360~360度之间。"; return; }
-            if (speed < 0.00001 || speed > 0.5) { StartupError.Text = "速度比例必须在0.00001-0.5之间。"; return; }
-            if (a6 < a5) { StartupError.Text = "轴6位置必须>=轴5。"; return; }
-            if (a5 < a3) { StartupError.Text = "轴5位置必须>=轴3。"; return; }
-            if (a3 < a1) { StartupError.Text = "轴3位置必须>=轴1。"; return; }
-
-            _vm.SendStartupParams(a1, a3, a5, a6, a2, a7, speed);
+            if (!_vm.StartControl(a1, a3, a5, a6))
+                ControlStartError.Text = "命令未发送，请检查连接、自检状态及 ADS 通信。";
         }
     }
 }
