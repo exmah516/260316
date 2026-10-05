@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- 主从远程协议 v1 的 C# 实现（纯编解码 + 认证，不含网络收发）。
+       权威定义：protocol/PROTOCOL.md。 -->
+  <PropertyGroup>
+    <TargetFramework>net472</TargetFramework>
+    <LangVersion>9.0</LangVersion>
+    <RootNamespace>MasterConsole.Protocol</RootNamespace>
+    <AssemblyName>MasterConsole.Protocol</AssemblyName>
+    <Nullable>disable</Nullable>
+  </PropertyGroup>
+  <ItemGroup>
+    <Reference Include="System.Web.Extensions" />
+  </ItemGroup>
+</Project>

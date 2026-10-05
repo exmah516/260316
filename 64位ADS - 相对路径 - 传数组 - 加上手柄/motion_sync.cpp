@@ -218,6 +218,32 @@ namespace motion_sync
 		return true;
 	}
 
+	bool rebase_dual_after_return(AppContext& ctx)
+	{
+		if (ctx.axis6_handle_filter == nullptr ||
+			(!ctx.axis6_handle_filter->inited && ctx.axis6_input_handle == nullptr) ||
+			ctx.axis6_prev_linear_filtered == nullptr || ctx.axis6_prev_rot_filtered == nullptr)
+		{
+			return false;
+		}
+		// axis1 侧基准、axis2/7 保持、axis3/5 镜像基准与 axis6 命令/窗口一并重建。
+		if (!rebase_axis1_after_return(ctx)) return false;
+
+		if (!ctx.axis6_handle_filter->inited && ctx.axis6_input_handle != nullptr)
+		{
+			ctx.axis6_handle_filter->reset(
+				ctx.axis6_input_handle->fJoints2[0],
+				ctx.axis6_input_handle->fJoints2[1]);
+		}
+		ctx.axis6_crawl->handle_ref = ctx.axis6_handle_filter->axis0_filtered;
+		ctx.axis6_crawl->rot_ref = ctx.axis6_handle_filter->axis1_filtered;
+		*ctx.axis6_prev_linear_filtered = ctx.axis6_handle_filter->axis0_filtered;
+		*ctx.axis6_prev_rot_filtered = ctx.axis6_handle_filter->axis1_filtered;
+		ctx.axis6_crawl->base_rel = ctx.plc_act_pos[5];
+		ctx.axis6_crawl->rot_base_rel = *ctx.axis7_hold_rel;
+		return true;
+	}
+
 	bool rebase_axis6_after_return(AppContext& ctx)
 	{
 		if (ctx.pos == nullptr || ctx.plc_act_pos == nullptr || ctx.plc_init_pos == nullptr ||

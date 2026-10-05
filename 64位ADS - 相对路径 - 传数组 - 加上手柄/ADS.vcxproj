@@ -89,7 +89,7 @@
       <PreprocessorDefinitions>WIN32;_DEBUG;_CONSOLE;NOMINMAX;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions>
-      <AdditionalIncludeDirectories>.\ADS\Include;.\手柄\include;.\手柄;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>.\ADS\Include;.\protocol\cpp;.\手柄\include;.\手柄;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
@@ -105,7 +105,7 @@
       <PreprocessorDefinitions>WIN32;NDEBUG;_CONSOLE;NOMINMAX;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions>
-      <AdditionalIncludeDirectories>.\ADS\Include;.\手柄\include;.\手柄;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>.\ADS\Include;.\protocol\cpp;.\手柄\include;.\手柄;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
@@ -120,7 +120,7 @@
       <SDLCheck>true</SDLCheck>
       <PreprocessorDefinitions>_DEBUG;_CONSOLE;NOMINMAX;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
-      <AdditionalIncludeDirectories>.\ADS\Include;.\手柄\include;.\手柄;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>.\ADS\Include;.\protocol\cpp;.\手柄\include;.\手柄;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions>
     </ClCompile>
     <Link>
@@ -139,7 +139,7 @@
       <PreprocessorDefinitions>NDEBUG;_CONSOLE;NOMINMAX;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions>
-      <AdditionalIncludeDirectories>.\ADS\Include;.\手柄\include;.\手柄;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>.\ADS\Include;.\protocol\cpp;.\手柄\include;.\手柄;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
@@ -156,6 +156,7 @@
     <ClCompile Include="action4_camera.cpp" />
     <ClCompile Include="experiment_recorder.cpp" />
     <ClCompile Include="vis_server.cpp" />
+    <ClCompile Include="remote_gateway.cpp" />
     <ClCompile Include="ads_communication.cpp" />
     <ClCompile Include="plc_io.cpp" />
     <ClCompile Include="motion_sync.cpp" />
@@ -186,6 +187,8 @@
     <ClInclude Include="tcp_force_daq.h" />
     <ClInclude Include="force_calibration.h" />
     <ClInclude Include="vis_server.h" />
+    <ClInclude Include="remote_gateway.h" />
+    <ClInclude Include="protocol\cpp\remote_protocol.h" />
     <ClInclude Include="ads_communication.h" />
     <ClInclude Include="plc_io.h" />
     <ClInclude Include="motion_sync.h" />

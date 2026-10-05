@@ -535,6 +535,13 @@ namespace AdsControlUI
         private void StartControl_Click(object sender, RoutedEventArgs e)
         {
             ControlStartError.Text = "";
+            if (_vm.LatestState.self_check_done)
+            {
+                // 自检已完成：在当前位置直接开始控制，不校验也不使用目标位置输入。
+                if (!_vm.StartDirectControl())
+                    ControlStartError.Text = "命令未发送，请检查连接及 ADS 通信。";
+                return;
+            }
             if (!double.TryParse(TbControlAxis1.Text, out double a1) ||
                 !double.TryParse(TbControlAxis3.Text, out double a3) ||
                 double.IsNaN(a1) || double.IsNaN(a3) ||
@@ -544,7 +551,7 @@ namespace AdsControlUI
                 return;
             }
             double a5 = a3 + 5.0;
-            double a6 = a5 + 26.0;
+            double a6 = a5 + 13.0; // 与 C++ ControlConfig::startup_g_mm 保持一致
             if (a1 < 5 || a1 > 95) { ControlStartError.Text = "轴1必须在5-95mm之间。"; return; }
             if (a3 < 10 || a3 > 639) { ControlStartError.Text = "轴3必须在10-639mm之间，且轴6目标不得超过670mm。"; return; }
             if (a1 > a3 || a3 > a5 || a5 > a6 || a6 > 670)

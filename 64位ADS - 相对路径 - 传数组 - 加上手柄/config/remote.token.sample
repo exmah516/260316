@@ -1,0 +1,2 @@
+把这个文件复制为 remote.token，并替换为至少 16 个字符的随机口令（纯文本一行）。
+从端 ADS.exe 读取其工作目录下的 remote.token；主端读取 exe 同目录或 config/ 下的 remote.token。两端内容必须一致。

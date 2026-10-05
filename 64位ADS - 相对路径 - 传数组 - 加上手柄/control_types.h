@@ -105,10 +105,22 @@ struct ControlConfig
 	// 基于左限位参考的爬行窗口。
 	double axis1_window_left_from_left_mm = 8.0;
 	double axis1_window_right_from_left_mm = 28.0;
-	double catheter_axis6_window_size_mm = 22.0;
-	double catheter_axis6_window_min_gap_from_axis5_mm = 4.0;
+	// axis6 相对 axis5 的间距窗口 g = axis6_from_left - axis5_from_left，范围 [gmin, gmin+size]。
+	// 双手柄同时控制与单手柄导丝角色共用同一窗口（g_min = 0，axis5/6 机构允许接触）。
+	double catheter_axis6_window_size_mm = 26.0;
+	double catheter_axis6_window_min_gap_from_axis5_mm = 0.0;
 	double guidewire_axis6_window_size_mm = 26.0;
 	double guidewire_axis6_window_min_gap_from_axis5_mm = 0.0;
+	// 双手柄同时控制：非触发端（限位端）相对窗口端点内缩的距离；
+	// 该内缩后的限位端同时是换手后的重定位位置（axis1 窗口与 g 窗口共用）。
+	double relocation_inset_mm = 3.0;
+	// 一条链路触发换手时，另一条链路距其端点小于该值且未在远离，则并入同一事务。
+	double transaction_merge_eps_mm = 1.5;
+	// 换手夹爪时序：持有者先夹 -> 等 T_clamp -> 移动者松 -> 等 T_release；回程对称。
+	DWORD axis_clamp_wait_ms = 100;
+	DWORD axis_release_wait_ms = 100;
+	// 启动最终姿态下的 axis6-axis5 间距（窗口中点附近，避免落在端点）。
+	double startup_g_mm = 13.0;
 	// 标准启动中间夹持阶段的轴5/6间距；与运行时20 mm窗口宽度相互独立。
 	double axis56_ready_gap_mm = 15.0;
 	double axis3_delivery_stop_from_left_mm = 20.0;
@@ -116,7 +128,7 @@ struct ControlConfig
 	double guidewire_entry_axis6_from_left_max_mm = 667.0;
 	// 普通导管正向递送中，axis1 每次计划回退后前 10 mm 手柄输入的附加映射量。
 	// 0 表示关闭；默认 4 mm，UI 与内部均限制在 [0, 5] mm。
-	double axis1_post_return_lead_mm = 1.5;
+	double axis1_post_return_lead_mm = 0.0;
 	double axis1_post_return_lead_limit_mm = 5.0;
 	double axis1_post_return_mapping_span_mm = 10.0;
 	// axis6 距自身左限位的上位机内部软限位。达到预测越限条件后仅锁止上位机链路，
@@ -194,7 +206,7 @@ struct ControlConfig
 	double startup_final_axis1_default_from_left_mm = 28.0;
 	double startup_final_axis3_default_from_left_mm = 610.0; 
 	double startup_final_axis5_default_from_left_mm = 615.0;
-	double startup_final_axis6_default_from_left_mm = 641.0;
+	double startup_final_axis6_default_from_left_mm = 628.0; // = axis5(615) + startup_g_mm(13)
 	double startup_rot_arrive_tol_deg = 0.2;
 	// 在 axis3 完全到达目标前提前触发 cylinder2 夹紧；现场调参使其领先约 0.5 s。
 	double startup_axis3_cyl2_clamp_advance_mm = 10.0;
@@ -251,13 +263,15 @@ enum class PlannedReturnMode : unsigned char
 	CatheterDelivery,
 	CatheterRetraction,
 	GuidewireDelivery,
-	GuidewireRetraction
+	GuidewireRetraction,
+	Dual // 双手柄同时控制：不区分递送/撤出，腿集合由触发端决定
 };
 
 enum class PlannedReturnRebaseScope : unsigned char
 {
 	Axis1,
-	Axis6
+	Axis6,
+	Both
 };
 
 // 统一换手通过通信线程异步提交的 ADS 批量命令用途。
@@ -329,6 +343,14 @@ struct PlannedReturnCoordinator
 	std::uint64_t handoff_generation = 0;
 	double hold_axis3_rel = 0.0;
 	double hold_axis5_rel = 0.0;
+	double hold_axis1_rel = 0.0;
+	double hold_axis6_rel = 0.0;
+	// 夹爪两级时序：clamp_stage 0=仅持有者夹紧，1=移动者已松开；
+	// restore_stage 0=移动者已夹紧(持有者仍夹)，1=持有者已松开。
+	unsigned char clamp_stage = 0;
+	unsigned char restore_stage = 0;
+	std::uint64_t release_output_generation = 0;
+	bool release_applied = false;
 
 	bool active() const
 	{

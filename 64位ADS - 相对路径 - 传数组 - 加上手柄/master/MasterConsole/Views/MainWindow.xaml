@@ -1,0 +1,448 @@
+<Window x:Class="MasterConsole.Views.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:conv="clr-namespace:MasterConsole.Converters"
+        xmlns:ctl="clr-namespace:MasterConsole.Controls"
+        Title="血管介入机器人 · 主端控制台"
+        Width="1480" Height="880" MinWidth="1180" MinHeight="720"
+        WindowStartupLocation="CenterScreen"
+        Deactivated="Window_Deactivated">
+    <Window.Resources>
+        <conv:BoolToBrushConverter x:Key="LedGreen" TrueBrush="{StaticResource StatusGreenBrush}" FalseBrush="{StaticResource StatusOffBrush}"/>
+        <conv:BoolToBrushConverter x:Key="LedRed"   TrueBrush="{StaticResource StatusRedBrush}"   FalseBrush="{StaticResource StatusOffBrush}"/>
+
+        <!-- 模式只读展示芯片：Tag 绑定“是否当前模式” -->
+        <Style x:Key="ModeChipDisplay" TargetType="Border">
+            <Setter Property="Background" Value="{StaticResource SurfaceAltBrush}"/>
+            <Setter Property="BorderBrush" Value="{StaticResource BorderBrush}"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="CornerRadius" Value="6"/>
+            <Setter Property="Padding" Value="10,8"/>
+            <Setter Property="Margin" Value="0,0,8,0"/>
+            <Setter Property="IsHitTestVisible" Value="False"/>
+            <Style.Triggers>
+                <DataTrigger Binding="{Binding Tag, RelativeSource={RelativeSource Self}}" Value="True">
+                    <Setter Property="Background" Value="{StaticResource AccentSoftBrush}"/>
+                    <Setter Property="BorderBrush" Value="{StaticResource AccentBrush}"/>
+                </DataTrigger>
+            </Style.Triggers>
+        </Style>
+
+        <!-- 链路区：小号字体 -->
+        <Style x:Key="LinkLabel" TargetType="TextBlock" BasedOn="{StaticResource {x:Type TextBlock}}">
+            <Setter Property="FontSize" Value="10"/>
+            <Setter Property="Foreground" Value="{StaticResource TextMutedBrush}"/>
+            <Setter Property="Margin" Value="0,0,4,0"/>
+        </Style>
+        <Style x:Key="LinkValue" TargetType="TextBlock" BasedOn="{StaticResource {x:Type TextBlock}}">
+            <Setter Property="FontFamily" Value="{StaticResource DataFont}"/>
+            <Setter Property="FontSize" Value="10"/>
+            <Setter Property="Foreground" Value="{StaticResource TextSecondaryBrush}"/>
+            <Setter Property="Margin" Value="0,0,16,0"/>
+        </Style>
+
+
+        <!-- 紧凑控件样式：操作区尽量一屏放下 -->
+        <Style x:Key="CompactButton" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
+            <Setter Property="Padding" Value="8,3"/>
+            <Setter Property="MinHeight" Value="28"/>
+        </Style>
+        <Style x:Key="CompactPrimaryButton" TargetType="Button" BasedOn="{StaticResource PrimaryButton}">
+            <Setter Property="Padding" Value="8,3"/>
+            <Setter Property="MinHeight" Value="28"/>
+        </Style>
+        <!-- 按住动作按钮：比普通紧凑按钮略高，便于按压 -->
+        <Style x:Key="CompactHoldButton" TargetType="Button" BasedOn="{StaticResource CompactButton}">
+            <Setter Property="MinHeight" Value="32"/>
+            <Setter Property="Margin" Value="2,0"/>
+        </Style>
+        <Style x:Key="CompactToggle" TargetType="ToggleButton" BasedOn="{StaticResource {x:Type ToggleButton}}">
+            <Setter Property="Padding" Value="8,3"/>
+            <Setter Property="MinHeight" Value="28"/>
+        </Style>
+        <Style x:Key="CompactTextBox" TargetType="TextBox" BasedOn="{StaticResource {x:Type TextBox}}">
+            <Setter Property="Padding" Value="5,2"/>
+            <Setter Property="Margin" Value="6,2,0,2"/>
+            <Setter Property="HorizontalContentAlignment" Value="Right"/>
+        </Style>
+
+        <!-- 分区小标题与分隔 -->
+        <Style x:Key="SectionTitle" TargetType="TextBlock" BasedOn="{StaticResource {x:Type TextBlock}}">
+            <Setter Property="FontWeight" Value="SemiBold"/>
+            <Setter Property="Foreground" Value="{StaticResource AccentDeepBrush}"/>
+            <Setter Property="Margin" Value="0,0,0,6"/>
+        </Style>
+        <Style x:Key="SectionDivider" TargetType="Border">
+            <Setter Property="BorderBrush" Value="{StaticResource BorderBrush}"/>
+            <Setter Property="BorderThickness" Value="0,1,0,0"/>
+            <Setter Property="Margin" Value="0,7,0,7"/>
+        </Style>
+        <Style x:Key="HintText" TargetType="TextBlock" BasedOn="{StaticResource {x:Type TextBlock}}">
+            <Setter Property="FontSize" Value="11"/>
+            <Setter Property="Foreground" Value="#B45309"/>
+            <Setter Property="TextWrapping" Value="Wrap"/>
+        </Style>
+    </Window.Resources>
+
+    <Grid Margin="12">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <!-- ================= 顶部：标题 + 状态药丸 + 连接/控制权 ================= -->
+        <Border Grid.Row="0" Style="{StaticResource CardBorder}" Padding="14,8" Margin="0,0,0,10">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+
+                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                    <TextBlock Text="血管介入机器人 · 主端" Style="{StaticResource WindowTitleText}" Margin="0,0,18,0"/>
+                    <Border Style="{StaticResource StatusPill}">
+                        <StackPanel Orientation="Horizontal">
+                            <Ellipse Width="10" Height="10" Fill="{Binding IsConnected, Converter={StaticResource LedGreen}}"/>
+                            <TextBlock Text="连接" Style="{StaticResource PillLabel}"/>
+                        </StackPanel>
+                    </Border>
+                    <Border Style="{StaticResource StatusPill}">
+                        <StackPanel Orientation="Horizontal">
+                            <Ellipse Width="10" Height="10" Fill="{Binding HasControl, Converter={StaticResource LedGreen}}"/>
+                            <TextBlock Text="控制权" Style="{StaticResource PillLabel}"/>
+                        </StackPanel>
+                    </Border>
+                    <Border Style="{StaticResource StatusPill}">
+                        <StackPanel Orientation="Horizontal">
+                            <Ellipse Width="10" Height="10" Fill="{Binding EstopHold, Converter={StaticResource LedRed}}"/>
+                            <TextBlock Text="急停" Style="{StaticResource PillLabel}"/>
+                        </StackPanel>
+                    </Border>
+                    <Border Style="{StaticResource StatusPill}">
+                        <StackPanel Orientation="Horizontal">
+                            <Ellipse Width="10" Height="10" Fill="{Binding FfEnabled, Converter={StaticResource LedGreen}}"/>
+                            <TextBlock Text="力反馈" Style="{StaticResource PillLabel}"/>
+                        </StackPanel>
+                    </Border>
+                    <Border Style="{StaticResource StatusPill}">
+                        <StackPanel Orientation="Horizontal">
+                            <Ellipse Width="10" Height="10" Fill="{Binding AdsHealthy, Converter={StaticResource LedGreen}}"/>
+                            <TextBlock Text="从端 ADS" Style="{StaticResource PillLabel}"/>
+                        </StackPanel>
+                    </Border>
+                </StackPanel>
+
+                <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                    <TextBlock Text="{Binding ModeText, StringFormat='模式 · {0}'}"
+                               FontWeight="SemiBold" FontSize="13"
+                               Foreground="{StaticResource AccentDeepBrush}" Margin="0,0,10,0"/>
+                    <Border Background="{StaticResource AccentSoftBrush}" CornerRadius="12" Padding="10,4" Margin="0,0,16,0">
+                        <TextBlock Text="{Binding PhaseText}" Foreground="{StaticResource AccentDeepBrush}" FontWeight="SemiBold"/>
+                    </Border>
+                    <TextBlock Text="{Binding LinkName}" Style="{StaticResource CaptionText}" Margin="0,0,10,0"/>
+                    <Button Content="{Binding ConnectButtonText}" Command="{Binding ConnectCommand}"
+                            Style="{StaticResource PrimaryButton}" MinWidth="96" Margin="0,0,8,0"/>
+                    <Button Content="{Binding ControlButtonText}" Command="{Binding AcquireCommand}"
+                            IsEnabled="{Binding IsConnected}" MinWidth="96"/>
+                </StackPanel>
+            </Grid>
+        </Border>
+
+        <!-- ================= 中部：显示区 | 状态区 + 操作区 ================= -->
+        <Grid Grid.Row="1">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="430"/>
+            </Grid.ColumnDefinitions>
+
+            <!-- 显示区 -->
+            <Grid Grid.Column="0" Margin="0,0,10,0">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="3*"/>
+                    <RowDefinition Height="10"/>
+                    <RowDefinition Height="2*"/>
+                </Grid.RowDefinitions>
+
+                <ctl:PlaceholderPane Grid.Row="0" Title="影像显示区"
+                                     Hint="手术影像（视频流）接入后显示在此处"/>
+
+                <Grid Grid.Row="2">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="10"/>
+                        <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
+
+                    <ctl:PlaceholderPane Grid.Column="0" Title="机器人 URDF 模型"
+                                         Hint="三维模型视图接入后显示在此处"/>
+
+                    <GroupBox Grid.Column="2" Header="事件日志" Margin="0" Padding="8,6">
+                        <ListBox ItemsSource="{Binding Log}" BorderThickness="0" Background="Transparent"
+                                 ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+                            <ListBox.ItemTemplate>
+                                <DataTemplate>
+                                    <Grid Margin="0,1">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="58"/>
+                                            <ColumnDefinition Width="*"/>
+                                        </Grid.ColumnDefinitions>
+                                        <TextBlock Text="{Binding Time}" Style="{StaticResource CaptionText}"
+                                                   FontFamily="{StaticResource DataFont}"/>
+                                        <TextBlock Grid.Column="1" Text="{Binding Text}" TextWrapping="Wrap"
+                                                   VerticalAlignment="Top">
+                                            <TextBlock.Style>
+                                                <Style TargetType="TextBlock" BasedOn="{StaticResource {x:Type TextBlock}}">
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding Level}" Value="warn">
+                                                            <Setter Property="Foreground" Value="#B45309"/>
+                                                        </DataTrigger>
+                                                        <DataTrigger Binding="{Binding Level}" Value="error">
+                                                            <Setter Property="Foreground" Value="{StaticResource StatusRedBrush}"/>
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </TextBlock.Style>
+                                        </TextBlock>
+                                    </Grid>
+                                </DataTemplate>
+                            </ListBox.ItemTemplate>
+                        </ListBox>
+                    </GroupBox>
+                </Grid>
+            </Grid>
+
+            <!-- 状态区 + 操作区（紧凑布局，尽量一屏放下） -->
+            <ScrollViewer Grid.Column="1" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                <StackPanel Margin="0,0,6,0">
+
+                    <!-- ===== 状态区 ===== -->
+                    <GroupBox Header="状态区" Padding="10,6" Margin="0,0,0,6">
+                        <StackPanel>
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="*"/>
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Text="模式（仅显示）" Style="{StaticResource FieldLabelText}" Margin="0,0,10,0"/>
+                                <StackPanel Grid.Column="1" Orientation="Horizontal">
+                                    <Border Style="{StaticResource ModeChipDisplay}" Tag="{Binding IsCatheterMode}">
+                                        <TextBlock Text="导管" HorizontalAlignment="Center" MinWidth="52"/>
+                                    </Border>
+                                    <Border Style="{StaticResource ModeChipDisplay}" Tag="{Binding IsGuidewireMode}">
+                                        <TextBlock Text="导丝" HorizontalAlignment="Center" MinWidth="52"/>
+                                    </Border>
+                                </StackPanel>
+                            </Grid>
+
+                            <Border Style="{StaticResource SectionDivider}"/>
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto" MinWidth="100"/>
+                                    <ColumnDefinition Width="Auto" MinWidth="100"/>
+                                </Grid.ColumnDefinitions>
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="Auto"/>
+                                </Grid.RowDefinitions>
+                                <TextBlock Grid.Column="1" Text="力" Style="{StaticResource CaptionText}" HorizontalAlignment="Right"/>
+                                <TextBlock Grid.Column="2" Text="扭矩" Style="{StaticResource CaptionText}" HorizontalAlignment="Right"/>
+
+                                <TextBlock Grid.Row="1" Text="手柄 582" Style="{StaticResource FieldLabelText}" Margin="0,2"/>
+                                <TextBlock Grid.Row="1" Grid.Column="1" Text="{Binding Force582F}" Style="{StaticResource DataValueText}" HorizontalAlignment="Right"/>
+                                <TextBlock Grid.Row="1" Grid.Column="2" Text="{Binding Force582N}" Style="{StaticResource DataValueText}" HorizontalAlignment="Right"/>
+
+                                <TextBlock Grid.Row="2" Text="手柄 587" Style="{StaticResource FieldLabelText}" Margin="0,2"/>
+                                <TextBlock Grid.Row="2" Grid.Column="1" Text="{Binding Force587F}" Style="{StaticResource DataValueText}" HorizontalAlignment="Right"/>
+                                <TextBlock Grid.Row="2" Grid.Column="2" Text="{Binding Force587N}" Style="{StaticResource DataValueText}" HorizontalAlignment="Right"/>
+
+                                <TextBlock Grid.Row="3" Text="纯净力" Style="{StaticResource FieldLabelText}" Margin="0,2"/>
+                                <TextBlock Grid.Row="3" Grid.Column="1" Text="{Binding CleanForce}" Style="{StaticResource DataValueText}" HorizontalAlignment="Right"/>
+                            </Grid>
+
+                            <Border Background="{StaticResource SurfaceAltBrush}" CornerRadius="4" Padding="8,5" Margin="0,8,0,0">
+                                <TextBlock Text="七轴位置 / 行程（预留）" Foreground="{StaticResource TextMutedBrush}"
+                                           FontSize="11" HorizontalAlignment="Center"/>
+                            </Border>
+                        </StackPanel>
+                    </GroupBox>
+
+                    <!-- ===== 操作区 ===== -->
+                    <GroupBox Header="操作区" Padding="10,6" Margin="0">
+                        <StackPanel>
+                            <TextBlock Text="{Binding OperateHintText}" Style="{StaticResource HintText}" Margin="0,0,0,6">
+                                <TextBlock.Visibility>
+                                    <Binding Path="CanOperate">
+                                        <Binding.Converter>
+                                            <conv:InverseBoolToVisibilityConverter/>
+                                        </Binding.Converter>
+                                    </Binding>
+                                </TextBlock.Visibility>
+                            </TextBlock>
+
+                            <StackPanel IsEnabled="{Binding CanOperate}">
+
+                                <!-- 1. 进入器械准备位置：两个输入框在左，按钮跨两行在右 -->
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="62"/>
+                                        <ColumnDefinition Width="112"/>
+                                    </Grid.ColumnDefinitions>
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="Auto"/>
+                                    </Grid.RowDefinitions>
+                                    <TextBlock Text="导管搓捻机构位置 (5–95 mm)" Style="{StaticResource FieldLabelText}" FontSize="11.5"/>
+                                    <TextBox Grid.Column="1" Style="{StaticResource CompactTextBox}"
+                                             Text="{Binding CatheterText, UpdateSourceTrigger=PropertyChanged}"/>
+                                    <TextBlock Grid.Row="1" Text="Y阀及导丝机构位置 (10–639 mm)" Style="{StaticResource FieldLabelText}" FontSize="11.5"/>
+                                    <TextBox Grid.Row="1" Grid.Column="1" Style="{StaticResource CompactTextBox}"
+                                             Text="{Binding WireText, UpdateSourceTrigger=PropertyChanged}"/>
+                                    <Button Grid.Column="2" Grid.RowSpan="2" Content="进入器械&#10;准备位置" Command="{Binding PrepareCommand}"
+                                            Style="{StaticResource CompactPrimaryButton}" Margin="6,2,0,2"/>
+                                </Grid>
+                                <TextBlock Style="{StaticResource CaptionText}" FontSize="10.5" Margin="0,2,0,0">
+                                    <Run Text="状态："/><Run Text="{Binding PrepareStatusText, Mode=OneWay}"/>
+                                </TextBlock>
+                                <TextBlock Text="{Binding PrepareError}" Style="{StaticResource ErrorText}" Margin="0,1,0,0"/>
+
+                                <Border Style="{StaticResource SectionDivider}"/>
+
+                                <!-- 2. 力反馈 + 电缸 1–4 -->
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="Auto"/>
+                                        <ColumnDefinition Width="*"/>
+                                    </Grid.ColumnDefinitions>
+                                    <ToggleButton Content="力反馈" Style="{StaticResource CompactToggle}" MinWidth="92"
+                                                  Command="{Binding ForceFeedbackCommand}"
+                                                  IsChecked="{Binding FfEnabled, Mode=OneWay}"/>
+                                    <TextBlock Grid.Column="1" Text="{Binding FfCaption}" Style="{StaticResource CaptionText}"
+                                               FontSize="10.5" Margin="8,0,0,0" TextWrapping="Wrap"/>
+                                </Grid>
+                                <TextBlock Text="电缸（点击打开，再点恢复原状态）" Style="{StaticResource CaptionText}" FontSize="10.5" Margin="0,8,0,3"/>
+                                <ItemsControl ItemsSource="{Binding Cylinders}">
+                                    <ItemsControl.ItemsPanel>
+                                        <ItemsPanelTemplate>
+                                            <UniformGrid Columns="4"/>
+                                        </ItemsPanelTemplate>
+                                    </ItemsControl.ItemsPanel>
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate>
+                                            <ToggleButton Content="{Binding Title}" Style="{StaticResource CompactToggle}" Margin="0,0,4,0"
+                                                          IsChecked="{Binding Engaged, Mode=OneWay}"
+                                                          Command="{Binding DataContext.CylinderCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
+                                                          CommandParameter="{Binding}">
+                                                <ToggleButton.ToolTip>
+                                                    <TextBlock>
+                                                        <Run Text="{Binding Caption, Mode=OneWay}"/><Run Text=" · "/><Run Text="{Binding CurrentText, Mode=OneWay}"/>
+                                                    </TextBlock>
+                                                </ToggleButton.ToolTip>
+                                            </ToggleButton>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+
+                                <Border Style="{StaticResource SectionDivider}"/>
+
+                                <!-- 3. Y 阀 / 轴4 / 注射器（重点，按住动作） -->
+                                <Border BorderBrush="{StaticResource AccentBrush}" BorderThickness="1" CornerRadius="5"
+                                        Background="{StaticResource AccentSoftBrush}" Padding="8,6">
+                                    <StackPanel>
+                                        <Grid>
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="Auto"/>
+                                                <ColumnDefinition Width="*"/>
+                                            </Grid.ColumnDefinitions>
+                                            <ToggleButton Content="关闭 Y 阀" Style="{StaticResource CompactToggle}" MinWidth="92"
+                                                          Command="{Binding YValveCommand}"
+                                                          IsChecked="{Binding YValveClosed, Mode=OneWay}"/>
+                                            <TextBlock Grid.Column="1" Text="{Binding YValveCaption}" Style="{StaticResource CaptionText}"
+                                                       FontSize="10.5" Margin="8,0,0,0" TextWrapping="Wrap"/>
+                                        </Grid>
+
+                                        <TextBlock Text="按住动作，松开即停" Style="{StaticResource CaptionText}" FontSize="10.5" Margin="0,7,0,2"/>
+
+                                        <!-- 轴4 -->
+                                        <Grid Margin="0,2">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="58"/>
+                                                <ColumnDefinition Width="*"/>
+                                                <ColumnDefinition Width="*"/>
+                                                <ColumnDefinition Width="52"/>
+                                            </Grid.ColumnDefinitions>
+                                            <TextBlock Text="轴4点动" Style="{StaticResource FieldLabelText}" FontSize="11.5"/>
+                                            <Button Grid.Column="1" Content="后退" Tag="A4" CommandParameter="-1" Style="{StaticResource CompactHoldButton}"
+                                                    PreviewMouseLeftButtonDown="HoldButton_Down" PreviewMouseLeftButtonUp="HoldButton_Up" LostMouseCapture="HoldButton_Up"/>
+                                            <Button Grid.Column="2" Content="前进" Tag="A4" CommandParameter="1" Style="{StaticResource CompactHoldButton}"
+                                                    PreviewMouseLeftButtonDown="HoldButton_Down" PreviewMouseLeftButtonUp="HoldButton_Up" LostMouseCapture="HoldButton_Up"/>
+                                            <TextBlock Grid.Column="3" Text="{Binding Axis4Text}" Style="{StaticResource CaptionText}" FontSize="10.5" HorizontalAlignment="Right"/>
+                                        </Grid>
+
+                                        <!-- 注射器 1 -->
+                                        <Grid Margin="0,2">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="58"/>
+                                                <ColumnDefinition Width="*"/>
+                                                <ColumnDefinition Width="*"/>
+                                                <ColumnDefinition Width="52"/>
+                                            </Grid.ColumnDefinitions>
+                                            <TextBlock Text="注射器1" Style="{StaticResource FieldLabelText}" FontSize="11.5"/>
+                                            <Button Grid.Column="1" Content="推" Tag="1" CommandParameter="1" Style="{StaticResource CompactHoldButton}"
+                                                    PreviewMouseLeftButtonDown="HoldButton_Down" PreviewMouseLeftButtonUp="HoldButton_Up" LostMouseCapture="HoldButton_Up"/>
+                                            <Button Grid.Column="2" Content="拉" Tag="1" CommandParameter="-1" Style="{StaticResource CompactHoldButton}"
+                                                    PreviewMouseLeftButtonDown="HoldButton_Down" PreviewMouseLeftButtonUp="HoldButton_Up" LostMouseCapture="HoldButton_Up"/>
+                                            <TextBlock Grid.Column="3" Text="{Binding Injector1Text}" Style="{StaticResource CaptionText}" FontSize="10.5" HorizontalAlignment="Right"/>
+                                        </Grid>
+
+                                        <!-- 注射器 2 -->
+                                        <Grid Margin="0,2">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="58"/>
+                                                <ColumnDefinition Width="*"/>
+                                                <ColumnDefinition Width="*"/>
+                                                <ColumnDefinition Width="52"/>
+                                            </Grid.ColumnDefinitions>
+                                            <TextBlock Text="注射器2" Style="{StaticResource FieldLabelText}" FontSize="11.5"/>
+                                            <Button Grid.Column="1" Content="推" Tag="2" CommandParameter="1" Style="{StaticResource CompactHoldButton}"
+                                                    PreviewMouseLeftButtonDown="HoldButton_Down" PreviewMouseLeftButtonUp="HoldButton_Up" LostMouseCapture="HoldButton_Up"/>
+                                            <Button Grid.Column="2" Content="拉" Tag="2" CommandParameter="-1" Style="{StaticResource CompactHoldButton}"
+                                                    PreviewMouseLeftButtonDown="HoldButton_Down" PreviewMouseLeftButtonUp="HoldButton_Up" LostMouseCapture="HoldButton_Up"/>
+                                            <TextBlock Grid.Column="3" Text="{Binding Injector2Text}" Style="{StaticResource CaptionText}" FontSize="10.5" HorizontalAlignment="Right"/>
+                                        </Grid>
+                                    </StackPanel>
+                                </Border>
+                            </StackPanel>
+                        </StackPanel>
+                    </GroupBox>
+                </StackPanel>
+            </ScrollViewer>
+        </Grid>
+
+        <!-- ================= 底部：链路区（小号字体） ================= -->
+        <Border Grid.Row="2" Style="{StaticResource CardBorder}" Padding="12,5" Margin="0,10,0,0">
+            <WrapPanel VerticalAlignment="Center">
+                <TextBlock Text="链路" Style="{StaticResource LinkLabel}"/>
+                <TextBlock Text="{Binding LinkName}" Style="{StaticResource LinkValue}"/>
+                <TextBlock Text="会话" Style="{StaticResource LinkLabel}"/>
+                <TextBlock Text="{Binding SessionText}" Style="{StaticResource LinkValue}"/>
+                <TextBlock Text="往返时延" Style="{StaticResource LinkLabel}"/>
+                <TextBlock Text="{Binding RttText}" Style="{StaticResource LinkValue}"/>
+                <TextBlock Text="状态数据龄" Style="{StaticResource LinkLabel}"/>
+                <TextBlock Text="{Binding StatusAgeText}" Style="{StaticResource LinkValue}"/>
+                <TextBlock Text="触觉帧龄" Style="{StaticResource LinkLabel}"/>
+                <TextBlock Text="{Binding HapticAgeText}" Style="{StaticResource LinkValue}"/>
+                <TextBlock Text="状态帧率" Style="{StaticResource LinkLabel}"/>
+                <TextBlock Text="{Binding StatusHzText}" Style="{StaticResource LinkValue}"/>
+                <TextBlock Text="丢弃帧" Style="{StaticResource LinkLabel}"/>
+                <TextBlock Text="{Binding DroppedText}" Style="{StaticResource LinkValue}"/>
+                <TextBlock Text="从端 ADS" Style="{StaticResource LinkLabel}"/>
+                <TextBlock Text="{Binding AdsText}" Style="{StaticResource LinkValue}"/>
+            </WrapPanel>
+        </Border>
+    </Grid>
+</Window>

@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- 主端控制台：只有界面和手柄，不碰 ADS/PLC，只通过网络与从端（数据端）通信。 -->
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net472</TargetFramework>
+    <PlatformTarget>x64</PlatformTarget>
+    <UseWPF>true</UseWPF>
+    <RootNamespace>MasterConsole</RootNamespace>
+    <AssemblyName>MasterConsole</AssemblyName>
+    <LangVersion>9.0</LangVersion>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\MasterConsole.Protocol\MasterConsole.Protocol.csproj" />
+  </ItemGroup>
+</Project>

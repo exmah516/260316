@@ -975,6 +975,13 @@ namespace AdsControlUI
             _client.SendCommand(VisCommandType.ExecuteStartup);
         }
 
+        // 自检已完成：直接在当前位置开始控制，不需要也不发送任何目标位置。
+        public bool StartDirectControl()
+        {
+            if (!CanStartControl) return false;
+            return _client.SendCommand(VisCommandType.SelectDirectControl);
+        }
+
         public bool StartControl(double a1, double a3, double a5, double a6)
         {
             if (!CanStartControl) return false;

@@ -1,0 +1,5 @@
+token_ascii=vessel-robot-demo-token
+nonce_client=000102030405060708090a0b0c0d0e0f
+nonce_server=101112131415161718191a1b1c1d1e1f
+auth_mac=6f0e36a8791431df9a774e202c4655069f913ceb87dea66218bc6816bcb2c8ae
+session_key=dc5c8014eb0adb3176609d8fb089a992
