@@ -95,6 +95,9 @@ namespace MasterConsole.Protocol
         public static string StartControl(int id)
             => Cmd(id, "start_control");
 
+        public static string RefreshHandles(int id, int successMask)
+            => Cmd(id, "refresh_handles", ("success_mask", successMask));
+
         /// <summary>Y 阀：closed=true 为关闭，false 为打开（取消关闭）。</summary>
         public static string YValve(int id, bool closed)
             => Cmd(id, "yvalve", ("closed", closed));

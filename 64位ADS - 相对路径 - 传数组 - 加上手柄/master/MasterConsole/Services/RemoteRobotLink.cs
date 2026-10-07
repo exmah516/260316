@@ -233,6 +233,21 @@ namespace MasterConsole.Services
         public Task<CommandResult> StartControlAsync()
             => RequestAsync(id => CommandMessages.StartControl(id), 10000);
 
+        public async Task<CommandResult> RefreshHandlesAsync()
+        {
+            int mask = _handles?.RefreshNow() ?? 0;
+            if (mask < 0) return CommandResult.Rejected("刷新已在进行中");
+            var result = await RequestAsync(id => CommandMessages.RefreshHandles(id, mask), 5000);
+            if (!result.Ok) return result;
+            return CommandResult.DoneWithReason(HandleRefreshMessage(mask));
+        }
+
+        private static string HandleRefreshMessage(int mask)
+            => mask == 3 ? "两只手柄已重读并建立新中立基准。"
+             : mask == 1 ? "仅手柄 582 重读成功；587 保留原状态和基准。"
+             : mask == 2 ? "仅手柄 587 重读成功；582 保留原状态和基准。"
+             : "本次未读到有效手柄；原状态和基准已保留。";
+
         public Task<CommandResult> SetForceFeedbackAsync(bool enable)
             => RequestAsync(id => CommandMessages.ForceFeedback(id, enable), 15000);
 

@@ -1,0 +1,19 @@
+<UserControl x:Class="MasterConsole.Controls.DsaImageView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             x:Name="Root">
+    <Border Background="#0F172A" CornerRadius="6" ClipToBounds="True">
+        <Grid>
+            <Image x:Name="Image" Stretch="Uniform"/>
+            <Border Background="#B80F172A" Padding="10,6" HorizontalAlignment="Left" VerticalAlignment="Top" Margin="12" CornerRadius="4">
+                <StackPanel>
+                    <TextBlock Text="DSA影像" Foreground="#E2E8F0" FontSize="15" FontWeight="SemiBold"/>
+                    <TextBlock x:Name="StatusText" Text="等待DSA影像" Foreground="#CBD5E1" FontSize="11" Margin="0,3,0,0"/>
+                </StackPanel>
+            </Border>
+            <Border Background="#CC0F172A" Padding="8,4" HorizontalAlignment="Right" VerticalAlignment="Bottom" Margin="8">
+                <TextBlock x:Name="DetailText" Text="独立影像链路 · 尚未接入" Foreground="#CBD5E1" FontSize="10.5"/>
+            </Border>
+        </Grid>
+    </Border>
+</UserControl>

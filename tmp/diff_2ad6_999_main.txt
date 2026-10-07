@@ -1,0 +1,557 @@
+diff --git a/64位ADS - 相对路径 - 传数组 - 加上手柄/main.cpp b/64位ADS - 相对路径 - 传数组 - 加上手柄/main.cpp
+index f1225c1..cda3b32 100644
+--- a/64位ADS - 相对路径 - 传数组 - 加上手柄/main.cpp	
++++ b/64位ADS - 相对路径 - 传数组 - 加上手柄/main.cpp	
+@@ -54,180 +54,202 @@ int main(int argc, char* argv[])
+ 	if (argc > 1 && (std::string(argv[1]) == "--buttons" || std::string(argv[1]) == "--btn"))
+ 	{
+ 		DWORD test_serial = serial_axis1_handle;
+ 		if (argc > 2)
+ 		{
+ 			test_serial = static_cast<DWORD>(std::strtoul(argv[2], nullptr, 10));
+ 		}
+ 
+ 		Handle test_handle(test_serial);
+ 		if (!test_handle.init())
+ 		{
+ 			std::cout << "手柄初始化失败，序列号: " << test_serial << std::endl;
+ 			return 0;
+ 		}
+ 
+ 		std::cout << "=== 按键测试模式 ===" << std::endl;
+ 		std::cout << "序列号: " << test_serial << std::endl;
+ 		std::cout << "请按下按键查看位掩码。" << std::endl;
+ 		std::cout << "按 ESC 或 q 退出。" << std::endl;
+ 
+ 		unsigned char last_btn = 0xFF;
+ 		while (true)
+ 		{
+ 			test_handle.poll();
+ 			const unsigned char cur_btn = test_handle.buttons2;
+ 
+ 			if (cur_btn != last_btn)
+ 			{
+ 				std::cout << "按键: 0x" << std::hex << static_cast<int>(cur_btn) << std::dec << " | 位: ";
+ 				for (int i = 0; i < 8; ++i)
+ 				{
+ 					std::cout << ((cur_btn >> i) & 1);
+ 				}
+ 				std::cout << std::endl;
+ 				last_btn = cur_btn;
+ 			}
+ 
+ 			if (_kbhit())
+ 			{
+ 				const int ch = _getch();
+ 				if (ch == 27 || ch == 'q')
+ 				{
+ 					break;
+ 				}
+ 			}
+ 			Sleep(10);
+ 		}
+ 
+ 		test_handle.close();
+ 		return 0;
+ 	}
+ 
+ 	ControlConfig cfg;
+ 	const CylinderPreset cyl;
+ 
+ 	// B7 选择当前物理手柄语义，选中后对应手柄的 B6 电平决定递送或撤出。
+ 
+ 	// 长生命周期运行时对象。
+ 	Handle handle_axis1(serial_axis1_handle);
+ 	Handle handle_axis6(serial_axis6_handle);
+ 	CADSComm ads;
+ 	TcpForceDaqClient tcp_force_daq;
+ 	DeliveryTrackingController tracking_controller;
+ 	ExperimentRecorder experiment_recorder;
+ 	VisServer vis_server;
+ 	RemoteGateway remote_gateway;
+ 	HandleFilterState axis1_handle_filter;
+ 	HandleFilterState axis6_handle_filter;
+ 	// 首位启动 ADS 100 Hz 后台通信服务与辅助服务，彻底消除主线程直连并发竞争。
+ 	AdsCommunicationService ads_communication(ads);
+ 	ArmManualAdsService arm_manual_ads(ads_communication);
+ 	if (!ads_communication.start(nullptr, nullptr))
+ 	{
+ 		std::cout << "警告：ADS 100 Hz 通信后台服务启动失败。" << std::endl;
+ 	}
+ 	if (!arm_manual_ads.start())
+ 	{
+ 		std::cout << "定位臂低频 ADS 服务启动失败，定位臂 UI 将保持不可用。" << std::endl;
+ 	}
+ 	vis_server.start();
++	// 手柄来源：网关启用时，手柄实体在主端，采样经网关写入数据桥；
++	// 加参数 --local-handles 可强制使用本机 SDK 手柄（单机调试用）。
++	bool remote_handles_active = false;
+ 	{
+ 		// 远程网关：仅当存在 remote.token 时启用；命令经同一套 VisCommand 循环处理。
+ 		RemoteGatewayConfig remote_cfg;
+ 		remote_cfg.startup_g_mm = cfg.startup_g_mm;
+-		remote_gateway.start(remote_cfg);
++		const bool gateway_ok = remote_gateway.start(remote_cfg);
++		bool force_local_handles = false;
++		for (int arg_index = 1; arg_index < argc; ++arg_index)
++		{
++			if (std::string(argv[arg_index]) == "--local-handles") force_local_handles = true;
++		}
++		if (gateway_ok && !force_local_handles)
++		{
++			Handle::use_remote(true);
++			remote_handles_active = true;
++			remote_gateway.set_handles_remote(true);
++			std::cout << "手柄来源：主端（远程）。本机不再访问手柄 SDK；如需使用本机手柄请加参数 --local-handles。" << std::endl;
++		}
++		else if (gateway_ok)
++		{
++			std::cout << "手柄来源：本机（--local-handles）。远程网关仍可使用，但主端手柄输入不会被采用。" << std::endl;
++		}
+ 	}
+ 
+ 	bool axis1_handle_ready = handle_axis1.init();
+-	if (!axis1_handle_ready)
++	if (!axis1_handle_ready && !remote_handles_active)
+ 	{
+ 		std::cout << "手柄初始化未就绪，序列号: " << serial_axis1_handle << "，将在后台持续重试。" << std::endl;
+ 	}
+ 	const bool axis6_handle_ready_init = handle_axis6.init();
+ 	bool axis6_handle_ready = axis6_handle_ready_init;
+-	if (!axis6_handle_ready)
++	if (!axis6_handle_ready && !remote_handles_active)
+ 	{
+ 		std::cout << "手柄初始化未就绪，序列号: " << serial_axis6_handle << "，将在后台持续重试。" << std::endl;
+ 	}
+ 
+ 	bool handle_startup_locked = false;
++	// 远程手柄只出现一只时先等一小段时间再锁定单手柄模式，避免两只手柄的采样先后到达被误判。
++	ULONGLONG remote_single_handle_since_ms = 0;
++	constexpr ULONGLONG remote_single_handle_grace_ms = 3000;
+ 	bool single_handle_mode = false;
+ 	GuidewireMode single_handle_requested_mode = GuidewireMode::None;
+ 	Handle* axis1_input_handle = &handle_axis1;
+ 	Handle* axis6_input_handle = &handle_axis6;
+ 	Handle* catheter_force_output_handle = &handle_axis1;
+ 	Handle* guidewire_force_output_handle = &handle_axis6;
+ 
+ 	auto lock_handle_mode = [&](bool axis1_ok, bool axis6_ok)
+ 	{
+ 		if (handle_startup_locked) return;
+ 		if (axis1_ok && axis6_ok)
+ 		{
+ 			single_handle_mode = false;
+ 			axis1_input_handle = &handle_axis1;
+ 			axis6_input_handle = &handle_axis6;
+ 			catheter_force_output_handle = &handle_axis1;
+ 			guidewire_force_output_handle = &handle_axis6;
+ 			handle_startup_locked = true;
+ 			std::cout << "双手柄模式已锁定（582/导管 + 587/导丝）。" << std::endl;
+ 		}
+ 		else if (axis1_ok || axis6_ok)
+ 		{
+ 			single_handle_mode = true;
+ 			Handle* single_handle = axis1_ok ? &handle_axis1 : &handle_axis6;
+ 			const DWORD single_serial = axis1_ok ? serial_axis1_handle : serial_axis6_handle;
+ 			axis1_input_handle = single_handle;
+ 			axis6_input_handle = single_handle;
+ 			catheter_force_output_handle = single_handle;
+ 			guidewire_force_output_handle = single_handle;
+ 			single_handle_requested_mode = GuidewireMode::None;
+ 			handle_startup_locked = true;
+ 			std::cout << "单手柄模式已锁定（序列号: " << single_serial << "）。" << std::endl;
+ 		}
+ 	};
+ 
+ 	if (axis1_handle_ready || axis6_handle_ready)
+ 	{
+ 		lock_handle_mode(axis1_handle_ready, axis6_handle_ready);
+ 	}
+ 	else
+ 	{
+ 		std::cout << "两只手柄均未连接，程序进入等待连接状态（每隔 1 秒重试）..." << std::endl;
+ 	}
+ 	ForceFeedbackState ff;
+ 
+ 	// 力输出统一入口：轴向力按配置的 SDK force axis 下发，力矩仍走 torque 参数。
+ 	auto apply_force_output = [&](double force_582_f, double force_582_n, double force_587_f, double force_587_n)
+ 	{
+ 		handle_axis1.setforce_axis(force_582_f, cfg.axial_force_axis, force_582_n);
+ 		handle_axis6.setforce_axis(force_587_f, cfg.axial_force_axis, force_587_n);
+ 	};
+ 
+ 	// 双手柄力输出清零（用于暂停、急停保持、F=OFF 等场景）。
+ 	auto clear_force_output = [&]()
+ 	{
+ 		// 立即清除闭爪保持状态，避免安全事件后的下一拍继续复用旧力值。
+ 		ff.clear_clamp_holds();
+ 		apply_force_output(0.0, 0.0, 0.0, 0.0);
+ 	};
+ 
+ 	// PLC 镜像状态数组：在生成新的 refer 帧前会先通过 ADS 刷新。
+ 	double pos[7] = { 0 }; // 上位机本周期目标（将写入 G.refer，坐标系：相对 init_pos）
+ 	double plc_act_pos[7] = { 0 }; // PLC 当前相对位置（G.Act_pos）
+ 	double plc_init_pos[7] = { 0 }; // PLC 相对零点偏置（G.init_pos）
+ 	double plc_leftlimit[7] = { 0 }; // 左限位绝对位置（G.leftlimit）
+ 	double plc_act_pos_from_left[7] = { 0 };
+ 	double plc_v_limit[7] = { 0 };
+ 	bool startup_smoothing_bypass = false;
+ 
+ 	// 主循环共享上下文：集中收敛模块调用所需的运行态对象与缓存指针。
+ 	AppContext ctx;
+ 	ctx.ads = &ads;
+ 	ctx.axis1_input_handle = axis1_input_handle;
+ 	ctx.axis6_input_handle = axis6_input_handle;
+ 	ctx.handle_axis1 = &handle_axis1;
+ 	ctx.handle_axis6 = &handle_axis6;
+ 	ctx.axis1_handle_filter = &axis1_handle_filter;
+ 	ctx.axis6_handle_filter = &axis6_handle_filter;
+ 	ctx.cfg = &cfg;
+ 	ctx.cyl = &cyl;
+@@ -1038,162 +1060,179 @@ int main(int argc, char* argv[])
+ 		{
+ 			std::uint64_t error_id_sequence = 0;
+ 			std::uint32_t error_id = 0;
+ 			if (pending_return_error_axis == 0)
+ 			{
+ 				error_id_sequence = ads_events.axis1_return_last_nonzero_error_id_sequence;
+ 				error_id = ads_events.axis1_return_last_nonzero_error_id;
+ 			}
+ 			else if (pending_return_error_axis == 5)
+ 			{
+ 				error_id_sequence = ads_events.axis6_return_last_nonzero_error_id_sequence;
+ 				error_id = ads_events.axis6_return_last_nonzero_error_id;
+ 			}
+ 			if (error_id != 0 && error_id_sequence >= pending_return_error_event_sequence)
+ 			{
+ 				std::cout << "axis" << (pending_return_error_axis + 1)
+ 					<< " 计划回退最终错误码: " << error_id << std::endl;
+ 				pending_return_error_axis = -1;
+ 				pending_return_error_event_sequence = 0;
+ 				pending_return_error_deadline_ms = 0;
+ 			}
+ 			else if (pending_return_error_deadline_ms != 0 &&
+ 				GetTickCount64() >= pending_return_error_deadline_ms)
+ 			{
+ 				pending_return_error_axis = -1;
+ 				pending_return_error_event_sequence = 0;
+ 				pending_return_error_deadline_ms = 0;
+ 			}
+ 		}
+ 		self_check_done = ads_events.self_check_done;
+ 		if (ads_events.selfcheck_status == 2 || ads_events.selfcheck_status == 0 ||
+ 			ads_events.selfcheck_status == 3 ||
+ 			ads_stats.state != AdsConnectionState::Running)
+ 			selfcheck_start_pending = false;
+ 		if (ads_events.selfcheck_status == 2 || self_check_done)
+ 			selfcheck_command_error = false;
+ 		handle_reinit_req = ads_events.handle_reinit_req;
+ 		estop_hold_req = ads_events.estop_hold_req;
+ 		if (ads_stats.reconnect_count != handled_reconnect_count)
+ 		{
+ 			handled_reconnect_count = ads_stats.reconnect_count;
+ 			ads_communication.request_coordinate_refresh();
+ 			ads_communication.request_watchdog_recovery();
+ 			spacing_recovery.reset();
+ 			tracking_controller.disable_compensation();
+ 			(void)cancel_active_return_motion(true);
+ 			std::cout << "ADS 重连：已取消中断的回退、屈曲恢复和 PI 瞬态，保留稳定模式与方向。" << std::endl;
+ 		}
+ 		// 运动控制只依赖位置快照；力数据质量单独由 force_valid 传给力反馈和记录器。
+ 		const bool ads_motion_cycle_valid = has_new_ads_snapshot && ads_snapshot.position_valid &&
+ 			ads_stats.state == AdsConnectionState::Running &&
+ 			self_check_done && ads_events.handle_reinit_done &&
+ 			!ads_snapshot.host_comm_timeout && !ads_events.host_comm_timeout;
+ 		if (has_new_ads_snapshot && ads_snapshot.position_valid &&
+ 			ads_stats.state == AdsConnectionState::Running && !has_self_check_flag)
+ 		{
+ 			// 首个有效快照即确认自检状态，等待按键期间不得进入启动准备。
+ 			has_self_check_flag = true;
+ 			last_self_check_done = self_check_done;
+ 			if (!self_check_done) control_active = false;
+ 			startup.loading_ready_symbol_available = true;
+ 			startup.loading_ready_plc = ads_events.startup_loading_ready;
+ 		}
+ 		const ULONGLONG loop_now_ms = GetTickCount64();
+ 
+ 		// 启动阶段未锁定模式时持续重试
+ 		if (!handle_startup_locked)
+ 		{
+ 			if (loop_now_ms >= handle1_next_retry_ms)
+ 			{
+ 				handle1_next_retry_ms = loop_now_ms + 1000;
+ 				axis1_handle_ready = handle_axis1.init();
+ 			}
+ 			if (loop_now_ms >= handle6_next_retry_ms)
+ 			{
+ 				handle6_next_retry_ms = loop_now_ms + 1000;
+ 				axis6_handle_ready = handle_axis6.init();
+ 			}
+ 			if (axis1_handle_ready || axis6_handle_ready)
+ 			{
+-				lock_handle_mode(axis1_handle_ready, axis6_handle_ready);
+-				update_handle_context();
++				bool allow_lock = true;
++				if (remote_handles_active && !(axis1_handle_ready && axis6_handle_ready))
++				{
++					if (remote_single_handle_since_ms == 0) remote_single_handle_since_ms = loop_now_ms;
++					allow_lock = (loop_now_ms - remote_single_handle_since_ms) >= remote_single_handle_grace_ms;
++				}
++				else
++				{
++					remote_single_handle_since_ms = 0;
++				}
++				if (allow_lock)
++				{
++					lock_handle_mode(axis1_handle_ready, axis6_handle_ready);
++					update_handle_context();
++				}
++			}
++			else
++			{
++				remote_single_handle_since_ms = 0;
+ 			}
+ 		}
+ 		else
+ 		{
+ 			if (!handle_axis1.is_open() && loop_now_ms >= handle1_next_retry_ms)
+ 			{
+ 				handle1_next_retry_ms = loop_now_ms + 1000;
+ 				if (handle_axis1.init())
+ 				{
+ 					handle1_reconnect_pending_poll = true;
+ 					std::cout << "导管手柄 (SN " << serial_axis1_handle << ") 重新打开成功，等待首帧有效采样..." << std::endl;
+ 				}
+ 			}
+ 			if (!handle_axis6.is_open() && loop_now_ms >= handle6_next_retry_ms)
+ 			{
+ 				handle6_next_retry_ms = loop_now_ms + 1000;
+ 				if (handle_axis6.init())
+ 				{
+ 					handle6_reconnect_pending_poll = true;
+ 					std::cout << "导丝手柄 (SN " << serial_axis6_handle << ") 重新打开成功，等待首帧有效采样..." << std::endl;
+ 				}
+ 			}
+ 		}
+ 
+ 		bool handle1_poll_ok = false;
+ 		bool handle6_poll_ok = false;
+ 		if (handle_startup_locked)
+ 		{
+ 			if (single_handle_mode)
+ 			{
+ 				Handle* active_handle = axis1_input_handle;
+ 				if (active_handle != nullptr && active_handle->is_open())
+ 				{
+ 					if (active_handle->poll())
+ 					{
+ 						handle1_poll_ok = true;
+ 						handle6_poll_ok = true;
+ 						if (handle1_reconnect_pending_poll || handle6_reconnect_pending_poll)
+ 						{
+ 							handle1_reconnect_pending_poll = false;
+ 							handle6_reconnect_pending_poll = false;
+ 							axis1_handle_filter.reset(active_handle->fJoints2[0], active_handle->fJoints2[1]);
+ 							axis6_handle_filter.reset(active_handle->fJoints2[0], active_handle->fJoints2[1]);
+ 							axis1_prev_linear_filtered = axis1_handle_filter.axis0_filtered;
+ 							axis6_prev_linear_filtered = axis6_handle_filter.axis0_filtered;
+ 							axis1_prev_rot_filtered = axis1_handle_filter.axis1_filtered;
+ 							axis6_prev_rot_filtered = axis6_handle_filter.axis1_filtered;
+ 							catheter_mode_button_pressed_prev = (active_handle->buttons2 & cfg.btn_b7) != 0;
+ 							guidewire_mode_button_pressed_prev = (active_handle->buttons2 & cfg.btn_b7) != 0;
+ 							std::cout << "单手柄重连后取得首帧有效采样，基准已重新建立。" << std::endl;
+ 						}
+ 					}
+ 					else
+ 					{
+ 						active_handle->close();
+ 						if (active_handle == &handle_axis1) handle1_next_retry_ms = loop_now_ms + 1000;
+ 						if (active_handle == &handle_axis6) handle6_next_retry_ms = loop_now_ms + 1000;
+ 						std::cout << "单手柄轮询失败并已断开，进入保持状态。" << std::endl;
+ 					}
+ 				}
+ 			}
+ 			else
+ 			{
+ 				if (handle_axis1.is_open())
+ 				{
+ 					if (handle_axis1.poll())
+ 					{
+ 						handle1_poll_ok = true;
+ 						if (handle1_reconnect_pending_poll)
+ 						{
+ 							handle1_reconnect_pending_poll = false;
+ 							axis1_handle_filter.reset(handle_axis1.fJoints2[0], handle_axis1.fJoints2[1]);
+ 							axis1_prev_linear_filtered = axis1_handle_filter.axis0_filtered;
+ 							axis1_prev_rot_filtered = axis1_handle_filter.axis1_filtered;
+ 							catheter_mode_button_pressed_prev = (handle_axis1.buttons2 & cfg.btn_b7) != 0;
+ 							std::cout << "导管手柄 (SN " << serial_axis1_handle << ") 取得首帧有效采样，基准已重新建立。" << std::endl;
+ 						}
+ 					}
+ 					else
+ 					{
+@@ -4688,160 +4727,164 @@ int main(int argc, char* argv[])
+ 			vs.clean_handle_torque_nm = clean_force_valid ? clean_force.handle_torque_nm : csv_nan;
+ 			vs.camera_state = static_cast<int>(recorder_snapshot.camera.state);
+ 			vs.camera_input_format = static_cast<int>(recorder_snapshot.camera.input_format);
+ 			vs.camera_width = recorder_snapshot.camera.width;
+ 			vs.camera_height = recorder_snapshot.camera.height;
+ 			vs.camera_fps_numerator = recorder_snapshot.camera.fps_numerator;
+ 			vs.camera_fps_denominator = recorder_snapshot.camera.fps_denominator;
+ 			vs.camera_preview_enabled = recorder_snapshot.camera.preview_enabled;
+ 			vs.camera_recording = recorder_snapshot.camera.recording;
+ 			vs.camera_recording_elapsed_us = recorder_snapshot.camera.recording_elapsed_us;
+ 			vs.camera_frame_count = recorder_snapshot.camera.frame_count;
+ 			vs.camera_dropped_frames = recorder_snapshot.camera.dropped_frames;
+ 			vs.camera_error_code = recorder_snapshot.camera.error_code;
+ 			vs.physical_button_event_counter = physical_button_event_counter;
+ 			vs.physical_button_event_code = physical_button_event_code;
+ 			vs.ads_state = static_cast<int>(ads_stats.state);
+ 			vs.ads_actual_hz = ads_stats.actual_hz;
+ 			vs.ads_snapshot_age_us = ads_stats.latest_snapshot_age_us;
+ 			vs.ads_rtt_us = ads_stats.latest_rtt_us;
+ 			vs.ads_failed_cycles = ads_stats.failed_cycles;
+ 			vs.ads_reconnect_count = ads_stats.reconnect_count;
+ 			vs.plc_restart_count = ads_stats.plc_restart_count;
+ 			vs.host_comm_timeout = ads_events.host_comm_timeout;
+ 			const ArmManualSnapshot arm_snapshot = arm_manual_ads.snapshot();
+ 			vs.arm_snapshot_valid = arm_snapshot.valid;
+ 			vs.arm_at_program_zero = arm_snapshot.at_program_zero;
+ 			vs.arm_cartesian_status = arm_snapshot.cartesian_status;
+ 			vs.arm_cartesian_error = arm_snapshot.cartesian_error;
+ 			vs.arm_curve_state = arm_snapshot.curve_state;
+ 			vs.arm_curve_progress = arm_snapshot.curve_progress;
+ 			vs.arm_home_request_id = arm_snapshot.home_request_id;
+ 			vs.arm_manual_enable = arm_snapshot.manual_enable;
+ 			for (int i = 0; i < 5; ++i)
+ 			{
+ 				vs.arm_enable_req[i] = arm_snapshot.enable_req[i];
+ 				vs.arm_power_done[i] = arm_snapshot.power_done[i];
+ 				vs.arm_power_busy[i] = arm_snapshot.power_busy[i];
+ 				vs.arm_power_active[i] = arm_snapshot.power_active[i];
+ 				vs.arm_power_error[i] = arm_snapshot.power_error[i];
+ 				vs.arm_power_error_id[i] = arm_snapshot.power_error_id[i];
+ 				vs.arm_reset_done[i] = arm_snapshot.reset_done[i];
+ 				vs.arm_reset_busy[i] = arm_snapshot.reset_busy[i];
+ 				vs.arm_reset_active[i] = arm_snapshot.reset_active[i];
+ 				vs.arm_reset_error[i] = arm_snapshot.reset_error[i];
+ 				vs.arm_reset_error_id[i] = arm_snapshot.reset_error_id[i];
+ 				vs.arm_act_pos[i] = arm_snapshot.act_pos[i];
+ 				vs.arm_act_vel[i] = arm_snapshot.act_vel[i];
+ 				vs.arm_motion_busy[i] = arm_snapshot.motion_busy[i];
+ 				vs.arm_motion_done[i] = arm_snapshot.motion_done[i];
+ 				vs.arm_motion_error[i] = arm_snapshot.motion_error[i];
+ 				vs.arm_motion_error_id[i] = arm_snapshot.motion_error_id[i];
+ 				vs.arm_cmd_dir[i] = arm_snapshot.cmd_dir[i];
+ 				vs.arm_cmd_conflict[i] = arm_snapshot.cmd_conflict[i];
+ 				vs.arm_jog_velocity[i] = arm_snapshot.jog_velocity[i];
+ 				vs.arm_jog_acc[i] = arm_snapshot.jog_acc[i];
+ 				vs.arm_jog_dec[i] = arm_snapshot.jog_dec[i];
+ 				vs.arm_jog_jerk[i] = arm_snapshot.jog_jerk[i];
+ 			}
+ 			vs.axis4_manual_busy = ads_events.axis4_manual_busy;
+ 			vs.axis4_manual_done = ads_events.axis4_manual_done;
+ 			vs.axis4_manual_error = ads_events.axis4_manual_error;
+ 			vs.axis4_manual_error_id = ads_events.axis4_manual_error_id;
+ 			vs.force_feedback_hold_enabled = ff.clamp_hold_enabled;
+ 			vs.force_feedback_hold_active = ff.clamp_hold_enabled && ff.clamp_hold_owner() != 0;
+ 			vs.force_feedback_hold_owner = ff.clamp_hold_owner();
+ 			vs.cylinder_manual_allowed = cylinder_manual_allowed;
+ 			for (int index = 0; index < 4; ++index)
+ 			{
+ 				if (cylinder_manual_mode[index] != CylinderManualMode::Automatic)
+ 					vs.cylinder_manual_mask |= static_cast<std::uint8_t>(1u << index);
+ 			}
+ 			vis_server.push_state(vs);
+ 			{
+ 				RemoteExtraState remote_extra;
+ 				for (int injector_index = 0; injector_index < 2; ++injector_index)
+ 					remote_extra.injector_dir[injector_index] = static_cast<std::int8_t>(injector_ui_direction[injector_index]);
+ 				remote_extra.axis4_dir = axis4_ui_forward_pressed ? 1 : (axis4_ui_reverse_pressed ? -1 : 0);
+ 				remote_extra.y_valve_open = y_valve_open;
+ 				remote_extra.force_zero_ok_count = remote_force_zero_ok_count;
+ 				remote_extra.force_zero_fail_count = remote_force_zero_fail_count;
++				remote_extra.initial_sync_done = initial_sync_done;
++				remote_extra.handle_soft_hold = handle_soft_hold_active;
++				remote_extra.ads_soft_hold = ads_soft_hold_active;
++				remote_extra.connection_hold = connection_hold_active;
+ 				remote_gateway.publish_state(vs, remote_extra);
+ 			}
+ 		}
+ 
+ 		{
+ 			VisCommand vcmd;
+ 			// 本地调试台（命名管道）与远程网关共用同一套命令处理，先本地后远程。
+ 			while (vis_server.poll_command(vcmd) || remote_gateway.poll_command(vcmd))
+ 			{
+ 				switch (vcmd.type)
+ 				{
+ 				case VisCommandType::SetSelfCheckAxisPos:
+ 				{
+ 					const int axis = vcmd.param1;
+ 					if (axis == 1 || axis == 3 || axis == 5 || axis == 6)
+ 					{
+ 						pending_selfcheck_target[axis - 1] = vcmd.param2 / 100.0;
+ 						pending_selfcheck_axes |= (1u << axis);
+ 						selfcheck_command_error = false;
+ 					}
+ 					break;
+ 				}
+ 				case VisCommandType::StartSelfCheck:
+ 				{
+ 					const double a1 = pending_selfcheck_target[0];
+ 					const double a3 = pending_selfcheck_target[2];
+ 					const double a5 = pending_selfcheck_target[4];
+ 					const double a6 = pending_selfcheck_target[5];
+ 					const bool valid = pending_selfcheck_axes == ((1u << 1) | (1u << 3) | (1u << 5) | (1u << 6)) &&
+ 						a1 >= 5.0 && a1 <= 96.0 && a3 >= 10.0 && a3 <= 650.0 &&
+ 						a5 >= 10.0 && a5 <= 670.0 && a6 >= 10.0 && a6 <= 670.0 &&
+ 					a1 <= a3 &&
+ 					std::abs(a5 - (a3 + 5.0)) < 1e-6 &&
+ 					std::abs(a6 - (a3 + 5.0 + cfg.startup_g_mm)) < 1e-6;
+ 					pending_selfcheck_axes = 0;
+ 					if (!valid || selfcheck_start_pending ||
+ 						(ads_events.selfcheck_status != 1 && ads_events.selfcheck_status != 3) ||
+ 						ads_stats.state != AdsConnectionState::Running)
+ 					{
+ 						selfcheck_command_error = true;
+ 						std::cout << "自检启动被拒绝：参数不完整、越界或 PLC 未就绪。" << std::endl;
+ 						break;
+ 					}
+ 					startup.final_axis1_from_left_mm = a1;
+ 					startup.final_axis3_from_left_mm = a3;
+ 					startup.final_axis5_from_left_mm = a5;
+ 					startup.final_axis6_from_left_mm = a6;
+ 					startup.final_axis2_deg = 0.0;
+ 					startup.final_axis7_deg = 0.0;
+ 					const bool request = true;
+ 					if (!ads_communication.write("G.selfcheck_target_from_left",
+ 						sizeof(pending_selfcheck_target), pending_selfcheck_target) ||
+ 						!ads_communication.write("G.selfcheck_start_req", sizeof(request), &request))
+ 					{
+ 						selfcheck_command_error = true;
+ 						std::cout << "自检启动 ADS 写入失败，未自动重试。" << std::endl;
+ 						break;
+ 					}
+ 					selfcheck_command_error = false;
+ 					selfcheck_start_pending = true;
+ 					std::cout << "自检启动请求已发送，等待 PLC 确认。" << std::endl;
+ 					break;
+ 				}
+ 				case VisCommandType::SetCylinderManualPosition:
+ 				case VisCommandType::ResetCylinderManual:
+ 				{
+ 					if (vcmd.param1 < 0 || vcmd.param1 >= 4) break;
+ 					if (vcmd.type == VisCommandType::ResetCylinderManual)
+ 					{
+ 						// 恢复命令不依赖输入框，也不锁存旧输出；下一拍按当前流程重新生成目标。
+ 						cylinder_manual_mode[vcmd.param1] = CylinderManualMode::Automatic;
+ 						std::cout << "电缸" << vcmd.param1 + 1 << "：已恢复当前流程位置。" << std::endl;
+ 					}
+ 					else if (vcmd.param2 < 0 || vcmd.param2 > 2000)
+ 					{
+ 						std::cout << "电缸位置请求已拒绝：数值必须为 0 到 2000。" << std::endl;
+ 					}
+ 					else if (cylinder_manual_allowed)
+ 					{
+ 						cylinder_manual_position[vcmd.param1] = static_cast<unsigned short>(vcmd.param2);

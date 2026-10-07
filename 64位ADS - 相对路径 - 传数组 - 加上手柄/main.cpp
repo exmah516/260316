@@ -4037,12 +4037,17 @@ int main(int argc, char* argv[])
 					apply_axis1_mirror_from_abs(axis1_cmd_abs + axis1_delivery_mapping_applied_extra_mm, false);
 					{
 						// 非轴4联动时，导管模式保持axis6基准位；联动时保留爬行状态机目标。
-						if (!axis4_axis6_coupling_active)
+						// 前进沿用既有输出；后退必须保留 run_axis6_crawl_state/计划回退
+						// 已生成的 axis6 与 cyl3/cyl4 反向时序，避免被默认值覆盖。
+						if (!axis4_axis6_coupling_active || axis4_forward_request)
 						{
-							pos[5] = axis6_mirror_base_rel;
+							if (!axis4_axis6_coupling_active)
+							{
+								pos[5] = axis6_mirror_base_rel;
+							}
+							cylinder3_cmd = cyl.cyl3_follow_release;
+							cylinder4_cmd = cyl.cyl4_clamp;
 						}
-						cylinder3_cmd = cyl.cyl3_follow_release;
-						cylinder4_cmd = cyl.cyl4_clamp;
 					}
 
 					if (axis1_crawl.window_active)
@@ -4919,6 +4924,59 @@ int main(int argc, char* argv[])
 					{
 						std::cout << "UI：自动换手、启动准备或 axis6 软限位正在接管，已忽略电缸手动覆盖请求。" << std::endl;
 					}
+					break;
+				}
+				case VisCommandType::RefreshHandles:
+				{
+					// 刷新只重建成功读取到的手柄基准；不改 PLC 目标，也不清除另一只手柄的缓存。
+					const int refresh_mask = vcmd.param1 & 0x03;
+					if (!handle_axis1.is_open()) (void)handle_axis1.init();
+					if (!handle_axis6.is_open()) (void)handle_axis6.init();
+					const bool refreshed_axis1 = (refresh_mask & 0x01) != 0 &&
+						handle_axis1.is_open() && handle_axis1.poll();
+					const bool refreshed_axis6 = (refresh_mask & 0x02) != 0 &&
+						handle_axis6.is_open() && handle_axis6.poll();
+					auto reset_axis1_baseline = [&]()
+					{
+						axis1_handle_filter.reset(handle_axis1.fJoints2[0], handle_axis1.fJoints2[1]);
+						axis1_crawl.handle_ref = axis1_handle_filter.axis0_filtered;
+						axis1_crawl.rot_ref = axis1_handle_filter.axis1_filtered;
+						axis1_prev_linear_filtered = axis1_handle_filter.axis0_filtered;
+						axis1_prev_rot_filtered = axis1_handle_filter.axis1_filtered;
+					};
+					auto reset_axis6_baseline = [&]()
+					{
+						axis6_handle_filter.reset(handle_axis6.fJoints2[0], handle_axis6.fJoints2[1]);
+						axis6_crawl.handle_ref = axis6_handle_filter.axis0_filtered;
+						axis6_crawl.rot_ref = axis6_handle_filter.axis1_filtered;
+						axis6_prev_linear_filtered = axis6_handle_filter.axis0_filtered;
+						axis6_prev_rot_filtered = axis6_handle_filter.axis1_filtered;
+					};
+					if (single_handle_mode)
+					{
+						if (refreshed_axis1 || refreshed_axis6)
+						{
+							Handle* active = refreshed_axis1 ? &handle_axis1 : &handle_axis6;
+							axis1_handle_filter.reset(active->fJoints2[0], active->fJoints2[1]);
+							axis6_handle_filter.reset(active->fJoints2[0], active->fJoints2[1]);
+							axis1_crawl.handle_ref = axis1_handle_filter.axis0_filtered;
+							axis1_crawl.rot_ref = axis1_handle_filter.axis1_filtered;
+							axis6_crawl.handle_ref = axis6_handle_filter.axis0_filtered;
+							axis6_crawl.rot_ref = axis6_handle_filter.axis1_filtered;
+							axis1_prev_linear_filtered = axis1_handle_filter.axis0_filtered;
+							axis6_prev_linear_filtered = axis6_handle_filter.axis0_filtered;
+							axis1_prev_rot_filtered = axis1_handle_filter.axis1_filtered;
+							axis6_prev_rot_filtered = axis6_handle_filter.axis1_filtered;
+						}
+					}
+					else
+					{
+						if (refreshed_axis1) reset_axis1_baseline();
+						if (refreshed_axis6) reset_axis6_baseline();
+					}
+					std::cout << "手柄刷新：582=" << (refreshed_axis1 ? "成功" : "保留原状态")
+						<< "，587=" << (refreshed_axis6 ? "成功" : "保留原状态")
+						<< "；不会直接产生运动。" << std::endl;
 					break;
 				}
 				case VisCommandType::RequestModeSwitch:

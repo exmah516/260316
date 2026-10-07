@@ -184,6 +184,7 @@ enum class VisCommandType : int
 	KeepArmCartesianAlive = 45,
 	SetSelfCheckAxisPos = 46, // param1=轴号，param2=距左限位毫米×100
 	StartSelfCheck = 47,
+	RefreshHandles = 48, // param1: 本次主端成功读取位掩码，bit0=582，bit1=587
 };
 
 #pragma pack(push, 1)

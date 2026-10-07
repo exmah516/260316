@@ -162,6 +162,9 @@ namespace MasterConsole.Services
             return CommandResult.Done();
         }
 
+        public Task<CommandResult> RefreshHandlesAsync()
+            => Task.FromResult(CommandResult.DoneWithReason("模拟链路：已刷新手柄基准。"));
+
         public async Task<CommandResult> SetYValveClosedAsync(bool closed)
         {
             var guard = Guard();

@@ -1,0 +1,21 @@
+<UserControl x:Class="MasterConsole.Controls.HikCameraView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:wfi="clr-namespace:System.Windows.Forms.Integration;assembly=WindowsFormsIntegration"
+             x:Name="Root">
+    <Border Background="#0F172A" CornerRadius="6" ClipToBounds="True">
+        <Grid>
+            <wfi:WindowsFormsHost x:Name="FormsHost" Margin="1"/>
+            <Border Background="#B80F172A" Padding="8,5" VerticalAlignment="Top" HorizontalAlignment="Stretch">
+                <Grid>
+                    <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                    <TextBlock Text="{Binding CameraName, ElementName=Root}" Foreground="#E2E8F0" FontWeight="SemiBold"/>
+                    <TextBlock Grid.Column="1" Text="{Binding StatusText, ElementName=Root}" Foreground="#CBD5E1"/>
+                </Grid>
+            </Border>
+            <Border Background="#CC0F172A" Padding="8,4" HorizontalAlignment="Left" VerticalAlignment="Bottom" Margin="8">
+                <TextBlock Text="{Binding DetailText, ElementName=Root}" Foreground="#CBD5E1" FontSize="10.5" TextWrapping="Wrap"/>
+            </Border>
+        </Grid>
+    </Border>
+</UserControl>

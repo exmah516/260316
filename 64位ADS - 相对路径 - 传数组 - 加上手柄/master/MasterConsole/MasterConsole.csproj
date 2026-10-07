@@ -5,6 +5,7 @@
     <TargetFramework>net472</TargetFramework>
     <PlatformTarget>x64</PlatformTarget>
     <UseWPF>true</UseWPF>
+    <UseWindowsForms>true</UseWindowsForms>
     <RootNamespace>MasterConsole</RootNamespace>
     <AssemblyName>MasterConsole</AssemblyName>
     <LangVersion>9.0</LangVersion>
@@ -12,6 +13,28 @@
   <ItemGroup>
     <!-- 手柄 SDK（x64）：从项目根复制到输出目录，主端直接读取本机手柄。 -->
     <None Include="..\..\FLCatheter.dll" Link="FLCatheter.dll" CopyToOutputDirectory="PreserveNewest" />
+    <!-- 旧主端同版本 ActiViz.NET x64；VTK 原生依赖随包复制到输出目录。 -->
+    <PackageReference Include="Activiz.NET.x64" Version="5.8.0" />
+    <!-- Activiz 的 NuGet 引用只声明托管程序集；模型运行还需要同版本原生 DLL。 -->
+    <None Include="$(NuGetPackageRoot)activiz.net.x64\5.8.0\lib\net20\**\*.dll"
+          Exclude="$(NuGetPackageRoot)activiz.net.x64\5.8.0\lib\net20\Kitware.VTK.dll;$(NuGetPackageRoot)activiz.net.x64\5.8.0\lib\net20\Kitware.mummy.Runtime.dll"
+          Link="%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="$(NuGetPackageRoot)activiz.net.x64\5.8.0\lib\net20\Microsoft.VC90.CRT.manifest"
+          Link="Microsoft.VC90.CRT.manifest" CopyToOutputDirectory="PreserveNewest" />
+    <Reference Include="System.Windows.Forms" />
+    <Reference Include="WindowsFormsIntegration" />
+    <Reference Include="System.Drawing" />
+    <!-- 匹配旧主端的海康 x64 SDK；HCNetSDKCom 必须与主 DLL 同目录输出。 -->
+    <None Include="Runtime\HikNetSDK\HCNetSDK.dll" Link="HCNetSDK.dll" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="Runtime\HikNetSDK\PlayCtrl.dll" Link="PlayCtrl.dll" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="Runtime\HikNetSDK\HCNetSDKCom\**\*" Link="HCNetSDKCom\%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+    <Reference Include="Math4wpf">
+      <HintPath>Runtime\Math4wpf.dll</HintPath>
+      <Private>true</Private>
+    </Reference>
+    <None Update="URDF\**\*">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\MasterConsole.Protocol\MasterConsole.Protocol.csproj" />

@@ -11,6 +11,7 @@ namespace MasterConsole.Services
         public string Reason { get; private set; } = "";
 
         public static CommandResult Done() => new CommandResult { Ok = true };
+        public static CommandResult DoneWithReason(string reason) => new CommandResult { Ok = true, Reason = reason ?? "" };
         public static CommandResult Rejected(string reason) => new CommandResult { Ok = false, Reason = reason };
     }
 
@@ -64,6 +65,9 @@ namespace MasterConsole.Services
 
         /// <summary>开始控制：已到达器械准备位置后，在当前位置直接进入手柄控制。</summary>
         Task<CommandResult> StartControlAsync();
+
+        /// <summary>重读主端手柄并请求从端按成功读取的手柄重建中立基准。</summary>
+        Task<CommandResult> RefreshHandlesAsync();
 
         /// <summary>力反馈开关；开启前的零点采集由从端自动完成。</summary>
         Task<CommandResult> SetForceFeedbackAsync(bool enable);

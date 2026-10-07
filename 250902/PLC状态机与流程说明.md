@@ -711,6 +711,14 @@ END_FOR
 
 ## 12. 变更日志
 
+
+### 2026-10-07 — 修复外源验证轴1/5/6跟随与触发停稳判定
+- 作者：AI（Codex）。
+- 涉及文件：`250902/Untitled2/POUs/handle.TcPOU`，`dual_clamp_experiment/tools/test_handle_delivery.py`，`dual_clamp_experiment/tools/test_external_axis_sync.py`。
+- 行为变化：外源验证状态4中，轴5目标由“当前实际位置自保持”改为 `pd_anchor5 + (轴1手柄输入 - pd_anchor1)` 的等位移跟随；触发释放前增加轴5实际速度停稳条件。释放、回退和重夹紧阶段仍保持原有轴5/轴6保持及按实际位置重建逻辑。
+- 根因：`pd_anchor5` 已捕获但未用于目标生成，轴5持续使能却没有运动目标，导致轴1/轴6/轴5不同步；触发判断还错误地把轴5当作静止轴。
+- 契约影响：不新增、不删除ADS变量，不改变正常模式、模式编号、轴映射或触发位置；仅修正外源模式内部目标生成和停稳判定。
+
 ### 2026-07-28 — SelfCheck 输出标准装卸启动资格
 - 作者：AI（Codex）。
 - 涉及文件：`G.TcGVL`、`init.TcPOU`、`SelfCheck.TcPOU`。

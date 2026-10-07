@@ -1,0 +1,167 @@
+diff --git a/64位ADS - 相对路径 - 传数组 - 加上手柄/main.cpp b/64位ADS - 相对路径 - 传数组 - 加上手柄/main.cpp
+index f1225c1..cda3b32 100644
+--- a/64位ADS - 相对路径 - 传数组 - 加上手柄/main.cpp	
++++ b/64位ADS - 相对路径 - 传数组 - 加上手柄/main.cpp	
+@@ -119,50 +119,72 @@ int main(int argc, char* argv[])
+ 	RemoteGateway remote_gateway;
+ 	HandleFilterState axis1_handle_filter;
+ 	HandleFilterState axis6_handle_filter;
+ 	// 首位启动 ADS 100 Hz 后台通信服务与辅助服务，彻底消除主线程直连并发竞争。
+ 	AdsCommunicationService ads_communication(ads);
+ 	ArmManualAdsService arm_manual_ads(ads_communication);
+ 	if (!ads_communication.start(nullptr, nullptr))
+ 	{
+ 		std::cout << "警告：ADS 100 Hz 通信后台服务启动失败。" << std::endl;
+ 	}
+ 	if (!arm_manual_ads.start())
+ 	{
+ 		std::cout << "定位臂低频 ADS 服务启动失败，定位臂 UI 将保持不可用。" << std::endl;
+ 	}
+ 	vis_server.start();
++	// 手柄来源：网关启用时，手柄实体在主端，采样经网关写入数据桥；
++	// 加参数 --local-handles 可强制使用本机 SDK 手柄（单机调试用）。
++	bool remote_handles_active = false;
+ 	{
+ 		// 远程网关：仅当存在 remote.token 时启用；命令经同一套 VisCommand 循环处理。
+ 		RemoteGatewayConfig remote_cfg;
+ 		remote_cfg.startup_g_mm = cfg.startup_g_mm;
+-		remote_gateway.start(remote_cfg);
++		const bool gateway_ok = remote_gateway.start(remote_cfg);
++		bool force_local_handles = false;
++		for (int arg_index = 1; arg_index < argc; ++arg_index)
++		{
++			if (std::string(argv[arg_index]) == "--local-handles") force_local_handles = true;
++		}
++		if (gateway_ok && !force_local_handles)
++		{
++			Handle::use_remote(true);
++			remote_handles_active = true;
++			remote_gateway.set_handles_remote(true);
++			std::cout << "手柄来源：主端（远程）。本机不再访问手柄 SDK；如需使用本机手柄请加参数 --local-handles。" << std::endl;
++		}
++		else if (gateway_ok)
++		{
++			std::cout << "手柄来源：本机（--local-handles）。远程网关仍可使用，但主端手柄输入不会被采用。" << std::endl;
++		}
+ 	}
+ 
+ 	bool axis1_handle_ready = handle_axis1.init();
+-	if (!axis1_handle_ready)
++	if (!axis1_handle_ready && !remote_handles_active)
+ 	{
+ 		std::cout << "手柄初始化未就绪，序列号: " << serial_axis1_handle << "，将在后台持续重试。" << std::endl;
+ 	}
+ 	const bool axis6_handle_ready_init = handle_axis6.init();
+ 	bool axis6_handle_ready = axis6_handle_ready_init;
+-	if (!axis6_handle_ready)
++	if (!axis6_handle_ready && !remote_handles_active)
+ 	{
+ 		std::cout << "手柄初始化未就绪，序列号: " << serial_axis6_handle << "，将在后台持续重试。" << std::endl;
+ 	}
+ 
+ 	bool handle_startup_locked = false;
++	// 远程手柄只出现一只时先等一小段时间再锁定单手柄模式，避免两只手柄的采样先后到达被误判。
++	ULONGLONG remote_single_handle_since_ms = 0;
++	constexpr ULONGLONG remote_single_handle_grace_ms = 3000;
+ 	bool single_handle_mode = false;
+ 	GuidewireMode single_handle_requested_mode = GuidewireMode::None;
+ 	Handle* axis1_input_handle = &handle_axis1;
+ 	Handle* axis6_input_handle = &handle_axis6;
+ 	Handle* catheter_force_output_handle = &handle_axis1;
+ 	Handle* guidewire_force_output_handle = &handle_axis6;
+ 
+ 	auto lock_handle_mode = [&](bool axis1_ok, bool axis6_ok)
+ 	{
+ 		if (handle_startup_locked) return;
+ 		if (axis1_ok && axis6_ok)
+ 		{
+ 			single_handle_mode = false;
+ 			axis1_input_handle = &handle_axis1;
+ 			axis6_input_handle = &handle_axis6;
+@@ -1103,32 +1125,49 @@ int main(int argc, char* argv[])
+ 		// 启动阶段未锁定模式时持续重试
+ 		if (!handle_startup_locked)
+ 		{
+ 			if (loop_now_ms >= handle1_next_retry_ms)
+ 			{
+ 				handle1_next_retry_ms = loop_now_ms + 1000;
+ 				axis1_handle_ready = handle_axis1.init();
+ 			}
+ 			if (loop_now_ms >= handle6_next_retry_ms)
+ 			{
+ 				handle6_next_retry_ms = loop_now_ms + 1000;
+ 				axis6_handle_ready = handle_axis6.init();
+ 			}
+ 			if (axis1_handle_ready || axis6_handle_ready)
+ 			{
+-				lock_handle_mode(axis1_handle_ready, axis6_handle_ready);
+-				update_handle_context();
++				bool allow_lock = true;
++				if (remote_handles_active && !(axis1_handle_ready && axis6_handle_ready))
++				{
++					if (remote_single_handle_since_ms == 0) remote_single_handle_since_ms = loop_now_ms;
++					allow_lock = (loop_now_ms - remote_single_handle_since_ms) >= remote_single_handle_grace_ms;
++				}
++				else
++				{
++					remote_single_handle_since_ms = 0;
++				}
++				if (allow_lock)
++				{
++					lock_handle_mode(axis1_handle_ready, axis6_handle_ready);
++					update_handle_context();
++				}
++			}
++			else
++			{
++				remote_single_handle_since_ms = 0;
+ 			}
+ 		}
+ 		else
+ 		{
+ 			if (!handle_axis1.is_open() && loop_now_ms >= handle1_next_retry_ms)
+ 			{
+ 				handle1_next_retry_ms = loop_now_ms + 1000;
+ 				if (handle_axis1.init())
+ 				{
+ 					handle1_reconnect_pending_poll = true;
+ 					std::cout << "导管手柄 (SN " << serial_axis1_handle << ") 重新打开成功，等待首帧有效采样..." << std::endl;
+ 				}
+ 			}
+ 			if (!handle_axis6.is_open() && loop_now_ms >= handle6_next_retry_ms)
+ 			{
+@@ -4753,30 +4792,34 @@ int main(int argc, char* argv[])
+ 			vs.cylinder_manual_allowed = cylinder_manual_allowed;
+ 			for (int index = 0; index < 4; ++index)
+ 			{
+ 				if (cylinder_manual_mode[index] != CylinderManualMode::Automatic)
+ 					vs.cylinder_manual_mask |= static_cast<std::uint8_t>(1u << index);
+ 			}
+ 			vis_server.push_state(vs);
+ 			{
+ 				RemoteExtraState remote_extra;
+ 				for (int injector_index = 0; injector_index < 2; ++injector_index)
+ 					remote_extra.injector_dir[injector_index] = static_cast<std::int8_t>(injector_ui_direction[injector_index]);
+ 				remote_extra.axis4_dir = axis4_ui_forward_pressed ? 1 : (axis4_ui_reverse_pressed ? -1 : 0);
+ 				remote_extra.y_valve_open = y_valve_open;
+ 				remote_extra.force_zero_ok_count = remote_force_zero_ok_count;
+ 				remote_extra.force_zero_fail_count = remote_force_zero_fail_count;
++				remote_extra.initial_sync_done = initial_sync_done;
++				remote_extra.handle_soft_hold = handle_soft_hold_active;
++				remote_extra.ads_soft_hold = ads_soft_hold_active;
++				remote_extra.connection_hold = connection_hold_active;
+ 				remote_gateway.publish_state(vs, remote_extra);
+ 			}
+ 		}
+ 
+ 		{
+ 			VisCommand vcmd;
+ 			// 本地调试台（命名管道）与远程网关共用同一套命令处理，先本地后远程。
+ 			while (vis_server.poll_command(vcmd) || remote_gateway.poll_command(vcmd))
+ 			{
+ 				switch (vcmd.type)
+ 				{
+ 				case VisCommandType::SetSelfCheckAxisPos:
+ 				{
+ 					const int axis = vcmd.param1;
+ 					if (axis == 1 || axis == 3 || axis == 5 || axis == 6)

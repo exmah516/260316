@@ -1,4 +1,4 @@
-﻿<?xml version="1.0" encoding="utf-8"?>
+<?xml version="1.0" encoding="utf-8"?>
 <TcPlcObject Version="1.1.0.1" ProductVersion="3.1.4024.15">
   <POU Name="handle" Id="{687f3d3e-09ee-464b-b8db-c97aea6d31ed}" SpecialFunc="None">
     <Declaration><![CDATA[FUNCTION_BLOCK handle
@@ -956,6 +956,18 @@ pd_input2 := G.refer[2] + G.init_pos[2];
 IF pd_fault THEN
 	pd_state := 12;
 	G.program_test_status_error_id := 16#7305;
+	IF NOT all_powered THEN
+		G.program_test_error_source := 5;
+	ELSIF has_axis_error THEN
+		G.program_test_error_source := 6;
+	ELSIF G.host_comm_timeout THEN
+		G.program_test_error_source := 7;
+	ELSE
+		G.program_test_error_source := 0;
+	END_IF
+	G.program_test_error_axis := 0;
+	G.program_test_error_phase := 0;
+	G.program_test_error_target_abs := 0.0;
 END_IF
 IF G.program_test_abort_req THEN
 	G.program_test_abort_req := FALSE;
@@ -1180,14 +1192,14 @@ CASE pd_state OF
 				pd_input1 := LIMIT(G.program_test_trigger_target_abs, pd_input1, G.program_test_return_target_abs);
 				pd_ref[1] := pd_input1 - G.init_pos[1];
 				pd_ref[2] := pd_input2 - G.init_pos[2];
-				pd_ref[5] := G.axis[5].NcToPlc.ActPos - G.init_pos[5];
+				pd_ref[5] := pd_anchor5 + pd_input1 - pd_anchor1 - G.init_pos[5];
 				pd_ref[6] := pd_anchor6 + pd_input1 - pd_anchor1 - G.init_pos[6];
 				pd_ref[7] := pd_input2 - G.init_pos[7];
 				IF (pd_input1 <= G.program_test_trigger_target_abs) AND
 					(ABS(G.axis[1].NcToPlc.ActPos - G.program_test_trigger_target_abs) <= 0.2) AND
 					(ABS(G.axis[5].NcToPlc.ActPos - (pd_ref[5] + G.init_pos[5])) <= 0.2) AND
 					(ABS(G.axis[6].NcToPlc.ActPos - (pd_ref[6] + G.init_pos[6])) <= 0.2) AND
-					(ABS(G.axis[1].NcToPlc.ActVelo) <= 0.5) AND (ABS(G.axis[6].NcToPlc.ActVelo) <= 0.5) THEN
+					(ABS(G.axis[1].NcToPlc.ActVelo) <= 0.5) AND (ABS(G.axis[5].NcToPlc.ActVelo) <= 0.5) AND (ABS(G.axis[6].NcToPlc.ActVelo) <= 0.5) THEN
 					pd_state := 5;
 				END_IF
 			END_IF
@@ -1514,3 +1526,4 @@ END_IF
     </LineIds>
   </POU>
 </TcPlcObject>
+

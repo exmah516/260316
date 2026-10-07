@@ -1,0 +1,142 @@
+--- 2ad6f64
+
++++ 999555f
+
+@@ -72,13 +72,18 @@
+
+ END_IF
+ 
+ IF NOT init_done THEN
+ 	G.estop_hold_req := TRUE;
++	G.power_[3].Enable := FALSE;
+ 	all_enabled := TRUE;
+ 	FOR i:=1 TO 7 DO
+-		G.SetPointGenEnable[i](Axis:=G.axis[i], Execute:=TRUE);
+-		IF NOT G.SetPointGenEnable[i].Done THEN
+-			all_enabled := FALSE;
++		IF i = 3 THEN
++			G.SetPointGenEnable[i](Axis:=G.axis[i], Execute:=FALSE);
++		ELSE
++			G.SetPointGenEnable[i](Axis:=G.axis[i], Execute:=TRUE);
++			IF NOT G.SetPointGenEnable[i].Done THEN
++				all_enabled := FALSE;
++			END_IF
+ 		END_IF
+ 	END_FOR
+ 	
+ 	IF all_enabled THEN
+@@ -89,9 +94,9 @@
+
+ 			G.act_h[j] := G.Act_pos[j];
+ 			G.act_hf[j] := G.Act_pos[j];
+ 			G.refer[j] := G.Act_pos[j];
+ 			G.refer_from_left[j] := G.act_pos_from_left[j];
+-			ext_setpoint_enabled[j] := TRUE;
++			ext_setpoint_enabled[j] := j <> 3;
+ 
+ 			FOR k:=1 TO 30 DO
+ 				act_hh[j][k] := G.Act_pos[j];
+ 			END_FOR
+@@ -119,23 +124,37 @@
+
+ 	END_IF
+ 	RETURN;
+ END_IF
+ 
++G.estop_hold_req := FALSE;
++G.power_[3].Enable := FALSE;
++G.power_[5].Enable := TRUE;
++
+ all_powered := TRUE;
+ FOR i:=1 TO 7 DO
+-	IF NOT G.power_output[i].Done THEN
++	IF i <> 3 AND NOT (G.program_test_mode = 1 AND i = 5) AND NOT G.power_output[i].Done THEN
+ 		all_powered := FALSE;
+ 		EXIT;
+ 	END_IF
+ END_FOR
+ 
+ has_axis_error := FALSE;
+ FOR i:=1 TO 7 DO
++	IF i = 3 OR (G.program_test_mode = 1 AND i = 5) THEN
++		CONTINUE;
++	END_IF
+ 	IF G.axis[i].Status.Error OR G.power_output[i].Error OR G.reset_output[i].Error THEN
+ 		has_axis_error := TRUE;
+ 		EXIT;
+ 	END_IF
+ END_FOR
++
++
++IF (NOT all_powered) OR has_axis_error OR G.host_comm_timeout THEN
++	pd_fault := TRUE;
++	ProgramDelivery();
++	ProgramRecord();
++END_IF
+ 
+ IF NOT all_powered THEN
+ 	G.estop_hold_req := TRUE;
+ 	hold_active := TRUE;
+@@ -192,10 +211,10 @@
+
+ 
+ 	IF NOT host_timeout_prev THEN
+ 		// 仅捕获超时发生时已经在运行的独立运动，禁止恢复后自动续跑。
+ 		FOR i:=1 TO 7 DO
+-			host_return_stop_active[i] := return_enable[i] AND
+-				((return_state[i] <> 0) OR G.return_cmd[i].Busy OR fb_return_move_abs[i].Busy);
++			host_return_stop_active[i] :=
++				(return_state[i] <> 0) OR G.return_cmd[i].Busy OR fb_return_move_abs[i].Busy;
+ 			host_return_stop_exec[i] := FALSE;
+ 		END_FOR
+ 		host_axis4_stop_active := (axis4_manual_state <> 0) OR fb_axis4_move_velocity.Busy;
+ 	END_IF
+@@ -329,9 +348,11 @@
+
+ host_hold_captured := FALSE;
+ // 非超时状态收到的恢复请求没有业务含义，清除以免成为下一次超时的陈旧握手。
+ G.host_recover_req := FALSE;
+ 
+-G.estop_hold_req := FALSE;
++pd_fault := FALSE;
++ProgramDelivery();
++ProgramRecord();
+ 
+ IF G.cylinder5_press_req THEN
+ 	G.cylinder5_value := 0;
+ ELSE
+@@ -423,9 +444,9 @@
+
+ 	END_IF
+ END_FOR
+ 
+ FOR i:=1 TO 7 DO
+-	IF NOT return_enable[i] THEN
++	IF NOT return_enable[i] AND NOT ((pd_mode <> 0) AND ((i = 2) OR (i = 7))) THEN
+ 		CONTINUE;
+ 	END_IF
+ 
+ 	IF return_state[i] = 0 THEN
+@@ -699,17 +720,17 @@
+
+ 	END_IF
+ END_CASE
+ 
+ FOR i:=1 TO 7 DO
+-	IF G.power_output[i].Error THEN
++	IF i <> 3 AND G.power_output[i].Error THEN
+ 		G.axis_Reset[i].Execute := TRUE;
+ 	END_IF
+ END_FOR
+ 
+ FOR i:=1 TO 7 DO
+-	// 计划回退结束后，状态 31 的预送周期和 SetPointGenEnable 过渡周期都必须喂入当前设定值。
+-	// 否则 NC 重新接管时会短暂使用禁用前遗留的左窗口设定值，造成约一个窗口宽度的反向尖峰。
+-	IF ext_setpoint_enabled[i] OR (return_state[i] = 31) OR spg_enable_exec[i] THEN
++	IF i = 3 THEN
++		G.act_hf[i] := G.axis[i].NcToPlc.ActPos - G.init_pos[i];
++	ELSIF ext_setpoint_enabled[i] OR (return_state[i] = 31) OR spg_enable_exec[i] THEN
+ 		IF traj_enable[i] AND NOT G.startup_smoothing_bypass THEN
+ 			pos_abs := traj_pos[i] + G.init_pos[i];
+ 			MC_ExtSetPointGenFeed(
+ 				Position     := pos_abs,

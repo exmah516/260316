@@ -178,6 +178,7 @@ namespace AdsControlUI
 		SetArmCartesianParameter = 44,
 		KeepArmCartesianAlive = 45,
 		SetSelfCheckAxisPos = 46,
-		StartSelfCheck = 47,
+        StartSelfCheck = 47,
+        RefreshHandles = 48,
 	}
 }

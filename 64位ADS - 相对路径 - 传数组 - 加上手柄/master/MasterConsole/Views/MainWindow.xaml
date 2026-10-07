@@ -171,25 +171,48 @@
             <!-- 显示区 -->
             <Grid Grid.Column="0" Margin="0,0,10,0">
                 <Grid.RowDefinitions>
-                    <RowDefinition Height="3*"/>
+                    <RowDefinition x:Name="DisplayTopRow" Height="3*"/>
                     <RowDefinition Height="10"/>
-                    <RowDefinition Height="2*"/>
+                    <RowDefinition x:Name="DisplayBottomRow" Height="2*"/>
                 </Grid.RowDefinitions>
 
-                <ctl:PlaceholderPane Grid.Row="0" Title="影像显示区"
-                                     Hint="手术影像（视频流）接入后显示在此处"/>
+                <Border Grid.Row="0" Background="#0F172A" CornerRadius="6" Padding="6">
+                    <Grid x:Name="DisplayWall">
+                        <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+                        <DockPanel Grid.Row="0" Margin="0,0,0,6">
+                            <TextBlock Text="显示区 · DSA影像 / 监控1 / 监控2 / DSA机械臂模型" Foreground="#CBD5E1" FontWeight="SemiBold" VerticalAlignment="Center"/>
+                            <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
+                                <Button Content="DSA影像" Tag="dsa" Click="DisplaySelect_Click" Style="{StaticResource CompactButton}" Margin="4,0,0,0"/>
+                                <Button Content="监控1" Tag="camera1" Click="DisplaySelect_Click" Style="{StaticResource CompactButton}" Margin="4,0,0,0"/>
+                                <Button Content="监控2" Tag="camera2" Click="DisplaySelect_Click" Style="{StaticResource CompactButton}" Margin="4,0,0,0"/>
+                                <Button Content="模型" Tag="model" Click="DisplaySelect_Click" Style="{StaticResource CompactButton}" Margin="4,0,0,0"/>
+                                <Button Content="DSA快发" Click="DsaFast_Click" Style="{StaticResource CompactButton}" Margin="4,0,0,0"/>
+                                <Button Content="DSA慢发" Click="DsaSlow_Click" Style="{StaticResource CompactButton}" Margin="4,0,0,0"/>
+                            </StackPanel>
+                        </DockPanel>
+                        <Grid Grid.Row="1" x:Name="DisplayGrid">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition x:Name="DisplayColumnMain" Width="3*"/>
+                                <ColumnDefinition Width="8"/>
+                                <ColumnDefinition x:Name="DisplayColumnAux" Width="*"/>
+                            </Grid.ColumnDefinitions>
+                            <Grid.RowDefinitions><RowDefinition Height="*"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+
+                            <ctl:DsaImageView x:Name="DsaImageView" Grid.Column="0" Grid.Row="0" Grid.RowSpan="2"/>
+                            <ctl:HikCameraView x:Name="HikCamera1" Tag="1" Grid.Column="2" Grid.Row="0"/>
+                            <ctl:HikCameraView x:Name="HikCamera2" Tag="2" Grid.Column="2" Grid.Row="1"/>
+                        </Grid>
+                    </Grid>
+                </Border>
 
                 <Grid Grid.Row="2">
                     <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="*"/>
-                        <ColumnDefinition Width="10"/>
-                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition x:Name="DisplayModelColumn" Width="*"/>
+                        <ColumnDefinition Width="8"/>
+                        <ColumnDefinition x:Name="DisplayLogColumn" Width="180"/>
                     </Grid.ColumnDefinitions>
-
-                    <ctl:PlaceholderPane Grid.Column="0" Title="机器人 URDF 模型"
-                                         Hint="三维模型视图接入后显示在此处"/>
-
-                    <GroupBox Grid.Column="2" Header="事件日志" Margin="0" Padding="8,6">
+                    <ctl:RobotViewport x:Name="RobotModelViewport" Grid.Column="0" />
+                    <GroupBox Grid.Column="2" Header="消息" Margin="0" Padding="6,4">
                         <ListBox ItemsSource="{Binding Log}" BorderThickness="0" Background="Transparent"
                                  ScrollViewer.HorizontalScrollBarVisibility="Disabled">
                             <ListBox.ItemTemplate>
@@ -274,6 +297,14 @@
                                 <TextBlock Grid.Row="3" Text="纯净力" Style="{StaticResource FieldLabelText}" Margin="0,2"/>
                                 <TextBlock Grid.Row="3" Grid.Column="1" Text="{Binding CleanForce}" Style="{StaticResource DataValueText}" HorizontalAlignment="Right"/>
                             </Grid>
+
+                            <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
+                                <Button Content="刷新手柄" Command="{Binding RefreshHandlesCommand}"
+                                        IsEnabled="{Binding CanRefreshHandles}"
+                                        Style="{StaticResource CompactButton}" Padding="12,5"/>
+                                <TextBlock Text="{Binding HandleRefreshText}" Style="{StaticResource CaptionText}"
+                                           Margin="8,0,0,0" VerticalAlignment="Center" TextWrapping="Wrap"/>
+                            </StackPanel>
 
                             <Border Background="{StaticResource SurfaceAltBrush}" CornerRadius="4" Padding="8,5" Margin="0,8,0,0">
                                 <TextBlock Text="七轴位置 / 行程（预留）" Foreground="{StaticResource TextMutedBrush}"

@@ -1026,6 +1026,20 @@ void RemoteGateway::handle_command(std::uintptr_t sock_handle, int id, const std
 		return;
 	}
 
+	if (name == "refresh_handles")
+	{
+		double mask_num = 0;
+		if (!get_num(f, "success_mask", mask_num) || mask_num < 0 || mask_num > 3)
+		{
+			send_ack(sock, id, "rejected", "手柄刷新参数无效");
+			return;
+		}
+		// 主循环会再次 poll 两只手柄；success_mask 只用于保留主端已确认的部分状态。
+		push_cmd(VisCommandType::RefreshHandles, static_cast<int>(mask_num));
+		send_ack(sock, id, "done", "手柄刷新请求已排队");
+		return;
+	}
+
 	if (name == "yvalve")
 	{
 		bool closed = false;
