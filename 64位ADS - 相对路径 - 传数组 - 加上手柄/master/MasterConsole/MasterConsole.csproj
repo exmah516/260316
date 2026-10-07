@@ -10,6 +10,10 @@
     <LangVersion>9.0</LangVersion>
   </PropertyGroup>
   <ItemGroup>
+    <!-- 手柄 SDK（x64）：从项目根复制到输出目录，主端直接读取本机手柄。 -->
+    <None Include="..\..\FLCatheter.dll" Link="FLCatheter.dll" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+  <ItemGroup>
     <ProjectReference Include="..\MasterConsole.Protocol\MasterConsole.Protocol.csproj" />
   </ItemGroup>
 </Project>

@@ -268,6 +268,7 @@ namespace MasterConsole.Protocol
         private static void WriteHaptic(BinaryWriter w, HapticOut o)
         {
             w.Write((byte)(o.Enable ? 1 : 0));
+            w.Write(o.Axis);
             w.Write(o.ForceN);
             w.Write(o.TorqueNm);
         }
@@ -276,6 +277,7 @@ namespace MasterConsole.Protocol
         {
             var o = new HapticOut();
             o.Enable = r.ReadByte() != 0;
+            o.Axis = r.ReadSByte();
             o.ForceN = r.ReadSingle();
             o.TorqueNm = r.ReadSingle();
             return o;

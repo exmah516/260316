@@ -65,16 +65,20 @@ HandleSample（26 字节）：
 | 10 | f32[2] | joints |
 | 18 | f32[2] | vels |
 
-### 3.4 HapticFrame（type=2，载荷 24 字节，整帧 48）
+手柄 A、B 指**物理序列号** 582、587（不是导管/导丝角色，角色映射由从端 `swap_handle_roles` 决定）。字段与本地 SDK 的 `buttons2 / encoders2 / fJoints2 / fVels2` 一一对应。主端对未打开或本次读取失败的手柄必须置 `valid=0`。
+
+从端只在主端持有控制权时才使用手柄采样，并且只使用 250 ms 内的最新一帧：采样过期等同于“手柄断开”，从端沿用既有的手柄软保持逻辑（保持最后参考、丢弃故障期间增量、恢复后自动重建基准），不会进入故障。
+
+### 3.4 HapticFrame（type=2，载荷 26 字节，整帧 50）
 
 | 偏移 | 类型 | 字段 |
 |---|---|---|
 | 0 | u32 | echo_ts_ms：回显最近收到的 ControlFrame.ts_ms |
 | 4 | u16 | hold_ms：从收到该帧到发出本帧的停留毫秒 |
 | 6 | HapticOut | 手柄 A |
-| 15 | HapticOut | 手柄 B |
+| 16 | HapticOut | 手柄 B |
 
-HapticOut（9 字节）：u8 enable，f32 force_n，f32 torque_nm。主端收到后调用本地手柄 `setforce(F, N)`。**主端 200 ms 内未收到有效 HapticFrame 时，必须把两只手柄的力输出置 0。**
+HapticOut（10 字节）：u8 enable，i8 axis，f32 force_n，f32 torque_nm。axis 为力作用的 SDK 轴（从端 `axial_force_axis`，当前为 1）。主端收到后在对应轴上调用手柄 `sendForce`。从端每收到一个合法 ControlFrame 就回一个 HapticFrame（约 100 Hz）；未持有控制权时 enable 恒为 0。**主端 200 ms 内未收到有效 HapticFrame 时，必须把两只手柄的力输出置 0。**
 
 RTT = `now_ms − echo_ts_ms − hold_ms`。
 
@@ -142,6 +146,7 @@ M→S {"t":"release","id":2}
 | name | 参数 | 从端对应既有动作 |
 |---|---|---|
 | `prepare_position` | `catheter_mm`（5–95），`wire_mm`（10–639） | `SetSelfCheckAxisPos` + `StartSelfCheck`（进入器械准备位置） |
+| `start_control` | — | `SelectDirectControl`（已到达准备位置后，在当前位置直接进入手柄控制） |
 | `force_feedback` | `enable`（bool） | 开启前自动零点采集（`ZeroForceSensor`），完成后 `ToggleForceFeedback`；零点采集期间状态帧 `ff_zeroing=1` |
 | `cylinder` | `index`（1–4），`engaged`（bool） | engaged=true：电缸 1/3 写 2000，电缸 2/4 写 10（`SetCylinderManualPosition`）；engaged=false：`ResetCylinderManual` 恢复原状态 |
 | `yvalve` | `closed`（bool） | `SetYValveOpen(!closed)` |
@@ -173,4 +178,4 @@ M→S {"t":"release","id":2}
 
 - 协议字段或长度变化必须同时递增 `version`，并重新生成测试向量。
 - `python tools/gen_protocol_vectors.py` 生成 `protocol/test_vectors/*`；C# 的 `MasterConsole.Protocol.Tests` 读取同一批向量逐字节比对。
-- 帧长常量：Control 79、Haptic 48、Status 142。
+- 帧长常量：Control 79、Haptic 50、Status 142。

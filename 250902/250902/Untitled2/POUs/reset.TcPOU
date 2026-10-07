@@ -32,6 +32,7 @@ CASE step OF
 		G.axis_Reset[i].Execute := FALSE;
 		G.SetPointGenEnable[i].Execute := FALSE;
 		G.SetPointGenDisable[i].Execute := TRUE;
+		G.power_[i].Enable := i <> 3;
 	END_FOR
 	reset_timer(IN:=FALSE);
 	step := 1;
@@ -39,9 +40,10 @@ CASE step OF
 1:
 	// 触发复位：Execute 保持 TRUE 直到下个阶段读取 Done/Error
 	FOR i:=1 TO 7 DO 
-		G.axis_Reset[i].Execute := TRUE;
+		G.axis_Reset[i].Execute := i <> 3;
 		// 禁用请求只需要上升沿，避免每周期重复触发
 		G.SetPointGenDisable[i].Execute := FALSE;
+		G.power_[i].Enable := i <> 3;
 	END_FOR
 	reset_timer(IN:=TRUE, PT:=T#3S);
 	step := 2;
@@ -51,7 +53,7 @@ CASE step OF
 	reset_timer(IN:=TRUE);
 	all_done := TRUE;
 	FOR i:=1 TO 7 DO
-		IF NOT (G.reset_output[i].Done OR G.reset_output[i].Error OR NOT G.axis[i].Status.Error) THEN 
+		IF i <> 3 AND NOT (G.reset_output[i].Done OR G.reset_output[i].Error OR NOT G.axis[i].Status.Error) THEN 
 			all_done := FALSE; 
 			EXIT;
 		END_IF
@@ -61,13 +63,14 @@ CASE step OF
 		// 收尾：撤销 Execute，复位计时器复位，然后返回 init
 		FOR i:=1 TO 7 DO 
 			G.axis_Reset[i].Execute := FALSE;
+			G.power_[i].Enable := i <> 3;
 		END_FOR
 		reset_timer(IN:=FALSE);
 		step := 0;
 
 		// 复位结束后，错误已清除才允许回到 _init；否则进入 _err(避免 init/reset 无限循环)
 		FOR i:=1 TO 7 DO
-			IF G.axis[i].Status.Error OR G.power_output[i].Error OR G.reset_output[i].Error THEN
+			IF i <> 3 AND (G.axis[i].Status.Error OR G.power_output[i].Error OR G.reset_output[i].Error) THEN
 				G.gen_state := _err;
 				RETURN;
 			END_IF

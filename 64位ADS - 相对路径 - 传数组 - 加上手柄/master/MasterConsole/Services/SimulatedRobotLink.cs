@@ -27,6 +27,7 @@ namespace MasterConsole.Services
         private bool _calZeroed;
         private bool _yClosed;
         private bool _selfCheckDone;
+        private bool _controlStarted;
         private int _selfCheckStatus; // 1 等待 2 运行中
 
         public SimulatedRobotLink()
@@ -60,6 +61,7 @@ namespace MasterConsole.Services
             _timer.Stop();
             _connected = false;
             _hasControl = false;
+            _controlStarted = false;
             _ffEnabled = _ffZeroing = false;
             _injectorDir[0] = _injectorDir[1] = 0;
             _axis4Dir = 0;
@@ -81,6 +83,7 @@ namespace MasterConsole.Services
         {
             await Task.Delay(80);
             _hasControl = false;
+            _controlStarted = false;
             _injectorDir[0] = _injectorDir[1] = 0;
             _axis4Dir = 0;
             ConnectionChanged?.Invoke(this, EventArgs.Empty);
@@ -148,6 +151,17 @@ namespace MasterConsole.Services
             return CommandResult.Done();
         }
 
+        public async Task<CommandResult> StartControlAsync()
+        {
+            var guard = Guard();
+            if (guard != null) return guard;
+            await Task.Delay(100);
+            if (!_selfCheckDone) return CommandResult.Rejected("尚未到达器械准备位置，请先点击“进入器械准备位置”");
+            _controlStarted = true;
+            Log("info", "已在当前位置开始控制（模拟）。");
+            return CommandResult.Done();
+        }
+
         public async Task<CommandResult> SetYValveClosedAsync(bool closed)
         {
             var guard = Guard();
@@ -199,7 +213,8 @@ namespace MasterConsole.Services
         {
             double t = (DateTime.Now - _t0).TotalSeconds;
             var flags = StatusFlags.AdsHealthy;
-            if (_hasControl) flags |= StatusFlags.LeaseHeld | StatusFlags.ControlActive;
+            if (_hasControl) flags |= StatusFlags.LeaseHeld;
+            if (_hasControl && _controlStarted && _selfCheckDone) flags |= StatusFlags.ControlActive;
             if (_ffEnabled) flags |= StatusFlags.FfEnabled;
             if (_ffZeroing) flags |= StatusFlags.FfZeroing;
             if (_calZeroed) flags |= StatusFlags.CalZeroed;

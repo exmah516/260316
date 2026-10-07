@@ -32,10 +32,12 @@ namespace MasterConsole.Protocol
         public sbyte Axis4Dir;
     }
 
-    /// <summary>手柄力输出（9 字节）。</summary>
+    /// <summary>手柄力输出（10 字节）。</summary>
     public struct HapticOut
     {
         public bool Enable;
+        /// <summary>力作用的 SDK 轴（0..2），由从端按 axial_force_axis 指定。</summary>
+        public sbyte Axis;
         public float ForceN;
         public float TorqueNm;
     }

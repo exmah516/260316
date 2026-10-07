@@ -131,6 +131,18 @@
                             <TextBlock Text="从端 ADS" Style="{StaticResource PillLabel}"/>
                         </StackPanel>
                     </Border>
+                    <Border Style="{StaticResource StatusPill}">
+                        <StackPanel Orientation="Horizontal">
+                            <Ellipse Width="10" Height="10" Fill="{Binding HandlesOnline, Converter={StaticResource LedGreen}}"/>
+                            <TextBlock Text="本机手柄" Style="{StaticResource PillLabel}"/>
+                        </StackPanel>
+                    </Border>
+                    <Border Style="{StaticResource StatusPill}">
+                        <StackPanel Orientation="Horizontal">
+                            <Ellipse Width="10" Height="10" Fill="{Binding ControlActive, Converter={StaticResource LedGreen}}"/>
+                            <TextBlock Text="手柄控制" Style="{StaticResource PillLabel}"/>
+                        </StackPanel>
+                    </Border>
                 </StackPanel>
 
                 <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
@@ -309,6 +321,9 @@
                                     <Run Text="状态："/><Run Text="{Binding PrepareStatusText, Mode=OneWay}"/>
                                 </TextBlock>
                                 <TextBlock Text="{Binding PrepareError}" Style="{StaticResource ErrorText}" Margin="0,1,0,0"/>
+                                <Button Content="开始控制（手柄）" Command="{Binding StartControlCommand}"
+                                        IsEnabled="{Binding CanStartControl}"
+                                        Style="{StaticResource CompactButton}" Margin="0,6,0,0"/>
 
                                 <Border Style="{StaticResource SectionDivider}"/>
 
@@ -442,6 +457,8 @@
                 <TextBlock Text="{Binding DroppedText}" Style="{StaticResource LinkValue}"/>
                 <TextBlock Text="从端 ADS" Style="{StaticResource LinkLabel}"/>
                 <TextBlock Text="{Binding AdsText}" Style="{StaticResource LinkValue}"/>
+                <TextBlock Text="手柄" Style="{StaticResource LinkLabel}"/>
+                <TextBlock Text="{Binding HandleText}" Style="{StaticResource LinkValue}"/>
             </WrapPanel>
         </Border>
     </Grid>

@@ -22,7 +22,8 @@ namespace MasterConsole.Services
 
     /// <summary>
     /// 真实网络链路：TCP 命令通道（长度前缀 JSON）+ UDP 控制/状态通道，协议见 protocol/PROTOCOL.md。
-    /// 本版本：命令、按住动作（注射器/轴4）、状态回传已实现；手柄采样与触觉帧尚未接入。
+    /// 手柄在主端：由 <see cref="HandleService"/> 读取本机手柄，采样随 100 Hz 控制帧上行；
+    /// 从端回传的触觉帧驱动本机手柄的力输出（200 ms 无触觉帧即清零）。
     /// </summary>
     public sealed class RemoteRobotLink : IRobotLink
     {
@@ -46,8 +47,11 @@ namespace MasterConsole.Services
         private uint _session;
         private byte[] _key;
         private uint _txSeq;
-        private SeqGuard _rxGuard = new SeqGuard();
+        private SeqGuard _rxGuard = new SeqGuard();          // 状态帧
+        private SeqGuard _rxGuardHaptic = new SeqGuard();    // 触觉帧（与状态帧共用发送序号，各自独立判重）
         private int _nextId;
+        private readonly HandleService _handles;
+        private long _lastHapticMs = -1;
 
         private volatile bool _connected;
         private volatile bool _hasControl;
@@ -64,9 +68,11 @@ namespace MasterConsole.Services
         private double _statusHz;
         private long _dropped;
 
-        public RemoteRobotLink(RemoteLinkSettings cfg)
+        /// <param name="handles">本机手柄服务；传入后由本链路负责释放。为 null 时不上传手柄。</param>
+        public RemoteRobotLink(RemoteLinkSettings cfg, HandleService handles = null)
         {
             _cfg = cfg ?? throw new ArgumentNullException(nameof(cfg));
+            _handles = handles;
         }
 
         public string Name => "远程链路 " + _cfg.Host;
@@ -135,6 +141,8 @@ namespace MasterConsole.Services
                 _key = key;
                 _txSeq = 0;
                 _rxGuard = new SeqGuard();
+                _rxGuardHaptic = new SeqGuard();
+                _lastHapticMs = -1;
                 _cts = new CancellationTokenSource();
                 _hasControl = false;
                 _inj1 = _inj2 = _axis4 = 0;
@@ -160,7 +168,11 @@ namespace MasterConsole.Services
 
         public void Disconnect() => Shutdown("链路已断开。", "warn");
 
-        public void Dispose() => Shutdown(null, null);
+        public void Dispose()
+        {
+            Shutdown(null, null);
+            _handles?.Dispose();
+        }
 
         private void Shutdown(string message, string level)
         {
@@ -171,6 +183,7 @@ namespace MasterConsole.Services
                 _connected = false;
                 _hasControl = false;
                 _inj1 = _inj2 = _axis4 = 0;
+                _handles?.ClearHaptic();
                 try { _cts?.Cancel(); } catch { }
                 try { _stream?.Close(); } catch { }
                 try { _tcp?.Close(); } catch { }
@@ -207,6 +220,7 @@ namespace MasterConsole.Services
             if (r.Ok)
             {
                 _hasControl = false;
+                _handles?.ClearHaptic();
                 ConnectionChanged?.Invoke(this, EventArgs.Empty);
             }
             return r;
@@ -215,6 +229,9 @@ namespace MasterConsole.Services
         // 进入准备位置要等 PLC 运动完成，最长 5 分 30 秒；其余命令 10 秒内应有最终回执。
         public Task<CommandResult> PreparePositionAsync(double catheterMm, double wireMm)
             => RequestAsync(id => CommandMessages.PreparePosition(id, catheterMm, wireMm), 330000);
+
+        public Task<CommandResult> StartControlAsync()
+            => RequestAsync(id => CommandMessages.StartControl(id), 10000);
 
         public Task<CommandResult> SetForceFeedbackAsync(bool enable)
             => RequestAsync(id => CommandMessages.ForceFeedback(id, enable), 15000);
@@ -256,9 +273,12 @@ namespace MasterConsole.Services
                     Session = _connected ? _session : 0,
                     RttMs = _rttMs,
                     StatusAgeMs = _lastStatusMs < 0 ? double.NaN : now - _lastStatusMs,
-                    HapticAgeMs = double.NaN, // 触觉帧尚未实现
+                    HapticAgeMs = _lastHapticMs < 0 ? double.NaN : now - _lastHapticMs,
                     StatusHz = _connected ? _statusHz : 0,
-                    DroppedFrames = (ulong)Interlocked.Read(ref _dropped) + (ulong)_rxGuard.Dropped,
+                    DroppedFrames = (ulong)Interlocked.Read(ref _dropped) + _rxGuard.Dropped + _rxGuardHaptic.Dropped,
+                    Handle582Online = _handles != null && _handles.IsOnline(0),
+                    Handle587Online = _handles != null && _handles.IsOnline(1),
+                    HandleSdkMissing = _handles != null && _handles.SdkMissing,
                 };
             }
         }
@@ -295,7 +315,7 @@ namespace MasterConsole.Services
             t.Start();
         }
 
-        /// <summary>100 Hz 控制帧：注射器/轴4按住状态。手柄采样尚未接入，Valid=false。</summary>
+        /// <summary>100 Hz 控制帧：本机手柄采样 + 注射器/轴4按住状态。</summary>
         private void ControlLoop(CancellationToken token)
         {
             long next = 0;
@@ -311,6 +331,8 @@ namespace MasterConsole.Services
 
                 var frame = new ControlFrame
                 {
+                    HandleA = _handles != null ? _handles.GetSample(0) : default,
+                    HandleB = _handles != null ? _handles.GetSample(1) : default,
                     Injector1Dir = (sbyte)_inj1,
                     Injector2Dir = (sbyte)_inj2,
                     Axis4Dir = (sbyte)_axis4,
@@ -350,6 +372,21 @@ namespace MasterConsole.Services
                 catch (ObjectDisposedException) { break; }
                 catch (NullReferenceException) { break; }
 
+                // 触觉帧（从端 → 主端手柄力输出）：按帧长和类型字节分流。
+                if (data.Length == ProtocolConstants.HapticFrameLen && data[3] == ProtocolConstants.TypeHaptic)
+                {
+                    if (!FrameCodec.TryDecodeHaptic(data, data.Length, _session, _key, out var hh, out var hap, out _))
+                    {
+                        Interlocked.Increment(ref _dropped);
+                        continue;
+                    }
+                    if (!_rxGuardHaptic.Accept(hh.Seq)) continue;
+                    lock (_statsLock) { _lastHapticMs = _clock.ElapsedMilliseconds; }
+                    _handles?.SetHaptic(0, hap.HandleA);
+                    _handles?.SetHaptic(1, hap.HandleB);
+                    continue;
+                }
+
                 if (!FrameCodec.TryDecodeStatus(data, data.Length, _session, _key, out var h, out var st, out _))
                 {
                     Interlocked.Increment(ref _dropped);
@@ -376,6 +413,7 @@ namespace MasterConsole.Services
                 {
                     _hasControl = false;
                     _inj1 = _inj2 = _axis4 = 0;
+                    _handles?.ClearHaptic();
                     Log("warn", "从端已收回控制权，请重新申请。");
                     ConnectionChanged?.Invoke(this, EventArgs.Empty);
                 }

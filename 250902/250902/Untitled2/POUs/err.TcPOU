@@ -33,11 +33,12 @@ has_other_error := FALSE;
 all_powered := TRUE;
 
 FOR i:=1 TO 7 DO
-	IF NOT G.power_output[i].Done THEN
+	IF i <> 3 AND NOT (G.program_test_mode = 1 AND i = 5) AND NOT G.power_output[i].Done THEN
 		all_powered := FALSE;
 	END_IF
 
-	IF G.axis[i].Status.Error OR G.power_output[i].Error OR G.reset_output[i].Error THEN
+	IF i <> 3 AND NOT (G.program_test_mode = 1 AND i = 5) AND
+		(G.axis[i].Status.Error OR G.power_output[i].Error OR G.reset_output[i].Error) THEN
 		has_err := TRUE;
 
 		IF G.power_output[i].Error AND (G.power_output[i].ErrorID = power_not_ready_errid) THEN
@@ -77,7 +78,7 @@ CASE step OF
 	IF NOT has_err THEN
 		FOR i:=1 TO 7 DO
 			G.axis_Reset[i].Execute := FALSE;
-			G.power_[i].Enable := TRUE;
+			G.power_[i].Enable := i <> 3;
 		END_FOR
 		retry_timer(IN:=TRUE, PT:=T#2S);
 		step := 11;
@@ -92,7 +93,7 @@ CASE step OF
 	END_IF
 
 	FOR i:=1 TO 7 DO
-		IF G.axis[i].Status.Error OR G.power_output[i].Error OR G.reset_output[i].Error THEN
+		IF i <> 3 AND (G.axis[i].Status.Error OR G.power_output[i].Error OR G.reset_output[i].Error) THEN
 			G.axis_Reset[i].Execute := TRUE;
 		END_IF
 	END_FOR
@@ -131,7 +132,7 @@ CASE step OF
 		IF G.power_output[i].Error AND (G.power_output[i].ErrorID = power_not_ready_errid) THEN
 			G.power_[i].Enable := FALSE;
 		ELSE
-			G.power_[i].Enable := TRUE;
+			G.power_[i].Enable := i <> 3;
 		END_IF
 	END_FOR
 
@@ -139,15 +140,15 @@ CASE step OF
 	IF pulse_timer.Q THEN
 		pulse_timer(IN:=FALSE);
 		FOR i:=1 TO 7 DO
-			G.power_[i].Enable := TRUE;
+			G.power_[i].Enable := i <> 3;
 		END_FOR
 		retry_timer(IN:=TRUE, PT:=T#3S);
 		step := 11;
 	END_IF
 
 11:
-	FOR i:=1 TO 7 DO
-		G.power_[i].Enable := TRUE;
+		FOR i:=1 TO 7 DO
+		G.power_[i].Enable := i <> 3;
 	END_FOR
 
 	retry_timer(IN:=TRUE);

@@ -15,12 +15,13 @@ VAR
     vel_back : LREAL := 40.0;   // 回退速度，>0（单位随轴：mm/s 或 deg/s）
 
     init_target_from_left : ARRAY[1..7] OF LREAL:= [96,0,280,0,430,580,0];  // 左限位寻参后回到的工作位（距左限位）
-    target_axes : ARRAY[1..7] OF BOOL:= [TRUE,FALSE,TRUE,FALSE,TRUE,TRUE,FALSE];	// 目标轴（平移轴）
+    target_axes : ARRAY[1..7] OF BOOL:= [TRUE,FALSE,FALSE,FALSE,TRUE,TRUE,FALSE];	// 目标轴（平移轴，轴3永久断使能）
     stagger_delay : ARRAY[1..7] OF TIME := [T#3s,T#0ms,T#2s,T#0ms,T#1s,T#0ms,T#0ms];
     scan_stagger_delay : ARRAY[1..7] OF TIME := [T#0ms,T#0ms,T#300ms,T#0ms,T#600ms,T#900ms,T#0ms];
     scan_stagger_timer : ARRAY[1..7] OF TON;
     stagger_started : BOOL := FALSE;
     
+    start_ready : BOOL;
     all_done : BOOL;
     all_reach_limit : BOOL;
     
@@ -64,6 +65,8 @@ FUNCTION_BLOCK: SelfCheck
 
 // 统计：目标轴是否全部进入同步等待阶段（stu>=6）
 IF G.selfcheck_reset_req THEN
+    G.selfcheck_status := 1;
+    G.self_check_done := FALSE;
 	G.startup_loading_ready := FALSE;
     FOR i:=1 TO 7 DO
         stu[i] := 0;
@@ -107,6 +110,26 @@ IF G.selfcheck_reset_req THEN
     G.axis4_manual_error_id := 0;
     G.selfcheck_reset_req := FALSE;
 END_IF
+
+IF G.selfcheck_status <> 2 THEN
+    IF G.selfcheck_status <> 3 THEN G.selfcheck_status := 1; END_IF
+    IF NOT G.selfcheck_start_req THEN RETURN; END_IF
+    G.selfcheck_start_req := FALSE;
+    start_ready := TRUE;
+    FOR i := 1 TO 7 DO
+        IF i <> 3 AND (NOT G.power_output[i].Done OR G.power_output[i].Error OR
+            G.axis[i].Status.Error OR G.reset_output[i].Error) THEN
+            start_ready := FALSE;
+        END_IF
+    END_FOR
+    IF NOT start_ready THEN
+        G.selfcheck_status := 3;
+        RETURN;
+    END_IF
+    G.selfcheck_status := 2;
+END_IF
+G.selfcheck_start_req := FALSE;
+G.power_[3].Enable := FALSE;
 
 // selfcheck 期间固定初始化电缸5，避免阶段切换引入额外切换值。
 G.cylinder5_value := 2000;
@@ -517,7 +540,7 @@ END_FOR
 // 全轴完成判定（所有轴 stu=10）
 all_done := TRUE;
 FOR i:=1 TO 7 DO
-    IF stu[i] <> 10 THEN
+    IF target_axes[i] AND stu[i] <> 10 THEN
         all_done := FALSE;
         EXIT;
     END_IF
@@ -528,7 +551,10 @@ IF all_done THEN
 	G.cylinder2_value := 0;
 	G.cylinder3_value := 1000;
 	G.cylinder4_value := 0;
+	G.power_[3].Enable := FALSE;
+	G.power_[5].Enable := TRUE;
     G.self_check_done := TRUE;
+    G.selfcheck_status := 4;
 	G.startup_loading_ready := TRUE;
     G.handle_reinit_req := TRUE;
     FOR i:=1 TO 7 DO

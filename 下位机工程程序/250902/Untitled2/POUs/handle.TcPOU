@@ -68,7 +68,6 @@ VAR
 	axis4_pending_dir : INT := 0;
 	axis4_move_exec : BOOL := FALSE;
 	axis4_stop_exec : BOOL := FALSE;
-	axis4_stop_release_pending : BOOL := FALSE;
 	axis4_finish_error : BOOL := FALSE;
 	axis4_error_id_pending : UDINT := 0;
 	axis4_manual_velocity : LREAL := 30;
@@ -90,38 +89,6 @@ VAR
 	traj_vmax    : ARRAY[1..7] OF LREAL := [80, 0, 80, 0, 80, 80, 0];
 	traj_amax    : ARRAY[1..7] OF LREAL := [2000, 0, 2000, 0, 2000, 2000, 0];
 	traj_enable  : ARRAY[1..7] OF BOOL := [TRUE, FALSE, TRUE, FALSE, TRUE, TRUE, FALSE];
-	pd_mode : USINT;
-	pd_state : USINT;
-	pd_last_state : USINT;
-	pd_last_sync : USINT;
-	pd_step : USINT;
-	pd_axis : INT := 1;
-	pd_active : ARRAY[1..7] OF BOOL;
-	pd_req : ARRAY[1..7] OF BOOL;
-	pd_moved : ARRAY[1..7] OF BOOL;
-	pd_ref : ARRAY[1..7] OF LREAL;
-	pd_target : ARRAY[1..7] OF LREAL;
-	pd_forward : ST_AxisPlannedReturnCmd;
-	pd_return : ST_AxisPlannedReturnCmd;
-	pd_release_wait, pd_reclamp_wait, pd_release_lead, pd_reclamp_lead : TIME;
-	pd_open2, pd_close2, pd_open4, pd_close4 : WORD;
-	pd_coupling : BOOL;
-	pd_ready : BOOL;
-	pd_fault : BOOL;
-	pd_all_done : BOOL;
-	pd_anchor1, pd_anchor6, pd_input1, pd_input2 : LREAL;
-	pd_baseline_timer, pd_release_timer, pd_reclamp_timer : TON;
-	pd_release_lead_timer, pd_reclamp_lead_timer : TON;
-	return_cancelled : ARRAY[1..7] OF BOOL;
-	rec_block : INT := 1;
-	rec_index : INT;
-	rec_sample : UDINT;
-	rec_sequence : UDINT;
-	rec_was_active : BOOL;
-	rec_capture : BOOL;
-	rec_time : ULINT;
-	zero_index : UINT;
-	zero_force, zero_sum, zero_square, zero_mean, zero_std : ARRAY[1..4] OF LREAL;
 END_VAR
 
 ]]></Declaration>
@@ -188,7 +155,6 @@ IF G.handle_reinit_req THEN
 	axis4_pending_dir := 0;
 	axis4_move_exec := FALSE;
 	axis4_stop_exec := FALSE;
-	axis4_stop_release_pending := FALSE;
 	axis4_finish_error := FALSE;
 	axis4_error_id_pending := 0;
 	G.axis4_fwd_req := FALSE;
@@ -264,9 +230,6 @@ FOR i:=1 TO 7 DO
 END_FOR
 
 IF (NOT all_powered) OR has_axis_error THEN
-	pd_fault := TRUE;
-	ProgramDelivery();
-	ProgramRecord();
 	G.estop_hold_req := TRUE;
 	FOR j:=1 TO 7 DO
 		G.Act_pos[j] := G.axis[j].NcToPlc.ActPos - G.init_pos[j];
@@ -290,9 +253,6 @@ IF (NOT all_powered) OR has_axis_error THEN
 END_IF
 
 IF G.host_comm_timeout THEN
-	pd_fault := TRUE;
-	ProgramDelivery();
-	ProgramRecord();
 	G.handle_reinit_done := FALSE;
 
 	IF (NOT host_timeout_prev) OR (NOT host_hold_captured) THEN
@@ -307,8 +267,8 @@ IF G.host_comm_timeout THEN
 	IF NOT host_timeout_prev THEN
 		// 仅捕获超时发生时已经在运行的独立运动，禁止恢复后自动续跑。
 		FOR i:=1 TO 7 DO
-			host_return_stop_active[i] :=
-				(return_state[i] <> 0) OR G.return_cmd[i].Busy OR fb_return_move_abs[i].Busy;
+			host_return_stop_active[i] := return_enable[i] AND
+				((return_state[i] <> 0) OR G.return_cmd[i].Busy OR fb_return_move_abs[i].Busy);
 			host_return_stop_exec[i] := FALSE;
 		END_FOR
 		host_axis4_stop_active := (axis4_manual_state <> 0) OR fb_axis4_move_velocity.Busy;
@@ -445,9 +405,6 @@ host_hold_captured := FALSE;
 G.host_recover_req := FALSE;
 
 G.estop_hold_req := FALSE;
-	pd_fault := FALSE;
-	ProgramDelivery();
-	ProgramRecord();
 
 IF G.cylinder5_press_req THEN
 	G.cylinder5_value := 500;
@@ -541,7 +498,7 @@ FOR j:=1 TO 7 DO
 END_FOR
 
 FOR i:=1 TO 7 DO
-	IF NOT return_enable[i] AND NOT ((pd_mode <> 0) AND ((i = 2) OR (i = 7))) THEN
+	IF NOT return_enable[i] THEN
 		CONTINUE;
 	END_IF
 
@@ -552,7 +509,6 @@ FOR i:=1 TO 7 DO
 			G.return_cmd[i].Error := FALSE;
 			G.return_cmd[i].ErrorId := 0;
 			return_finish_error[i] := FALSE;
-			return_cancelled[i] := FALSE;
 			return_error_id_pending[i] := 0;
 		ELSIF (NOT G.return_cmd[i].Done) AND (NOT G.return_cmd[i].Error) THEN
 			// Req 由上位机在完整写入参数后最后置位；此处只锁存一次，
@@ -564,13 +520,6 @@ FOR i:=1 TO 7 DO
 			return_jerk[i] := G.return_cmd[i].Jerk;
 			return_state[i] := 10;
 		END_IF
-	END_IF
-
-	IF (pd_mode <> 0) AND (pd_state >= 11) AND (return_state[i] <> 0) AND
-		NOT return_cancelled[i] THEN
-		return_cancelled[i] := TRUE;
-		host_return_stop_exec[i] := FALSE;
-		return_state[i] := 40;
 	END_IF
 
 	CASE return_state[i] OF
@@ -587,7 +536,8 @@ FOR i:=1 TO 7 DO
 		return_exec[i] := TRUE;
 		G.refer_from_left[i] := return_target_abs[i] - G.leftlimit[i];
 
-		IF fb_return_move_abs[i].Done THEN
+		IF fb_return_move_abs[i].Done OR
+		   ((NOT fb_return_move_abs[i].Busy) AND (ABS(G.axis[i].NcToPlc.ActPos - return_target_abs[i]) <= 0.05)) THEN
 			return_finish_error[i] := FALSE;
 			return_error_id_pending[i] := 0;
 			return_state[i] := 30;
@@ -628,10 +578,6 @@ FOR i:=1 TO 7 DO
 				G.return_cmd[i].Done := FALSE;
 				G.return_cmd[i].Error := TRUE;
 				G.return_cmd[i].ErrorId := return_error_id_pending[i];
-			ELSIF return_cancelled[i] THEN
-				G.return_cmd[i].Done := FALSE;
-				G.return_cmd[i].Error := FALSE;
-				G.return_cmd[i].ErrorId := 0;
 			ELSE
 				G.return_cmd[i].Done := TRUE;
 				G.return_cmd[i].Error := FALSE;
@@ -640,18 +586,6 @@ FOR i:=1 TO 7 DO
 			return_finish_error[i] := FALSE;
 			return_error_id_pending[i] := 0;
 			return_state[i] := 0;
-		END_IF
-	40:
-		G.return_cmd[i].Busy := TRUE;
-		IF host_return_stop_exec[i] AND fb_host_return_stop[i].Done THEN
-			host_return_stop_exec[i] := FALSE;
-			return_state[i] := 30;
-		ELSIF host_return_stop_exec[i] AND fb_host_return_stop[i].Error THEN
-			G.return_cmd[i].Error := TRUE;
-			G.return_cmd[i].ErrorId := fb_host_return_stop[i].ErrorID;
-			G.gen_state := _err;
-		ELSE
-			host_return_stop_exec[i] := TRUE;
 		END_IF
 	END_CASE
 END_FOR
@@ -728,13 +662,9 @@ CASE axis4_manual_state OF
 		axis4_finish_error := TRUE;
 		axis4_error_id_pending := fb_axis4_stop.ErrorID;
 		axis4_pending_dir := 0;
-		axis4_stop_release_pending := TRUE;
 		axis4_manual_state := 39;
-	ELSIF fb_axis4_stop.Done OR
-		((NOT fb_axis4_move_velocity.Busy) AND
-			(ABS(G.axis[4].NcToPlc.ActVelo) <= 0.05)) THEN
+	ELSIF fb_axis4_stop.Done OR (ABS(G.axis[4].NcToPlc.ActVelo) <= 0.05) THEN
 		// 无论是否还有请求，先经过状态39释放 MC_Stop 一个完整扫描周期。
-		axis4_stop_release_pending := TRUE;
 		axis4_manual_state := 39;
 	END_IF
 
@@ -742,17 +672,13 @@ CASE axis4_manual_state OF
 	G.axis4_manual_busy := TRUE;
 	// MC_Stop 需要一个 Execute=FALSE 的完整周期，
 	// 再重新触发 MoveVelocity 或 SetPointGenEnable。
-	IF axis4_stop_release_pending THEN
-		axis4_stop_release_pending := FALSE;
+	axis4_pending_dir := axis4_request_dir_now;
+	IF axis4_pending_dir <> 0 THEN
+		axis4_requested_dir := axis4_pending_dir;
+		axis4_manual_state := 20;
 	ELSE
-		axis4_pending_dir := axis4_request_dir_now;
-		IF axis4_pending_dir <> 0 THEN
-			axis4_requested_dir := axis4_pending_dir;
-			axis4_manual_state := 20;
-		ELSE
-			axis4_requested_dir := 0;
-			axis4_manual_state := 40;
-		END_IF
+		axis4_requested_dir := 0;
+		axis4_manual_state := 40;
 	END_IF
 
 40:
@@ -837,8 +763,6 @@ FOR i:=1 TO 7 DO
 		Jerk:=return_jerk[i],
 		Execute:=return_exec[i]
 	);
-	fb_host_return_stop[i](Axis:=G.axis[i], Execute:=host_return_stop_exec[i],
-		Deceleration:=4000.0, Jerk:=10000.0);
 END_FOR
 
 fb_axis4_move_velocity(
@@ -859,590 +783,6 @@ fb_axis4_stop(
 
 ]]></ST>
     </Implementation>
-    <Action Name="ProgramDelivery" Id="{d90e79ea-aede-41b5-b003-24331ee94001}">
-      <Implementation>
-        <ST><![CDATA[
-G.dual_clamp_selfcheck_done := G.self_check_done;
-G.dual_clamp_selfcheck_busy := NOT G.self_check_done;
-G.dual_clamp_leftlimit_valid := G.self_check_done;
-G.dual_clamp_leftlimit_axis1_abs := G.leftlimit[1];
-G.dual_clamp_leftlimit_axis6_abs := G.leftlimit[6];
-
-pd_all_done := TRUE;
-FOR i := 1 TO 7 DO
-	IF (return_state[i] <> 0) OR G.return_cmd[i].Busy THEN pd_all_done := FALSE; END_IF
-END_FOR
-IF G.program_test_mode <> pd_mode THEN
-	IF ((pd_state = 0) OR (pd_state >= 10)) AND NOT G.program_test_setup_busy AND pd_all_done THEN
-		pd_mode := G.program_test_mode;
-		pd_state := 0;
-		pd_step := 0;
-		pd_ready := FALSE;
-		G.program_test_setup_done := FALSE;
-		G.program_test_status_error_id := 0;
-		G.program_test_handle_cycle := 0;
-		FOR i := 1 TO 7 DO
-			pd_ref[i] := G.axis[i].NcToPlc.ActPos - G.init_pos[i];
-		END_FOR
-	ELSE
-		G.program_test_mode := pd_mode;
-		G.program_test_status_error_id := 16#7102;
-	END_IF
-END_IF
-IF pd_mode = 0 THEN
-	G.program_test_phase := 0;
-	G.program_test_sync_state := 0;
-	G.program_test_enable := FALSE;
-	G.program_test_sample_arm := FALSE;
-ELSE
-pd_input1 := G.refer[1] + G.init_pos[1];
-pd_input2 := G.refer[2] + G.init_pos[2];
-IF pd_fault THEN
-	pd_state := 12;
-	G.program_test_status_error_id := 16#7305;
-END_IF
-IF G.program_test_abort_req THEN
-	G.program_test_abort_req := FALSE;
-	pd_state := 11;
-END_IF
-IF G.experiment_record_overflow THEN
-	pd_state := 12;
-	G.program_test_status_error_id := 16#7402;
-END_IF
-FOR i := 1 TO 7 DO
-	IF (return_state[i] >= 30) OR (pd_req[i] AND G.return_cmd[i].Done) THEN
-		pd_ref[i] := G.axis[i].NcToPlc.ActPos - G.init_pos[i];
-	END_IF
-	IF pd_req[i] AND G.return_cmd[i].Error THEN
-		G.program_test_error_phase := pd_state;
-		G.program_test_error_axis := INT_TO_USINT(i);
-		G.program_test_error_target_abs := pd_target[i];
-		G.program_test_status_error_id := G.return_cmd[i].ErrorId;
-		IF G.program_test_status_error_id = 0 THEN
-			G.program_test_status_error_id := 16#7306;
-		END_IF
-		pd_state := 12;
-	END_IF
-END_FOR
-IF (pd_state >= 10) AND G.program_test_setup_req AND pd_all_done AND NOT pd_fault THEN
-	pd_state := 0;
-	pd_step := 0;
-END_IF
-IF (pd_state <> 0) AND (pd_state < 10) THEN G.program_test_setup_req := FALSE; END_IF
-IF pd_state <> 2 THEN G.program_test_start_req := FALSE; END_IF
-
-pd_baseline_timer(IN:=pd_state = 3, PT:=T#1S);
-pd_release_timer(IN:=((pd_state = 1) AND (pd_step = 0)) OR ((pd_state = 5) AND (pd_step = 1)), PT:=pd_release_wait);
-pd_reclamp_timer(IN:=(pd_state = 2) OR ((pd_state = 7) AND (pd_step = 1)), PT:=pd_reclamp_wait);
-pd_release_lead_timer(IN:=(pd_state = 5) AND (pd_step = 0), PT:=pd_release_lead);
-pd_reclamp_lead_timer(IN:=(pd_state = 7) AND (pd_step = 0), PT:=pd_reclamp_lead);
-G.program_test_wait_action := 0;
-
-CASE pd_state OF
-0:
-	IF G.program_test_setup_req AND NOT pd_fault THEN
-		G.program_test_setup_req := FALSE;
-		G.program_test_start_req := FALSE;
-		G.program_test_status_error_id := 0;
-		G.program_test_error_source := 0;
-		G.program_test_error_axis := 0;
-		G.program_test_error_phase := 0;
-		G.program_test_error_target_abs := 0.0;
-		G.program_test_cycle_index := 0;
-		G.program_test_cycle_total := G.program_test_cycle_count;
-		G.program_test_setup_done := FALSE;
-		pd_ready := FALSE;
-		pd_axis := 1;
-		IF pd_mode = 2 THEN pd_axis := 6; END_IF
-		IF NOT G.self_check_done OR NOT pd_all_done THEN
-			G.program_test_status_error_id := 16#7201;
-		ELSIF (pd_mode <> 1) AND (pd_mode <> 2) AND (pd_mode <> 4) THEN
-			G.program_test_status_error_id := 16#7202;
-		ELSIF G.program_test_cycle_count = 0 THEN
-			G.program_test_status_error_id := 16#7203;
-		ELSIF ((pd_mode = 1) OR (pd_mode = 4)) AND NOT
-			((G.program_test_axis1_trigger_from_left_mm >= 0.0) AND
-			(G.program_test_axis1_prepare_from_left_mm <= 96.0) AND
-			(G.program_test_axis1_prepare_from_left_mm > G.program_test_axis1_trigger_from_left_mm)) THEN
-			G.program_test_status_error_id := 16#7204;
-		ELSIF (pd_mode = 2) AND NOT
-			((G.program_test_axis5_from_left_mm >= 0.0) AND (G.program_test_axis5_from_left_mm <= 670.0) AND
-			(G.program_test_axis6_prepare_from_left_mm <= 670.0) AND
-			(G.program_test_axis6_trigger_from_left_mm >= 0.0) AND
-			(G.program_test_axis6_prepare_from_left_mm > G.program_test_axis6_trigger_from_left_mm)) THEN
-			G.program_test_status_error_id := 16#7204;
-		ELSIF (pd_mode = 4) AND NOT
-			((G.program_test_axis6_prepare_from_left_mm <= 670.0) AND
-			(G.program_test_axis6_prepare_from_left_mm -
-				UINT_TO_LREAL(G.program_test_cycle_count) *
-				(G.program_test_axis1_prepare_from_left_mm - G.program_test_axis1_trigger_from_left_mm) >= 0.0)) THEN
-			G.program_test_status_error_id := 16#7204;
-		ELSIF NOT ((G.program_test_forward_velocity > 0.0) AND (G.program_test_forward_velocity < 1.0E100) AND
-			(G.program_test_forward_acceleration > 0.0) AND (G.program_test_forward_acceleration < 1.0E100) AND
-			(G.program_test_forward_deceleration > 0.0) AND (G.program_test_forward_deceleration < 1.0E100) AND
-			(G.program_test_forward_jerk > 0.0) AND (G.program_test_forward_jerk < 1.0E100) AND
-			(G.program_test_return_velocity > 0.0) AND (G.program_test_return_velocity < 1.0E100) AND
-			(G.program_test_return_acceleration > 0.0) AND (G.program_test_return_acceleration < 1.0E100) AND
-			(G.program_test_return_deceleration > 0.0) AND (G.program_test_return_deceleration < 1.0E100) AND
-			(G.program_test_return_jerk > 0.0) AND (G.program_test_return_jerk < 1.0E100)) THEN
-			G.program_test_status_error_id := 16#7205;
-		ELSIF (G.program_test_release_wait_ms > 60000) OR (G.program_test_reclamp_wait_ms > 60000) OR
-			(G.program_test_release_lead_ms > 60000) OR (G.program_test_reclamp_lead_ms > 60000) THEN
-			G.program_test_status_error_id := 16#7207;
-		END_IF
-		IF G.program_test_status_error_id <> 0 THEN
-			pd_state := 12;
-		ELSE
-			pd_forward.Velocity := G.program_test_forward_velocity;
-			pd_forward.Acc := G.program_test_forward_acceleration;
-			pd_forward.Dec := G.program_test_forward_deceleration;
-			pd_forward.Jerk := G.program_test_forward_jerk;
-			pd_return.Velocity := G.program_test_return_velocity;
-			pd_return.Acc := G.program_test_return_acceleration;
-			pd_return.Dec := G.program_test_return_deceleration;
-			pd_return.Jerk := G.program_test_return_jerk;
-			pd_release_wait := UDINT_TO_TIME(G.program_test_release_wait_ms);
-			pd_reclamp_wait := UDINT_TO_TIME(G.program_test_reclamp_wait_ms);
-			pd_release_lead := UDINT_TO_TIME(G.program_test_release_lead_ms);
-			pd_reclamp_lead := UDINT_TO_TIME(G.program_test_reclamp_lead_ms);
-			pd_open2 := MAX(WORD#5, G.program_test_cylinder2_open_word);
-			pd_close2 := MAX(WORD#5, G.program_test_cylinder2_close_word);
-			pd_open4 := MAX(WORD#5, G.program_test_cylinder4_open_word);
-			pd_close4 := MAX(WORD#5, G.program_test_cylinder4_close_word);
-			pd_coupling := G.program_test_cylinder1_coupling_enable OR (pd_mode = 4);
-			IF pd_mode = 2 THEN pd_coupling := G.program_test_cylinder3_coupling_enable; END_IF
-			G.program_test_target_axis1_abs := G.leftlimit[1] + G.program_test_axis1_prepare_from_left_mm;
-			G.program_test_target_axis5_abs := G.leftlimit[5] + G.program_test_axis5_from_left_mm;
-			G.program_test_target_axis6_abs := G.leftlimit[6] + G.program_test_axis6_prepare_from_left_mm;
-			G.program_test_target_axis2_deg := G.program_test_axis2_angle_deg;
-			G.program_test_target_axis7_deg := G.program_test_axis7_angle_deg;
-			FOR i := 1 TO 7 DO
-				pd_active[i] := FALSE;
-				pd_req[i] := FALSE;
-				pd_moved[i] := FALSE;
-				pd_ref[i] := G.axis[i].NcToPlc.ActPos - G.init_pos[i];
-				pd_target[i] := G.axis[i].NcToPlc.ActPos;
-			END_FOR
-			IF pd_mode = 2 THEN
-				pd_active[5] := TRUE;
-				pd_active[6] := TRUE;
-				pd_active[7] := TRUE;
-				pd_target[5] := G.program_test_target_axis5_abs;
-				pd_target[6] := G.program_test_target_axis6_abs;
-				pd_target[7] := G.program_test_target_axis7_deg;
-				G.program_test_trigger_target_abs := G.leftlimit[6] + G.program_test_axis6_trigger_from_left_mm;
-				G.program_test_return_target_abs := pd_target[6];
-				G.cylinder3_value := 400;
-				IF pd_coupling THEN G.cylinder3_value := 50; END_IF
-				G.cylinder4_value := pd_open4;
-			ELSE
-				pd_active[1] := TRUE;
-				pd_active[2] := TRUE;
-				pd_target[1] := G.program_test_target_axis1_abs;
-				pd_target[2] := G.program_test_target_axis2_deg;
-				G.program_test_trigger_target_abs := G.leftlimit[1] + G.program_test_axis1_trigger_from_left_mm;
-				G.program_test_return_target_abs := pd_target[1];
-				G.cylinder1_value := 400;
-				IF pd_coupling THEN G.cylinder1_value := 5; END_IF
-				G.cylinder2_value := pd_open2;
-			END_IF
-			G.program_test_final_target_abs := G.program_test_return_target_abs - G.program_test_final_forward_distance_mm;
-			IF pd_mode = 4 THEN
-				pd_active[6] := TRUE;
-				pd_active[7] := TRUE;
-				pd_target[6] := G.program_test_target_axis6_abs;
-				pd_target[7] := pd_target[2];
-				G.program_test_target_axis7_deg := pd_target[2];
-				G.program_test_final_target_abs := G.program_test_return_target_abs;
-				G.cylinder3_value := 400;
-				G.cylinder4_value := pd_open4;
-			END_IF
-			pd_state := 1;
-		END_IF
-	END_IF
-1:
-	G.program_test_wait_action := 1;
-	IF (pd_step = 0) AND pd_release_timer.Q THEN
-		FOR i := 1 TO 7 DO pd_req[i] := pd_active[i]; END_FOR
-		pd_step := 1;
-	END_IF
-	IF pd_step = 1 THEN
-		G.program_test_wait_action := 0;
-		pd_all_done := TRUE;
-		FOR i := 1 TO 7 DO
-			IF pd_active[i] THEN
-				IF G.return_cmd[i].Done THEN
-					pd_moved[i] := TRUE;
-					pd_req[i] := FALSE;
-				END_IF
-				IF NOT pd_moved[i] THEN pd_all_done := FALSE; END_IF
-			END_IF
-		END_FOR
-		IF pd_all_done THEN pd_state := 2; END_IF
-	END_IF
-2:
-	IF pd_axis = 1 THEN
-		G.cylinder1_value := 400;
-		G.cylinder2_value := pd_close2;
-	ELSE
-		G.cylinder3_value := 400;
-		G.cylinder4_value := pd_close4;
-	END_IF
-	IF pd_mode = 4 THEN G.cylinder4_value := pd_close4; END_IF
-	G.program_test_wait_action := 2;
-	IF pd_reclamp_timer.Q THEN
-		pd_ready := TRUE;
-		G.program_test_wait_action := 0;
-		IF G.program_test_start_req AND G.experiment_zero_done AND NOT G.experiment_zero_busy THEN
-			G.program_test_start_req := FALSE;
-			G.program_test_cycle_index := 1;
-			pd_state := 3;
-		END_IF
-	END_IF
-3:
-	IF pd_baseline_timer.Q THEN pd_state := 4; END_IF
-4:
-	IF pd_mode = 4 THEN
-		IF pd_step = 0 THEN
-			pd_anchor1 := G.axis[1].NcToPlc.ActPos;
-			pd_anchor6 := G.axis[6].NcToPlc.ActPos;
-			G.program_test_handle_cycle := 0;
-			pd_step := 1;
-		ELSIF G.program_test_handle_cycle = G.program_test_cycle_index THEN
-			IF NOT ((pd_input1 >= -1.0E100) AND (pd_input1 <= 1.0E100) AND
-				(pd_input2 >= -1.0E100) AND (pd_input2 <= 1.0E100)) THEN
-				G.program_test_status_error_id := 16#7208;
-				pd_state := 12;
-			ELSE
-				pd_input1 := LIMIT(G.program_test_trigger_target_abs, pd_input1, G.program_test_return_target_abs);
-				pd_ref[1] := pd_input1 - G.init_pos[1];
-				pd_ref[2] := pd_input2 - G.init_pos[2];
-				pd_ref[6] := pd_anchor6 + pd_input1 - pd_anchor1 - G.init_pos[6];
-				pd_ref[7] := pd_input2 - G.init_pos[7];
-				IF (pd_input1 <= G.program_test_trigger_target_abs) AND
-					(ABS(G.axis[1].NcToPlc.ActPos - G.program_test_trigger_target_abs) <= 0.05) AND
-					(ABS(G.axis[6].NcToPlc.ActPos - (pd_ref[6] + G.init_pos[6])) <= 0.05) AND
-					(ABS(G.axis[1].NcToPlc.ActVelo) <= 0.05) AND (ABS(G.axis[6].NcToPlc.ActVelo) <= 0.05) THEN
-					pd_state := 5;
-				END_IF
-			END_IF
-		END_IF
-	ELSE
-		IF pd_step = 0 THEN
-			pd_target[pd_axis] := G.program_test_trigger_target_abs;
-			pd_req[pd_axis] := TRUE;
-			pd_step := 1;
-		ELSIF G.return_cmd[pd_axis].Done THEN
-			pd_req[pd_axis] := FALSE;
-			pd_state := 5;
-		END_IF
-	END_IF
-5:
-	G.program_test_wait_action := 1;
-	IF pd_axis = 1 THEN
-		IF pd_coupling THEN G.cylinder1_value := 5; END_IF
-	ELSE
-		IF pd_coupling THEN G.cylinder3_value := 50; END_IF
-	END_IF
-	IF (pd_step = 0) AND (NOT pd_coupling OR pd_release_lead_timer.Q) THEN
-		IF pd_axis = 1 THEN G.cylinder2_value := pd_open2; ELSE G.cylinder4_value := pd_open4; END_IF
-		pd_step := 1;
-	END_IF
-	IF (pd_step = 1) AND pd_release_timer.Q THEN pd_state := 6; END_IF
-6:
-	IF pd_step = 0 THEN
-		pd_target[pd_axis] := G.program_test_return_target_abs;
-		pd_req[pd_axis] := TRUE;
-		pd_step := 1;
-	ELSIF G.return_cmd[pd_axis].Done THEN
-		pd_req[pd_axis] := FALSE;
-		pd_state := 7;
-	END_IF
-7:
-	G.program_test_wait_action := 2;
-	IF pd_axis = 1 THEN G.cylinder2_value := pd_close2; ELSE G.cylinder4_value := pd_close4; END_IF
-	IF (pd_step = 0) AND (NOT pd_coupling OR pd_reclamp_lead_timer.Q) THEN
-		IF pd_axis = 1 THEN G.cylinder1_value := 400; ELSE G.cylinder3_value := 400; END_IF
-		pd_step := 1;
-	END_IF
-	IF (pd_step = 1) AND pd_reclamp_timer.Q THEN pd_state := 8; END_IF
-8:
-	IF G.program_test_cycle_index < G.program_test_cycle_total THEN
-		G.program_test_cycle_index := G.program_test_cycle_index + 1;
-		pd_state := 4;
-	ELSIF (pd_mode <> 4) AND (G.program_test_final_target_abs < G.program_test_return_target_abs) THEN
-		pd_state := 9;
-	ELSE
-		pd_state := 10;
-	END_IF
-9:
-	IF pd_step = 0 THEN
-		pd_target[pd_axis] := G.program_test_final_target_abs;
-		pd_req[pd_axis] := TRUE;
-		pd_step := 1;
-	ELSIF G.return_cmd[pd_axis].Done THEN
-		pd_req[pd_axis] := FALSE;
-		pd_state := 10;
-	END_IF
-END_CASE
-
-IF pd_state >= 11 THEN
-	pd_ready := FALSE;
-	FOR i := 1 TO 7 DO
-		pd_req[i] := FALSE;
-		IF pd_last_state < 11 THEN pd_ref[i] := G.axis[i].NcToPlc.ActPos - G.init_pos[i]; END_IF
-	END_FOR
-	G.program_test_start_req := FALSE;
-	G.program_test_setup_req := FALSE;
-END_IF
-IF (pd_mode = 4) AND (pd_state <> 1) AND (pd_state <> 0) THEN
-	pd_ref[7] := pd_ref[2] + G.init_pos[2] - G.init_pos[7];
-END_IF
-G.program_test_sync_state := 0;
-IF (pd_mode = 4) AND (pd_state = 4) THEN
-	G.program_test_sync_state := 1;
-	IF G.program_test_handle_cycle = G.program_test_cycle_index THEN G.program_test_sync_state := 2; END_IF
-ELSIF (pd_mode = 4) AND (pd_state >= 5) AND (pd_state <= 8) THEN
-	G.program_test_sync_state := 4;
-END_IF
-IF pd_state <> 4 THEN G.program_test_handle_cycle := 0; END_IF
-FOR i := 1 TO 7 DO
-	G.refer[i] := pd_ref[i];
-	IF pd_state = 6 THEN
-		G.return_cmd[i].Velocity := pd_return.Velocity;
-		G.return_cmd[i].Acc := pd_return.Acc;
-		G.return_cmd[i].Dec := pd_return.Dec;
-		G.return_cmd[i].Jerk := pd_return.Jerk;
-	ELSE
-		G.return_cmd[i].Velocity := pd_forward.Velocity;
-		G.return_cmd[i].Acc := pd_forward.Acc;
-		G.return_cmd[i].Dec := pd_forward.Dec;
-		G.return_cmd[i].Jerk := pd_forward.Jerk;
-	END_IF
-	G.return_cmd[i].TargetAbs := pd_target[i];
-	G.return_cmd[i].Req := pd_req[i];
-END_FOR
-G.axis4_fwd_req := FALSE;
-G.axis4_rev_req := FALSE;
-G.axis1_fast_return := FALSE;
-G.axis6_fast_retract := FALSE;
-G.startup_smoothing_bypass := FALSE;
-G.program_test_phase := pd_state;
-G.program_test_enable := (pd_state >= 1) AND (pd_state <= 9);
-G.program_test_setup_done := pd_ready;
-G.program_test_setup_busy := (pd_state = 1) OR ((pd_state = 2) AND NOT pd_ready);
-G.program_test_sample_arm := (pd_state >= 3) AND (pd_state <= 9);
-IF (pd_state <> pd_last_state) OR (G.program_test_sync_state <> pd_last_sync) THEN
-	G.program_test_event_sequence := G.program_test_event_sequence + 1;
-END_IF
-IF pd_state <> pd_last_state THEN pd_step := 0; END_IF
-pd_last_state := pd_state;
-pd_last_sync := G.program_test_sync_state;
-END_IF
-]]></ST>
-      </Implementation>
-    </Action>
-    <Action Name="ProgramRecord" Id="{d90e79ea-aede-41b5-b003-24331ee94002}">
-      <Implementation>
-        <ST><![CDATA[
-FOR i := 1 TO 2 DO
-	IF G.experiment_record_block_ready[i] AND
-		(G.experiment_record_block_ack_sequence[i] = G.experiment_record_block_sequence[i]) THEN
-		G.experiment_record_block_ready[i] := FALSE;
-		G.experiment_record_block_count[i] := 0;
-	END_IF
-END_FOR
-IF G.experiment_record_clear OR G.program_test_sample_clear THEN
-	G.experiment_record_clear := FALSE;
-	G.program_test_sample_clear := FALSE;
-	G.experiment_record_enable := FALSE;
-	G.experiment_record_overflow := FALSE;
-	G.experiment_record_error_id := 0;
-	G.experiment_record_total_count := 0;
-	G.program_test_sample_count := 0;
-	G.program_test_sample_overflow := FALSE;
-	rec_block := 1;
-	rec_index := 0;
-	rec_sequence := 0;
-	rec_was_active := FALSE;
-	FOR i := 1 TO 2 DO
-		G.experiment_record_block_ready[i] := FALSE;
-		G.experiment_record_block_count[i] := 0;
-		G.experiment_record_block_sequence[i] := 0;
-		G.experiment_record_block_ack_sequence[i] := 16#FFFFFFFF;
-	END_FOR
-END_IF
-IF G.experiment_zero_req THEN
-	G.experiment_zero_req := FALSE;
-	G.experiment_zero_done := FALSE;
-	G.experiment_zero_error_id := 0;
-	G.experiment_zero_sample_count := 0;
-	G.experiment_zero_busy := pd_ready AND (pd_state = 2) AND NOT pd_fault;
-	IF NOT G.experiment_zero_busy THEN G.experiment_zero_error_id := 16#7401; END_IF
-	zero_index := 0;
-	FOR i := 1 TO 4 DO zero_sum[i] := 0.0; zero_square[i] := 0.0; END_FOR
-END_IF
-IF G.experiment_zero_busy THEN
-	IF pd_fault OR (pd_state <> 2) THEN
-		G.experiment_zero_busy := FALSE;
-		G.experiment_zero_error_id := 16#7401;
-	ELSE
-		G.experiment_zero_sample_fn1[zero_index] := G.fn_1_value;
-		G.experiment_zero_sample_ft1[zero_index] := G.ft_1_value;
-		G.experiment_zero_sample_fn2[zero_index] := G.fn_2_value;
-		G.experiment_zero_sample_ft2[zero_index] := G.ft_2_value;
-		zero_force[1] := INT_TO_LREAL(G.fn_1_value);
-		zero_force[2] := INT_TO_LREAL(G.ft_1_value);
-		zero_force[3] := INT_TO_LREAL(G.fn_2_value);
-		zero_force[4] := INT_TO_LREAL(G.ft_2_value);
-		FOR i := 1 TO 4 DO
-			zero_sum[i] := zero_sum[i] + zero_force[i];
-			zero_square[i] := zero_square[i] + zero_force[i] * zero_force[i];
-		END_FOR
-		zero_index := zero_index + 1;
-		G.experiment_zero_sample_count := zero_index;
-		IF zero_index = 1000 THEN
-			FOR i := 1 TO 4 DO
-				zero_mean[i] := zero_sum[i] / 1000.0;
-				zero_std[i] := SQRT(MAX(0.0, zero_square[i] / 1000.0 - zero_mean[i] * zero_mean[i]));
-			END_FOR
-			G.experiment_zero_fn1 := zero_mean[1];
-			G.experiment_zero_ft1 := zero_mean[2];
-			G.experiment_zero_fn2 := zero_mean[3];
-			G.experiment_zero_ft2 := zero_mean[4];
-			G.experiment_zero_fn1_std := zero_std[1];
-			G.experiment_zero_ft1_std := zero_std[2];
-			G.experiment_zero_fn2_std := zero_std[3];
-			G.experiment_zero_ft2_std := zero_std[4];
-			G.experiment_zero_busy := FALSE;
-			G.experiment_zero_done := TRUE;
-		END_IF
-	END_IF
-END_IF
-rec_capture := G.program_test_sample_arm OR rec_was_active;
-rec_was_active := G.program_test_sample_arm;
-G.experiment_record_enable := G.program_test_sample_arm AND NOT G.experiment_record_overflow;
-IF rec_capture AND NOT G.experiment_record_overflow THEN
-IF G.experiment_record_block_ready[rec_block] THEN
-	G.experiment_record_overflow := TRUE;
-	G.experiment_record_error_id := 16#7402;
-	G.experiment_record_enable := FALSE;
-	G.program_test_abort_req := TRUE;
-ELSE
-G.experiment_record_source_mode := pd_mode;
-rec_time := UDINT_TO_ULINT(G.experiment_record_total_count) *
-	UDINT_TO_ULINT(TwinCAT_SystemInfoVarList._TaskInfo[1].CycleTime) / 10;
-rec_sample := MIN(G.program_test_sample_count, UDINT#32767);
-G.program_test_sample_index[rec_sample] := G.experiment_record_total_count;
-G.program_test_sample_time_us[rec_sample] := rec_time;
-G.program_test_sample_phase[rec_sample] := G.program_test_phase;
-G.program_test_sample_event_sequence[rec_sample] := G.program_test_event_sequence;
-G.program_test_sample_cycle_index[rec_sample] := G.program_test_cycle_index;
-G.program_test_sample_sync_state[rec_sample] := G.program_test_sync_state;
-G.program_test_sample_axis1_pos[rec_sample] := G.axis[1].NcToPlc.ActPos;
-G.program_test_sample_axis1_vel[rec_sample] := G.axis[1].NcToPlc.ActVelo;
-G.program_test_sample_axis1_acc[rec_sample] := G.axis[1].NcToPlc.ActAcc;
-G.program_test_sample_axis2_pos[rec_sample] := G.axis[2].NcToPlc.ActPos;
-G.program_test_sample_axis2_vel[rec_sample] := G.axis[2].NcToPlc.ActVelo;
-G.program_test_sample_axis2_acc[rec_sample] := G.axis[2].NcToPlc.ActAcc;
-G.program_test_sample_axis5_pos[rec_sample] := G.axis[5].NcToPlc.ActPos;
-G.program_test_sample_axis5_vel[rec_sample] := G.axis[5].NcToPlc.ActVelo;
-G.program_test_sample_axis5_acc[rec_sample] := G.axis[5].NcToPlc.ActAcc;
-G.program_test_sample_axis6_pos[rec_sample] := G.axis[6].NcToPlc.ActPos;
-G.program_test_sample_axis6_vel[rec_sample] := G.axis[6].NcToPlc.ActVelo;
-G.program_test_sample_axis6_acc[rec_sample] := G.axis[6].NcToPlc.ActAcc;
-G.program_test_sample_axis7_pos[rec_sample] := G.axis[7].NcToPlc.ActPos;
-G.program_test_sample_axis7_vel[rec_sample] := G.axis[7].NcToPlc.ActVelo;
-G.program_test_sample_axis7_acc[rec_sample] := G.axis[7].NcToPlc.ActAcc;
-G.program_test_sample_cylinder1[rec_sample] := G.cylinder1_value;
-G.program_test_sample_cylinder2[rec_sample] := G.cylinder2_value;
-G.program_test_sample_cylinder3[rec_sample] := G.cylinder3_value;
-G.program_test_sample_cylinder4[rec_sample] := G.cylinder4_value;
-G.program_test_sample_fn1[rec_sample] := G.fn_1_value;
-G.program_test_sample_ft1[rec_sample] := G.ft_1_value;
-G.program_test_sample_fn2[rec_sample] := G.fn_2_value;
-G.program_test_sample_ft2[rec_sample] := G.ft_2_value;
-IF G.program_test_sample_count < 32768 THEN
-	G.program_test_sample_count := G.program_test_sample_count + 1;
-ELSE
-	G.program_test_sample_overflow := TRUE;
-END_IF
-IF rec_block = 1 THEN
-	G.experiment_record_block0_index[rec_index] := G.experiment_record_total_count;
-	G.experiment_record_block0_time_us[rec_index] := rec_time;
-	G.experiment_record_block0_phase[rec_index] := G.program_test_phase;
-	G.experiment_record_block0_event_sequence[rec_index] := G.program_test_event_sequence;
-	G.experiment_record_block0_cycle_index[rec_index] := G.program_test_cycle_index;
-	G.experiment_record_block0_sync_state[rec_index] := G.program_test_sync_state;
-	G.experiment_record_block0_axis1_pos[rec_index] := G.axis[1].NcToPlc.ActPos;
-	G.experiment_record_block0_axis1_vel[rec_index] := G.axis[1].NcToPlc.ActVelo;
-	G.experiment_record_block0_axis1_acc[rec_index] := G.axis[1].NcToPlc.ActAcc;
-	G.experiment_record_block0_axis2_pos[rec_index] := G.axis[2].NcToPlc.ActPos;
-	G.experiment_record_block0_axis2_vel[rec_index] := G.axis[2].NcToPlc.ActVelo;
-	G.experiment_record_block0_axis2_acc[rec_index] := G.axis[2].NcToPlc.ActAcc;
-	G.experiment_record_block0_axis5_pos[rec_index] := G.axis[5].NcToPlc.ActPos;
-	G.experiment_record_block0_axis5_vel[rec_index] := G.axis[5].NcToPlc.ActVelo;
-	G.experiment_record_block0_axis5_acc[rec_index] := G.axis[5].NcToPlc.ActAcc;
-	G.experiment_record_block0_axis6_pos[rec_index] := G.axis[6].NcToPlc.ActPos;
-	G.experiment_record_block0_axis6_vel[rec_index] := G.axis[6].NcToPlc.ActVelo;
-	G.experiment_record_block0_axis6_acc[rec_index] := G.axis[6].NcToPlc.ActAcc;
-	G.experiment_record_block0_axis7_pos[rec_index] := G.axis[7].NcToPlc.ActPos;
-	G.experiment_record_block0_axis7_vel[rec_index] := G.axis[7].NcToPlc.ActVelo;
-	G.experiment_record_block0_axis7_acc[rec_index] := G.axis[7].NcToPlc.ActAcc;
-	G.experiment_record_block0_cylinder1[rec_index] := G.cylinder1_value;
-	G.experiment_record_block0_cylinder2[rec_index] := G.cylinder2_value;
-	G.experiment_record_block0_cylinder3[rec_index] := G.cylinder3_value;
-	G.experiment_record_block0_cylinder4[rec_index] := G.cylinder4_value;
-	G.experiment_record_block0_fn1[rec_index] := G.fn_1_value;
-	G.experiment_record_block0_ft1[rec_index] := G.ft_1_value;
-	G.experiment_record_block0_fn2[rec_index] := G.fn_2_value;
-	G.experiment_record_block0_ft2[rec_index] := G.ft_2_value;
-ELSE
-	G.experiment_record_block1_index[rec_index] := G.experiment_record_total_count;
-	G.experiment_record_block1_time_us[rec_index] := rec_time;
-	G.experiment_record_block1_phase[rec_index] := G.program_test_phase;
-	G.experiment_record_block1_event_sequence[rec_index] := G.program_test_event_sequence;
-	G.experiment_record_block1_cycle_index[rec_index] := G.program_test_cycle_index;
-	G.experiment_record_block1_sync_state[rec_index] := G.program_test_sync_state;
-	G.experiment_record_block1_axis1_pos[rec_index] := G.axis[1].NcToPlc.ActPos;
-	G.experiment_record_block1_axis1_vel[rec_index] := G.axis[1].NcToPlc.ActVelo;
-	G.experiment_record_block1_axis1_acc[rec_index] := G.axis[1].NcToPlc.ActAcc;
-	G.experiment_record_block1_axis2_pos[rec_index] := G.axis[2].NcToPlc.ActPos;
-	G.experiment_record_block1_axis2_vel[rec_index] := G.axis[2].NcToPlc.ActVelo;
-	G.experiment_record_block1_axis2_acc[rec_index] := G.axis[2].NcToPlc.ActAcc;
-	G.experiment_record_block1_axis5_pos[rec_index] := G.axis[5].NcToPlc.ActPos;
-	G.experiment_record_block1_axis5_vel[rec_index] := G.axis[5].NcToPlc.ActVelo;
-	G.experiment_record_block1_axis5_acc[rec_index] := G.axis[5].NcToPlc.ActAcc;
-	G.experiment_record_block1_axis6_pos[rec_index] := G.axis[6].NcToPlc.ActPos;
-	G.experiment_record_block1_axis6_vel[rec_index] := G.axis[6].NcToPlc.ActVelo;
-	G.experiment_record_block1_axis6_acc[rec_index] := G.axis[6].NcToPlc.ActAcc;
-	G.experiment_record_block1_axis7_pos[rec_index] := G.axis[7].NcToPlc.ActPos;
-	G.experiment_record_block1_axis7_vel[rec_index] := G.axis[7].NcToPlc.ActVelo;
-	G.experiment_record_block1_axis7_acc[rec_index] := G.axis[7].NcToPlc.ActAcc;
-	G.experiment_record_block1_cylinder1[rec_index] := G.cylinder1_value;
-	G.experiment_record_block1_cylinder2[rec_index] := G.cylinder2_value;
-	G.experiment_record_block1_cylinder3[rec_index] := G.cylinder3_value;
-	G.experiment_record_block1_cylinder4[rec_index] := G.cylinder4_value;
-	G.experiment_record_block1_fn1[rec_index] := G.fn_1_value;
-	G.experiment_record_block1_ft1[rec_index] := G.ft_1_value;
-	G.experiment_record_block1_fn2[rec_index] := G.fn_2_value;
-	G.experiment_record_block1_ft2[rec_index] := G.ft_2_value;
-END_IF
-rec_index := rec_index + 1;
-G.experiment_record_total_count := G.experiment_record_total_count + 1;
-IF (rec_index = 512) OR NOT G.program_test_sample_arm THEN
-	G.experiment_record_block_sequence[rec_block] := rec_sequence;
-	G.experiment_record_block_count[rec_block] := INT_TO_UINT(rec_index);
-	G.experiment_record_block_ready[rec_block] := TRUE;
-	rec_sequence := rec_sequence + 1;
-	rec_block := 3 - rec_block;
-	rec_index := 0;
-END_IF
-END_IF
-END_IF
-]]></ST>
-      </Implementation>
-    </Action>
     <LineIds Name="handle">
       <LineId Id="2" Count="0" />
       <LineId Id="4" Count="698" />

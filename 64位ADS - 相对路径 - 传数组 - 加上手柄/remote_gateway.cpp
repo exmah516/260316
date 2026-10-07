@@ -6,6 +6,7 @@
 
 #include "remote_gateway.h"
 #include "remote_protocol.h"
+#include "remote_handle_bridge.h"
 
 #include <algorithm>
 #include <cctype>
@@ -300,6 +301,25 @@ namespace
 	{
 		return v < -1 ? -1 : (v > 1 ? 1 : v);
 	}
+
+	// 把“当前为什么不能执行运动类操作”翻译成人话。按从端主循环的放行顺序列出所有未满足的条件。
+	std::string describe_hold(const VisState& vs, const RemoteExtraState& ex)
+	{
+		std::string s;
+		auto add = [&](const char* t)
+		{
+			if (!s.empty()) s += "；";
+			s += t;
+		};
+		if (vs.estop_hold) add("PLC 急停保持");
+		if (vs.ads_state != 2 || ex.ads_soft_hold) add("ADS 通信未就绪或处于软保持");
+		if (ex.handle_soft_hold) add("手柄数据无效（从端未收到有效的主端手柄采样，请确认主端手柄在线且已持有控制权）");
+		if (!ex.initial_sync_done) add("从端初始同步未完成（需要手柄就绪、ADS 正常且已完成自检）");
+		if (!vs.self_check_done) add("尚未到达器械准备位置");
+		else if (!vs.control_active) add("手柄控制尚未开始（请点击“开始控制”）");
+		if (s.empty()) add("自动流程（启动准备/换手/回退/屈曲恢复/软限位）正在接管");
+		return s;
+	}
 }
 
 // ====================================================================== 生命周期
@@ -315,23 +335,132 @@ bool RemoteGateway::start(const RemoteGatewayConfig& cfg)
 	cfg_ = cfg;
 
 	// 密钥文件：不存在则不启用，避免无认证的网络入口。
+	// 查找顺序：配置里显式给出的路径 → 从 exe 所在目录和当前工作目录逐级向上，
+	// 每级先看 remote.token 再看 config\remote.token。这样无论在 VS 里按 F5（工作目录是项目根）
+	// 还是双击 x64\Debug 下的 exe，都能找到同一份密钥。
+	std::string found_token_path; // UTF-8，仅用于日志
 	{
-		std::ifstream f(cfg_.token_path, std::ios::binary);
-		if (!f)
+		// 全程使用宽字符路径：项目目录含中文，ANSI 接口在系统代码页不覆盖这些字符时会把路径破坏。
+		auto to_wide = [](const std::string& s) -> std::wstring
 		{
-			std::cout << "远程网关：未启用（找不到密钥文件 " << cfg_.token_path << "）。" << std::endl;
+			if (s.empty()) return std::wstring();
+			const int n = MultiByteToWideChar(CP_UTF8, 0, s.data(), static_cast<int>(s.size()), nullptr, 0);
+			if (n <= 0) return std::wstring();
+			std::wstring w(static_cast<size_t>(n), L'\0');
+			MultiByteToWideChar(CP_UTF8, 0, s.data(), static_cast<int>(s.size()), &w[0], n);
+			return w;
+		};
+		auto to_utf8 = [](const std::wstring& w) -> std::string
+		{
+			if (w.empty()) return std::string();
+			const int n = WideCharToMultiByte(CP_UTF8, 0, w.data(), static_cast<int>(w.size()), nullptr, 0, nullptr, nullptr);
+			if (n <= 0) return std::string();
+			std::string s(static_cast<size_t>(n), '\0');
+			WideCharToMultiByte(CP_UTF8, 0, w.data(), static_cast<int>(w.size()), &s[0], n, nullptr, nullptr);
+			return s;
+		};
+
+		std::vector<std::wstring> candidates;
+		if (!cfg_.token_path.empty()) candidates.push_back(to_wide(cfg_.token_path));
+		auto add_upward = [&](std::wstring dir)
+		{
+			for (int level = 0; level < 10 && !dir.empty(); ++level)
+			{
+				while (!dir.empty() && (dir.back() == L'\\' || dir.back() == L'/')) dir.pop_back();
+				if (dir.empty()) break;
+				candidates.push_back(dir + L"\\remote.token");
+				candidates.push_back(dir + L"\\config\\remote.token");
+				const size_t slash = dir.find_last_of(L"\\/");
+				if (slash == std::wstring::npos) break;
+				dir.erase(slash);
+			}
+		};
+		std::wstring exe_dir_w;
+		wchar_t exe_path[MAX_PATH * 2] = {};
+		const DWORD exe_len = GetModuleFileNameW(nullptr, exe_path, MAX_PATH * 2);
+		if (exe_len > 0 && exe_len < MAX_PATH * 2)
+		{
+			std::wstring p(exe_path, exe_len);
+			const size_t slash = p.find_last_of(L"\\/");
+			if (slash != std::wstring::npos)
+			{
+				exe_dir_w = p.substr(0, slash);
+				add_upward(exe_dir_w);
+			}
+		}
+		std::wstring cwd_w;
+		wchar_t cwd[MAX_PATH * 2] = {};
+		const DWORD cwd_len = GetCurrentDirectoryW(MAX_PATH * 2, cwd);
+		if (cwd_len > 0 && cwd_len < MAX_PATH * 2)
+		{
+			cwd_w.assign(cwd, cwd_len);
+			add_upward(cwd_w);
+		}
+
+		// 逐个候选文件读取并校验：不合格的打印原因后继续找下一份，第一份合格的生效。
+		bool token_ok = false;
+		bool any_opened = false;
+		for (const std::wstring& c : candidates)
+		{
+			std::ifstream f(c.c_str(), std::ios::binary); // MSVC 扩展：接受宽字符路径
+			if (!f) continue;
+			any_opened = true;
+			std::string raw((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+			const size_t raw_bytes = raw.size();
+
+			// 编码归一：UTF-8 BOM 去掉；UTF-16 LE/BE（带 BOM）取低字节还原 ASCII。
+			// 密钥只允许 ASCII 可见字符，主端以 UTF-8 读同一文件，两端才会一致。
+			if (raw.size() >= 3 && static_cast<unsigned char>(raw[0]) == 0xEF &&
+				static_cast<unsigned char>(raw[1]) == 0xBB && static_cast<unsigned char>(raw[2]) == 0xBF)
+			{
+				raw.erase(0, 3);
+			}
+			else if (raw.size() >= 2 && static_cast<unsigned char>(raw[0]) == 0xFF &&
+				static_cast<unsigned char>(raw[1]) == 0xFE)
+			{
+				std::string narrowed;
+				for (size_t i = 2; i + 1 < raw.size(); i += 2) narrowed.push_back(raw[i]);
+				raw.swap(narrowed);
+			}
+			else if (raw.size() >= 2 && static_cast<unsigned char>(raw[0]) == 0xFE &&
+				static_cast<unsigned char>(raw[1]) == 0xFF)
+			{
+				std::string narrowed;
+				for (size_t i = 3; i < raw.size(); i += 2) narrowed.push_back(raw[i]);
+				raw.swap(narrowed);
+			}
+
+			size_t b = 0, e = raw.size();
+			while (b < e && std::isspace(static_cast<unsigned char>(raw[b]))) ++b;
+			while (e > b && std::isspace(static_cast<unsigned char>(raw[e - 1]))) --e;
+			if (e - b < 16)
+			{
+				std::cout << "远程网关：跳过密钥文件 " << to_utf8(c) << "（文件 " << raw_bytes
+					<< " 字节，有效字符 " << (e - b) << " 个，不足 16 个）。" << std::endl;
+				continue;
+			}
+			token_.assign(raw.begin() + b, raw.begin() + e);
+			found_token_path = to_utf8(c);
+			token_ok = true;
+			break;
+		}
+		if (!token_ok)
+		{
+			if (!any_opened)
+			{
+				std::cout << "远程网关：未启用（找不到密钥文件 remote.token）。" << std::endl;
+				std::cout << "  exe 目录：" << to_utf8(exe_dir_w) << std::endl;
+				std::cout << "  工作目录：" << to_utf8(cwd_w) << std::endl;
+				std::cout << "  已在以上两处及其上级目录（含各级 config 子目录）中查找，共 "
+					<< candidates.size() << " 个候选路径。" << std::endl;
+			}
+			else
+			{
+				std::cout << "远程网关：未启用（找到的密钥文件都不满足至少 16 个字符）。" << std::endl;
+			}
 			return false;
 		}
-		std::string raw((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
-		size_t b = 0, e = raw.size();
-		while (b < e && std::isspace(static_cast<unsigned char>(raw[b]))) ++b;
-		while (e > b && std::isspace(static_cast<unsigned char>(raw[e - 1]))) --e;
-		if (e - b < 16)
-		{
-			std::cout << "远程网关：未启用（密钥至少 16 个字符）。" << std::endl;
-			return false;
-		}
-		token_.assign(raw.begin() + b, raw.begin() + e);
+		std::cout << "远程网关：已加载密钥文件 " << found_token_path << "（" << token_.size() << " 个字符）。" << std::endl;
 	}
 
 	WSADATA wsa{};
@@ -475,6 +604,9 @@ void RemoteGateway::release_lease_locked(const char* reason)
 	apply_holds_locked(zeros, GetTickCount64());
 	if (lease_held_) std::cout << "远程网关：已释放控制权（" << reason << "）。" << std::endl;
 	lease_held_ = false;
+	// 手柄采样与力指令随控制权一并撤销：Handle 侧会在采样过期后走既有的软保持流程。
+	remote_handle_bridge::clear_samples();
+	remote_handle_bridge::clear_outputs();
 }
 
 void RemoteGateway::end_session_locked(const char* reason)
@@ -852,7 +984,7 @@ void RemoteGateway::handle_command(std::uintptr_t sock_handle, int id, const std
 			if (now_engaged) { send_ack(sock, id, "done"); return; }
 			if (!st.vs.cylinder_manual_allowed)
 			{
-				send_ack(sock, id, "rejected", "当前未就绪或自动流程正在接管，电缸不可手动操作");
+				send_ack(sock, id, "rejected", "电缸不可手动操作：" + describe_hold(st.vs, st.extra));
 				return;
 			}
 			// 电缸 1/3 打开值 2000，电缸 2/4 打开值 10。
@@ -866,6 +998,29 @@ void RemoteGateway::handle_command(std::uintptr_t sock_handle, int id, const std
 			push_cmd(VisCommandType::ResetCylinderManual, index);
 			p.kind = PendingKind::CylinderOff;
 		}
+		pending.push_back(p);
+		send_ack(sock, id, "accepted");
+		return;
+	}
+
+	if (name == "start_control")
+	{
+		// 等价于本地调试台自检完成后的“开始控制”（SelectDirectControl）：在当前位置直接进入手柄控制。
+		if (st.vs.control_active) { send_ack(sock, id, "done"); return; }
+		if (!st.vs.self_check_done)
+		{
+			send_ack(sock, id, "rejected", "尚未到达器械准备位置，请先点击“进入器械准备位置”");
+			return;
+		}
+		if (st.vs.estop_hold || st.vs.ads_state != 2 || st.extra.ads_soft_hold || !st.extra.initial_sync_done)
+		{
+			// 初始同步完成前开始控制会被紧接着的初始同步重置，必须等它完成。
+			send_ack(sock, id, "rejected", "暂不能开始控制：" + describe_hold(st.vs, st.extra));
+			return;
+		}
+		push_cmd(VisCommandType::SelectDirectControl);
+		p.kind = PendingKind::StartControl;
+		p.deadline_ms = now + 3000;
 		pending.push_back(p);
 		send_ack(sock, id, "accepted");
 		return;
@@ -967,6 +1122,15 @@ void RemoteGateway::process_pending(std::uintptr_t sock_handle, std::vector<Pend
 			break;
 		}
 
+		case PendingKind::StartControl:
+			if (st.vs.control_active) { finished = ok = true; }
+			else if (settled || timed_out)
+			{
+				finished = true;
+				reason = "开始控制未生效：" + describe_hold(st.vs, st.extra);
+			}
+			break;
+
 		case PendingKind::YValve:
 			if (st.extra.y_valve_open == !p.flag) { finished = ok = true; }
 			else if (settled || timed_out) { finished = true; reason = "Y 阀状态未改变"; }
@@ -1021,7 +1185,10 @@ void RemoteGateway::udp_loop()
 				reinterpret_cast<sockaddr*>(&from), &from_len);
 			if (n > 0)
 			{
-				handle_udp(buf, n, from.sin_addr.s_addr, from.sin_port);
+				if (handle_udp(buf, n, from.sin_addr.s_addr, from.sin_port))
+				{
+					send_haptic(static_cast<std::uintptr_t>(us));
+				}
 			}
 		}
 		tick_udp(static_cast<std::uintptr_t>(us));
@@ -1029,27 +1196,27 @@ void RemoteGateway::udp_loop()
 	closesocket(us);
 }
 
-void RemoteGateway::handle_udp(const unsigned char* data, int len, std::uint32_t from_ip, std::uint16_t from_port)
+bool RemoteGateway::handle_udp(const unsigned char* data, int len, std::uint32_t from_ip, std::uint16_t from_port)
 {
-	if (len != static_cast<int>(rp::kControlFrameLen)) return;
+	if (len != static_cast<int>(rp::kControlFrameLen)) return false;
 	rp::FrameHeader h{};
 	std::memcpy(&h, data, sizeof(h));
-	if (h.magic != rp::kMagic || h.version != rp::kVersion || h.type != rp::kTypeControl) return;
+	if (h.magic != rp::kMagic || h.version != rp::kVersion || h.type != rp::kTypeControl) return false;
 
 	std::lock_guard<std::mutex> lock(m_);
-	if (!session_active_ || h.session != session_id_) return;
+	if (!session_active_ || h.session != session_id_) return false;
 
 	unsigned char mac[32] = {};
 	const size_t body = static_cast<size_t>(len) - rp::kMacLen;
 	if (!hmac_sha256(session_key_, 16, data, body, mac) || !ct_equal(mac, data + body, rp::kMacLen))
 	{
 		++frames_dropped_;
-		return;
+		return false;
 	}
 	if (seq_has_ && static_cast<std::int32_t>(h.seq - seq_last_) <= 0)
 	{
 		++frames_dropped_; // 重放或乱序
-		return;
+		return false;
 	}
 	seq_has_ = true;
 	seq_last_ = h.seq;
@@ -1064,16 +1231,81 @@ void RemoteGateway::handle_udp(const unsigned char* data, int len, std::uint32_t
 
 	rp::ControlPayload p{};
 	std::memcpy(&p, data + rp::kHeaderLen, sizeof(p));
-	// 手柄采样（p.handle）本版本尚未接入运动控制，只校验不使用。
 
 	int dirs[3] = { 0, 0, 0 };
-	if (lease_held_)
+	if (!lease_held_)
 	{
+		// 未持有控制权：不接收任何手柄输入。
+		remote_handle_bridge::clear_samples();
+	}
+	else
+	{
+		// 手柄采样：A=物理 582，B=物理 587，写入数据桥，由 Handle（远程模式）读取。
+		for (int i = 0; i < 2; ++i)
+		{
+			remote_handle_bridge::Sample s;
+			s.valid = p.handle[i].valid != 0;
+			s.buttons = p.handle[i].buttons;
+			for (int k = 0; k < 2; ++k)
+			{
+				s.encoders[k] = p.handle[i].encoders[k];
+				s.joints[k] = std::isfinite(p.handle[i].joints[k]) ? p.handle[i].joints[k] : 0.0f;
+				s.vels[k] = std::isfinite(p.handle[i].vels[k]) ? p.handle[i].vels[k] : 0.0f;
+			}
+			remote_handle_bridge::put_sample(i, s);
+		}
 		dirs[0] = clamp_dir(p.injector_dir[0]);
 		dirs[1] = clamp_dir(p.injector_dir[1]);
 		dirs[2] = clamp_dir(p.axis4_dir);
 	}
 	apply_holds_locked(dirs, now);
+	return true;
+}
+
+void RemoteGateway::send_haptic(std::uintptr_t udp_handle)
+{
+	const SOCKET us = static_cast<SOCKET>(udp_handle);
+	unsigned char out[rp::kHapticFrameLen];
+	sockaddr_in to{};
+	{
+		std::lock_guard<std::mutex> lock(m_);
+		if (!session_active_ || !peer_valid_) return;
+		const ULONGLONG now = GetTickCount64();
+
+		rp::HapticPayload hp{};
+		const ULONGLONG hold = now - last_frame_ms_;
+		hp.echo_ts_ms = last_frame_ts_;
+		hp.hold_ms = static_cast<std::uint16_t>(hold > 65535 ? 65535 : hold);
+		for (int i = 0; i < 2; ++i)
+		{
+			// 未持有控制权时一律回 0，主端手柄不输出力。
+			const remote_handle_bridge::Output o = lease_held_
+				? remote_handle_bridge::get_output(i) : remote_handle_bridge::Output();
+			hp.handle[i].enable = o.enable ? 1 : 0;
+			hp.handle[i].axis = static_cast<std::int8_t>(o.axis < 0 ? 0 : (o.axis > 2 ? 2 : o.axis));
+			hp.handle[i].force_n = o.enable ? fin(o.force) : 0.0f;
+			hp.handle[i].torque_nm = o.enable ? fin(o.torque) : 0.0f;
+		}
+
+		rp::FrameHeader h{};
+		h.magic = rp::kMagic;
+		h.version = rp::kVersion;
+		h.type = rp::kTypeHaptic;
+		h.session = session_id_;
+		h.seq = ++tx_seq_;
+		h.ts_ms = static_cast<std::uint32_t>(GetTickCount());
+		std::memcpy(out, &h, rp::kHeaderLen);
+		std::memcpy(out + rp::kHeaderLen, &hp, sizeof(hp));
+		unsigned char mac[32] = {};
+		const size_t body = rp::kHeaderLen + sizeof(hp);
+		if (!hmac_sha256(session_key_, 16, out, body, mac)) return;
+		std::memcpy(out + body, mac, rp::kMacLen);
+		to.sin_family = AF_INET;
+		to.sin_addr.s_addr = peer_ip_;
+		to.sin_port = peer_port_;
+	}
+	sendto(us, reinterpret_cast<const char*>(out), static_cast<int>(rp::kHapticFrameLen), 0,
+		reinterpret_cast<const sockaddr*>(&to), sizeof(to));
 }
 
 void RemoteGateway::tick_udp(std::uintptr_t udp_handle)

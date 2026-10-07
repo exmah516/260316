@@ -13,12 +13,17 @@ namespace MasterConsole.Views
     public partial class MainWindow : Window
     {
         private readonly MainViewModel _vm;
+        // CreateLink 的结果说明，窗口建好后写进事件日志，避免“静默退回模拟链路”。
+        private static string _linkNotice;
+        private static string _linkTokenPath;
 
         public MainWindow()
         {
             InitializeComponent();
             _vm = new MainViewModel(CreateLink());
             DataContext = _vm;
+            if (_linkNotice != null) _vm.PostLog("warn", _linkNotice);
+            else if (_linkTokenPath != null) _vm.PostLog("info", "已加载密钥：" + _linkTokenPath);
             Closed += (s, e) => _vm.Dispose();
         }
 
@@ -39,24 +44,36 @@ namespace MasterConsole.Views
                 else if (args[i] == "--host" && i + 1 < args.Length) host = args[++i];
                 else if (args[i] == "--token" && i + 1 < args.Length) tokenPath = args[++i];
             }
-            if (sim) return new SimulatedRobotLink();
-
-            string baseDir = AppDomain.CurrentDomain.BaseDirectory;
-            string[] candidates =
+            if (sim)
             {
-                tokenPath,
-                Path.Combine(baseDir, "remote.token"),
-                Path.GetFullPath(Path.Combine(baseDir, "..", "..", "config", "remote.token")),
-                Path.GetFullPath(Path.Combine(baseDir, "..", "..", "..", "config", "remote.token")),
-                Path.GetFullPath(Path.Combine(baseDir, "..", "..", "..", "..", "config", "remote.token")),
-            };
+                _linkNotice = "已按 --sim 参数使用模拟链路，命令不会发给从端。";
+                return new SimulatedRobotLink();
+            }
+
+            // 从 exe 所在目录逐级向上查找（exe 通常在 bin/Debug/net472 下，密钥在项目根的 config 目录）。
+            var candidates = new System.Collections.Generic.List<string>();
+            if (!string.IsNullOrEmpty(tokenPath)) candidates.Add(tokenPath);
+            string dir = AppDomain.CurrentDomain.BaseDirectory;
+            for (int level = 0; level < 10 && !string.IsNullOrEmpty(dir); level++)
+            {
+                candidates.Add(Path.Combine(dir, "remote.token"));
+                candidates.Add(Path.Combine(dir, "config", "remote.token"));
+                dir = Path.GetDirectoryName(dir.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
+            }
+            string rejected = null;
             foreach (string c in candidates)
             {
-                if (string.IsNullOrEmpty(c) || !File.Exists(c)) continue;
+                if (!File.Exists(c)) continue;
                 byte[] token = Encoding.UTF8.GetBytes(File.ReadAllText(c, Encoding.UTF8).Trim());
-                if (token.Length < 16) continue;
-                return new RemoteRobotLink(new RemoteLinkSettings { Host = host, Token = token });
+                if (token.Length < 16) { rejected = c; continue; }
+                _linkNotice = null;
+                _linkTokenPath = c;
+                // 手柄服务随链路创建：应用启动即开始打开本机手柄，连接从端时已就绪。
+                return new RemoteRobotLink(new RemoteLinkSettings { Host = host, Token = token }, new HandleService());
             }
+            _linkNotice = rejected != null
+                ? "密钥文件太短（至少 16 个字符）：" + rejected + "。已退回模拟链路，命令不会发给从端。"
+                : "未找到 remote.token，已退回模拟链路，命令不会发给从端。请把密钥文件放到 config 目录或 exe 同目录。";
             return new SimulatedRobotLink();
         }
 

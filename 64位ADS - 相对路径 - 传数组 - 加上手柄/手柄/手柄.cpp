@@ -1,10 +1,15 @@
 #include "Handle.h"
+#include "remote_handle_bridge.h"
 
 // 设备级全局状态：
 // - s_open_devices: 当前已打开的设备数量（用于决定何时真正停止伺服循环）
 // - s_servo_loop_started: 伺服循环是否已经启动（避免重复启动）
 LONG Handle::s_open_devices = 0;
 bool Handle::s_servo_loop_started = false;
+bool Handle::s_remote = false;
+
+// 远程采样的最大允许龄期。超过即视为手柄断开，由主循环走既有的软保持/重连流程。
+static constexpr ULONGLONG kRemoteMaxAgeMs = 250;
 
 int __stdcall SyncUpdate(void* abc)
 {
@@ -43,6 +48,19 @@ bool Handle::init(DWORD serial)
 		return true;
 	}
 
+	if (s_remote)
+	{
+		// 远程模式：主端已连接且送来有效采样才算“打开”，不访问 SDK、不打印（主循环每秒重试）。
+		remote_handle_bridge::Sample sample;
+		if (!remote_handle_bridge::get_sample(remote_handle_bridge::slot_of(serial_number_), sample, kRemoteMaxAgeMs))
+		{
+			return false;
+		}
+		iID1 = 0;
+		printf("已接入远程手柄（物理 SN %lu）。\n", static_cast<unsigned long>(serial_number_));
+		return true;
+	}
+
 	iID1 = openDevice(serial_number_);
 
 	if (iID1 < 0)
@@ -74,6 +92,26 @@ bool Handle::poll()
 	if (iID1 < 0)
 	{
 		return false;
+	}
+
+	if (s_remote)
+	{
+		remote_handle_bridge::Sample sample;
+		if (!remote_handle_bridge::get_sample(remote_handle_bridge::slot_of(serial_number_), sample, kRemoteMaxAgeMs))
+		{
+			return false;
+		}
+		for (int i = 0; i < 2; ++i)
+		{
+			fVels2[i] = static_cast<double>(sample.vels[i]);
+			fJoints2[i] = static_cast<double>(sample.joints[i]);
+			encoders2[i] = static_cast<long>(sample.encoders[i]);
+		}
+		buttons2 = sample.buttons;
+		objData.buttons2 = buttons2;
+		objData.encoders2[0] = encoders2[0];
+		objData.encoders2[1] = encoders2[1];
+		return true;
 	}
 
 	getEncVel(fVels2, iID1);
@@ -111,6 +149,15 @@ void Handle::close()
 		return;
 	}
 
+	if (s_remote)
+	{
+		// 远程模式：只清本地状态，并撤销要回传主端的力指令。
+		iID1 = -1;
+		clear_cache();
+		remote_handle_bridge::set_output(remote_handle_bridge::slot_of(serial_number_), remote_handle_bridge::Output());
+		return;
+	}
+
 	// 先关闭当前设备力输出，再注销设备 ID 并清空状态缓存。
 	enableForces(false, iID1);
 	iID1 = -1;
@@ -144,6 +191,18 @@ void Handle::setforce_axis(double F, int axis, double N)
 		return;
 	}
 
+	if (s_remote)
+	{
+		// 远程模式：力指令交给网关经触觉帧回传主端，由主端手柄执行。
+		remote_handle_bridge::Output out;
+		out.enable = true;
+		out.axis = axis < 0 ? 0 : (axis > 2 ? 2 : axis);
+		out.force = F;
+		out.torque = N;
+		remote_handle_bridge::set_output(remote_handle_bridge::slot_of(serial_number_), out);
+		return;
+	}
+
 	// SDK 需要三轴力向量 + 力矩；这里只开启指定轴，其余轴为 0。
 	double fForce[3] = { 0, 0, 0 };
 	if (axis < 0) axis = 0;
@@ -158,6 +217,10 @@ void Handle::showinfo(const char* label)
 	if (!poll())
 	{
 		return;
+	}
+	if (s_remote)
+	{
+		return; // 远程模式下没有本地设备可查询
 	}
 
 	if (label != nullptr)

@@ -15,11 +15,11 @@ namespace MasterConsole.Protocol
         public const int HeaderLen = 16;
         public const int MacLen = 8;
         public const int ControlPayloadLen = 55;
-        public const int HapticPayloadLen = 24;
+        public const int HapticPayloadLen = 26;
         public const int StatusPayloadLen = 118;
 
         public const int ControlFrameLen = HeaderLen + ControlPayloadLen + MacLen; // 79
-        public const int HapticFrameLen = HeaderLen + HapticPayloadLen + MacLen;   // 48
+        public const int HapticFrameLen = HeaderLen + HapticPayloadLen + MacLen;   // 50
         public const int StatusFrameLen = HeaderLen + StatusPayloadLen + MacLen;   // 142
 
         public const int TcpPort = 32000;

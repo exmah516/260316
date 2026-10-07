@@ -31,6 +31,10 @@ namespace MasterConsole.Services
         public double HapticAgeMs { get; set; }
         public double StatusHz { get; set; }
         public ulong DroppedFrames { get; set; }
+        /// <summary>主端本机手柄状态（物理序列号 582 / 587）。</summary>
+        public bool Handle582Online { get; set; }
+        public bool Handle587Online { get; set; }
+        public bool HandleSdkMissing { get; set; }
     }
 
     /// <summary>
@@ -57,6 +61,9 @@ namespace MasterConsole.Services
 
         /// <summary>进入器械准备位置：导管搓捻机构位置 + Y 阀及导丝机构位置（mm）。</summary>
         Task<CommandResult> PreparePositionAsync(double catheterMm, double wireMm);
+
+        /// <summary>开始控制：已到达器械准备位置后，在当前位置直接进入手柄控制。</summary>
+        Task<CommandResult> StartControlAsync();
 
         /// <summary>力反馈开关；开启前的零点采集由从端自动完成。</summary>
         Task<CommandResult> SetForceFeedbackAsync(bool enable);

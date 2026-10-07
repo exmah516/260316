@@ -50,6 +50,11 @@ struct RemoteExtraState
 	// 力传感器零点采集成功/失败累计次数，用于判断“开启力反馈前自动零点采集”是否完成。
 	std::uint32_t force_zero_ok_count = 0;
 	std::uint32_t force_zero_fail_count = 0;
+	// 从端主循环的“为什么不能动”诊断量，用于把拒绝原因说清楚。
+	bool initial_sync_done = false;
+	bool handle_soft_hold = false;
+	bool ads_soft_hold = false;
+	bool connection_hold = false;
 };
 
 class RemoteGateway
@@ -63,6 +68,8 @@ public:
 	bool start(const RemoteGatewayConfig& cfg);
 	void stop();
 	bool is_running() const { return running_.load(); }
+	// main.cpp 在确定手柄来源后设置：手柄来自主端时，相关拒绝原因会提示“未收到主端手柄数据”。
+	void set_handles_remote(bool on) { handles_remote_.store(on); }
 
 	// 主循环约 15 Hz 调用：提供最新状态快照。
 	void publish_state(const VisState& state, const RemoteExtraState& extra);
@@ -79,6 +86,7 @@ private:
 		CylinderOn,
 		CylinderOff,
 		YValve,
+		StartControl,
 	};
 
 	struct Pending
@@ -114,7 +122,9 @@ private:
 	void process_pending(std::uintptr_t sock, std::vector<Pending>& pending);
 	void flush_events(std::uintptr_t sock);
 
-	void handle_udp(const unsigned char* data, int len, std::uint32_t from_ip, std::uint16_t from_port);
+	// 返回 true 表示收到并接受了一个合法控制帧（调用方据此回一个触觉帧）。
+	bool handle_udp(const unsigned char* data, int len, std::uint32_t from_ip, std::uint16_t from_port);
+	void send_haptic(std::uintptr_t udp_sock);
 	void tick_udp(std::uintptr_t udp_sock);
 
 	StateCopy copy_state();
@@ -134,6 +144,7 @@ private:
 	std::atomic<bool> running_{ false };
 	std::atomic<bool> stop_{ false };
 	std::atomic<bool> ff_zeroing_{ false };
+	std::atomic<bool> handles_remote_{ false };
 	std::thread tcp_thread_;
 	std::thread udp_thread_;
 	void* bcrypt_alg_ = nullptr;

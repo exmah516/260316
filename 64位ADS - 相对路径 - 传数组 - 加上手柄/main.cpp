@@ -131,26 +131,48 @@ int main(int argc, char* argv[])
 		std::cout << "定位臂低频 ADS 服务启动失败，定位臂 UI 将保持不可用。" << std::endl;
 	}
 	vis_server.start();
+	// 手柄来源：网关启用时，手柄实体在主端，采样经网关写入数据桥；
+	// 加参数 --local-handles 可强制使用本机 SDK 手柄（单机调试用）。
+	bool remote_handles_active = false;
 	{
 		// 远程网关：仅当存在 remote.token 时启用；命令经同一套 VisCommand 循环处理。
 		RemoteGatewayConfig remote_cfg;
 		remote_cfg.startup_g_mm = cfg.startup_g_mm;
-		remote_gateway.start(remote_cfg);
+		const bool gateway_ok = remote_gateway.start(remote_cfg);
+		bool force_local_handles = false;
+		for (int arg_index = 1; arg_index < argc; ++arg_index)
+		{
+			if (std::string(argv[arg_index]) == "--local-handles") force_local_handles = true;
+		}
+		if (gateway_ok && !force_local_handles)
+		{
+			Handle::use_remote(true);
+			remote_handles_active = true;
+			remote_gateway.set_handles_remote(true);
+			std::cout << "手柄来源：主端（远程）。本机不再访问手柄 SDK；如需使用本机手柄请加参数 --local-handles。" << std::endl;
+		}
+		else if (gateway_ok)
+		{
+			std::cout << "手柄来源：本机（--local-handles）。远程网关仍可使用，但主端手柄输入不会被采用。" << std::endl;
+		}
 	}
 
 	bool axis1_handle_ready = handle_axis1.init();
-	if (!axis1_handle_ready)
+	if (!axis1_handle_ready && !remote_handles_active)
 	{
 		std::cout << "手柄初始化未就绪，序列号: " << serial_axis1_handle << "，将在后台持续重试。" << std::endl;
 	}
 	const bool axis6_handle_ready_init = handle_axis6.init();
 	bool axis6_handle_ready = axis6_handle_ready_init;
-	if (!axis6_handle_ready)
+	if (!axis6_handle_ready && !remote_handles_active)
 	{
 		std::cout << "手柄初始化未就绪，序列号: " << serial_axis6_handle << "，将在后台持续重试。" << std::endl;
 	}
 
 	bool handle_startup_locked = false;
+	// 远程手柄只出现一只时先等一小段时间再锁定单手柄模式，避免两只手柄的采样先后到达被误判。
+	ULONGLONG remote_single_handle_since_ms = 0;
+	constexpr ULONGLONG remote_single_handle_grace_ms = 3000;
 	bool single_handle_mode = false;
 	GuidewireMode single_handle_requested_mode = GuidewireMode::None;
 	Handle* axis1_input_handle = &handle_axis1;
@@ -1115,8 +1137,25 @@ int main(int argc, char* argv[])
 			}
 			if (axis1_handle_ready || axis6_handle_ready)
 			{
-				lock_handle_mode(axis1_handle_ready, axis6_handle_ready);
-				update_handle_context();
+				bool allow_lock = true;
+				if (remote_handles_active && !(axis1_handle_ready && axis6_handle_ready))
+				{
+					if (remote_single_handle_since_ms == 0) remote_single_handle_since_ms = loop_now_ms;
+					allow_lock = (loop_now_ms - remote_single_handle_since_ms) >= remote_single_handle_grace_ms;
+				}
+				else
+				{
+					remote_single_handle_since_ms = 0;
+				}
+				if (allow_lock)
+				{
+					lock_handle_mode(axis1_handle_ready, axis6_handle_ready);
+					update_handle_context();
+				}
+			}
+			else
+			{
+				remote_single_handle_since_ms = 0;
 			}
 		}
 		else
@@ -4765,6 +4804,10 @@ int main(int argc, char* argv[])
 				remote_extra.y_valve_open = y_valve_open;
 				remote_extra.force_zero_ok_count = remote_force_zero_ok_count;
 				remote_extra.force_zero_fail_count = remote_force_zero_fail_count;
+				remote_extra.initial_sync_done = initial_sync_done;
+				remote_extra.handle_soft_hold = handle_soft_hold_active;
+				remote_extra.ads_soft_hold = ads_soft_hold_active;
+				remote_extra.connection_hold = connection_hold_active;
 				remote_gateway.publish_state(vs, remote_extra);
 			}
 		}

@@ -16,7 +16,7 @@ constexpr uint8_t  kTypeStatus = 3;
 constexpr size_t kHeaderLen = 16;
 constexpr size_t kMacLen = 8;
 constexpr size_t kControlFrameLen = 79;
-constexpr size_t kHapticFrameLen = 48;
+constexpr size_t kHapticFrameLen = 50;
 constexpr size_t kStatusFrameLen = 142;
 
 constexpr uint16_t kTcpPort = 32000;
@@ -60,6 +60,7 @@ struct ControlPayload {
 };
 struct HapticOut {
 	uint8_t enable;
+	int8_t  axis;          // 力作用的 SDK 轴（0..2），对应从端 axial_force_axis
 	float   force_n;
 	float   torque_nm;
 };
@@ -90,8 +91,8 @@ struct StatusPayload {
 static_assert(sizeof(FrameHeader) == kHeaderLen, "帧头长度错误");
 static_assert(sizeof(HandleSample) == 26, "HandleSample 长度错误");
 static_assert(sizeof(ControlPayload) == 55, "ControlPayload 长度错误");
-static_assert(sizeof(HapticOut) == 9, "HapticOut 长度错误");
-static_assert(sizeof(HapticPayload) == 24, "HapticPayload 长度错误");
+static_assert(sizeof(HapticOut) == 10, "HapticOut 长度错误");
+static_assert(sizeof(HapticPayload) == 26, "HapticPayload 长度错误");
 static_assert(sizeof(StatusPayload) == 118, "StatusPayload 长度错误");
 static_assert(kHeaderLen + sizeof(ControlPayload) + kMacLen == kControlFrameLen, "ControlFrame 长度错误");
 static_assert(kHeaderLen + sizeof(HapticPayload) + kMacLen == kHapticFrameLen, "HapticFrame 长度错误");

@@ -77,6 +77,7 @@ namespace MasterConsole.ViewModels
             ForceFeedbackCommand = new RelayCommand(ToggleForceFeedback);
             CylinderCommand = new RelayCommand(p => ToggleCylinder(p));
             YValveCommand = new RelayCommand(ToggleYValve);
+            StartControlCommand = new RelayCommand(StartControl);
 
             _link.ConnectionChanged += (s, e) => _ui.BeginInvoke(new Action(RaiseConnectionProps));
             _link.StatusReceived += (s, f) => _ui.BeginInvoke(new Action(() => OnStatus(f)));
@@ -100,6 +101,7 @@ namespace MasterConsole.ViewModels
         public ICommand ForceFeedbackCommand { get; }
         public ICommand CylinderCommand { get; }
         public ICommand YValveCommand { get; }
+        public ICommand StartControlCommand { get; }
 
         // ============================================================ 连接与控制权
 
@@ -138,6 +140,7 @@ namespace MasterConsole.ViewModels
             OnPropertyChanged(nameof(IsConnected));
             OnPropertyChanged(nameof(HasControl));
             OnPropertyChanged(nameof(CanOperate));
+            OnPropertyChanged(nameof(CanStartControl));
             OnPropertyChanged(nameof(ConnectButtonText));
             OnPropertyChanged(nameof(ControlButtonText));
             OnPropertyChanged(nameof(StatusFresh));
@@ -170,7 +173,13 @@ namespace MasterConsole.ViewModels
         public bool IsCatheterMode => _hasStatus && _s.Mode == 0;
         public bool IsGuidewireMode => _hasStatus && _s.Mode == 1;
         public string ModeText => !_hasStatus ? "—" : (_s.Mode == 0 ? "导管" : "导丝");
-        public string PhaseText => !_hasStatus ? "未连接" : (Has(StatusFlags.StartupCompleted) ? "已就绪" : "待机中");
+        public string PhaseText => !_hasStatus ? "未连接"
+            : ControlActive ? "手柄控制中"
+            : Has(StatusFlags.SelfCheckDone) ? "待开始控制"
+            : "待机（未到准备位置）";
+
+        /// <summary>已到达准备位置、尚未进入手柄控制时可点“开始控制”。</summary>
+        public bool CanStartControl => CanOperate && !ControlActive;
 
         public string Force582F => FormatForce(_s.Force582F, "N");
         public string Force582N => FormatForce(_s.Force582N, "N·m");
@@ -226,6 +235,14 @@ namespace MasterConsole.ViewModels
             if (cath < 5 || cath > 95) { PrepareError = "导管搓捻机构位置范围为 5–95 mm。"; return; }
             if (wire < 10 || wire > 639) { PrepareError = "Y阀及导丝机构位置范围为 10–639 mm。"; return; }
             await Report("进入器械准备位置", await _link.PreparePositionAsync(cath, wire));
+        }
+
+        private async void StartControl()
+        {
+            PrepareError = "";
+            var r = await _link.StartControlAsync();
+            if (!r.Ok) PrepareError = r.Reason;
+            await Report("开始控制", r);
         }
 
         private async void ToggleForceFeedback()
@@ -289,6 +306,12 @@ namespace MasterConsole.ViewModels
         public string DroppedText => _stats.DroppedFrames.ToString();
         public string AdsText => !_hasStatus ? "—" : (AdsHealthy ? "正常" : "异常");
 
+        /// <summary>主端本机手柄：两只都在线时指示灯亮；SDK 缺失时文字提示。</summary>
+        public bool HandlesOnline => _stats.Handle582Online && _stats.Handle587Online;
+        public string HandleText => _stats.HandleSdkMissing
+            ? "手柄 SDK 未加载（缺 FLCatheter.dll）"
+            : "582 " + (_stats.Handle582Online ? "在线" : "离线") + " / 587 " + (_stats.Handle587Online ? "在线" : "离线");
+
         private void RefreshStats()
         {
             _stats = _link.GetStats();
@@ -299,9 +322,12 @@ namespace MasterConsole.ViewModels
             OnPropertyChanged(nameof(StatusHzText));
             OnPropertyChanged(nameof(DroppedText));
             OnPropertyChanged(nameof(AdsText));
+            OnPropertyChanged(nameof(HandlesOnline));
+            OnPropertyChanged(nameof(HandleText));
             // 状态过期是由时间推移产生的，需要在这里重新评估。
             OnPropertyChanged(nameof(StatusFresh));
             OnPropertyChanged(nameof(CanOperate));
+            OnPropertyChanged(nameof(CanStartControl));
             OnPropertyChanged(nameof(OperateHintText));
         }
 
@@ -327,19 +353,23 @@ namespace MasterConsole.ViewModels
 
             foreach (var name in StatusPropertyNames) OnPropertyChanged(name);
             OnPropertyChanged(nameof(CanOperate));
+            OnPropertyChanged(nameof(CanStartControl));
             OnPropertyChanged(nameof(OperateHintText));
         }
 
         private static readonly string[] StatusPropertyNames =
         {
             nameof(EstopHold), nameof(ControlActive), nameof(FfEnabled), nameof(FfZeroing), nameof(YValveClosed),
-            nameof(AdsHealthy), nameof(IsCatheterMode), nameof(IsGuidewireMode), nameof(ModeText), nameof(PhaseText),
+            nameof(AdsHealthy), nameof(IsCatheterMode), nameof(IsGuidewireMode), nameof(ModeText), nameof(PhaseText), nameof(CanStartControl),
             nameof(Force582F), nameof(Force582N), nameof(Force587F), nameof(Force587N), nameof(CleanForce),
             nameof(PrepareStatusText), nameof(FfCaption), nameof(YValveCaption), nameof(Injector1Text), nameof(Injector2Text), nameof(Axis4Text),
             nameof(StatusFresh),
         };
 
         // ============================================================ 日志
+
+        /// <summary>供窗口写入一条日志（须在 UI 线程调用）。</summary>
+        public void PostLog(string level, string text) => AddLog(level, text);
 
         private void AddLog(string level, string text, DateTime? time = null)
         {

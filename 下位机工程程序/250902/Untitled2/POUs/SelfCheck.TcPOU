@@ -148,9 +148,9 @@ FOR i:=1 TO 7 DO
         1: // 错开启动，避免多轴同时加速导致电流竞争触发跟随误差
             IF i = 1 THEN
                 G.cylinder1_value := 1000;
-                G.cylinder2_value := 300;
+                G.cylinder2_value := 10;
 				G.cylinder3_value := 1000;
-				G.cylinder4_value := 300;
+				G.cylinder4_value := 10;
             END_IF
 
             scan_stagger_timer[i](IN:=TRUE, PT:=scan_stagger_delay[i]);
@@ -613,7 +613,7 @@ END_IF
       <LineId Id="470" Count="11" />
       <LineId Id="542" Count="7" />
       <LineId Id="490" Count="3" />
-      <LineId Id="550" Count="3" />
+      <LineId Id="550" Count="23" />
     </LineIds>
   </POU>
 </TcPlcObject>

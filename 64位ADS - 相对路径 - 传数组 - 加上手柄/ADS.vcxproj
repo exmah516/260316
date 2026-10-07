@@ -188,6 +188,7 @@
     <ClInclude Include="force_calibration.h" />
     <ClInclude Include="vis_server.h" />
     <ClInclude Include="remote_gateway.h" />
+    <ClInclude Include="手柄\remote_handle_bridge.h" />
     <ClInclude Include="protocol\cpp\remote_protocol.h" />
     <ClInclude Include="ads_communication.h" />
     <ClInclude Include="plc_io.h" />

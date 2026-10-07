@@ -91,6 +91,10 @@ namespace MasterConsole.Protocol
         public static string Cylinder(int id, int index, bool engaged)
             => Cmd(id, "cylinder", ("index", index), ("engaged", engaged));
 
+        /// <summary>开始控制：已到达准备位置后，在当前位置直接进入手柄控制。</summary>
+        public static string StartControl(int id)
+            => Cmd(id, "start_control");
+
         /// <summary>Y 阀：closed=true 为关闭，false 为打开（取消关闭）。</summary>
         public static string YValve(int id, bool closed)
             => Cmd(id, "yvalve", ("closed", closed));

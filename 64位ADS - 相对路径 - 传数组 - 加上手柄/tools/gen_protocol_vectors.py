@@ -26,7 +26,7 @@ T_CONTROL, T_HAPTIC, T_STATUS = 1, 2, 3
 HEADER_LEN = 16
 MAC_LEN = 8
 CONTROL_PAYLOAD = 55
-HAPTIC_PAYLOAD = 24
+HAPTIC_PAYLOAD = 26
 STATUS_PAYLOAD = 118
 
 SESSION_KEY = bytes(range(16))   # 固定测试密钥
@@ -57,8 +57,8 @@ def control_frame():
 
 def haptic_frame():
     payload = struct.pack("<IH", 123450, 3)
-    payload += struct.pack("<Bff", 1, 0.5, 0.01)
-    payload += struct.pack("<Bff", 0, 0.0, 0.0)
+    payload += struct.pack("<Bbff", 1, 1, 0.5, 0.01)   # enable, axis, force_n, torque_nm
+    payload += struct.pack("<Bbff", 0, 0, 0.0, 0.0)
     assert len(payload) == HAPTIC_PAYLOAD
     return seal(header(T_HAPTIC, 0xA1B2C3D4, 7, 200000) + payload)
 

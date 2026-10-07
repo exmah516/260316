@@ -63,15 +63,15 @@ namespace MasterConsole.Protocol.Tests
             var f = new HapticFrame
             {
                 EchoTsMs = 123450, HoldMs = 3,
-                HandleA = new HapticOut { Enable = true, ForceN = 0.5f, TorqueNm = 0.01f },
+                HandleA = new HapticOut { Enable = true, Axis = 1, ForceN = 0.5f, TorqueNm = 0.01f },
                 HandleB = new HapticOut { Enable = false },
             };
             byte[] mine = FrameCodec.EncodeHaptic(new FrameHeader { Session = session, Seq = 7, TsMs = 200000 }, f, key);
             byte[] want = ReadHex(dir, "haptic_frame.hex");
-            Check("Haptic 长度 = 48", mine.Length == ProtocolConstants.HapticFrameLen);
+            Check("Haptic 长度 = 50", mine.Length == ProtocolConstants.HapticFrameLen);
             Check("Haptic 编码与 Python 向量逐字节一致", mine.SequenceEqual(want));
             bool ok = FrameCodec.TryDecodeHaptic(want, want.Length, session, key, out _, out var d, out _);
-            Check("Haptic 解码字段还原", ok && d.EchoTsMs == 123450 && d.HoldMs == 3 && d.HandleA.Enable && !d.HandleB.Enable && d.HandleA.ForceN == 0.5f);
+            Check("Haptic 解码字段还原", ok && d.EchoTsMs == 123450 && d.HoldMs == 3 && d.HandleA.Enable && !d.HandleB.Enable && d.HandleA.ForceN == 0.5f && d.HandleA.Axis == 1);
         }
 
         private static void TestStatus(string dir, byte[] key, uint session)
