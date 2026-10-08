@@ -165,6 +165,23 @@ namespace MasterConsole.Services
         public Task<CommandResult> RefreshHandlesAsync()
             => Task.FromResult(CommandResult.DoneWithReason("模拟链路：已刷新手柄基准。"));
 
+        public Task<CommandResult> SetArmManualEnableAsync(bool enabled)
+            => Task.FromResult(CommandResult.DoneWithReason($"模拟链路：定位臂总使能{(enabled ? "已开启" : "已关闭")}。"));
+        public Task<CommandResult> SetArmAxisEnableAsync(int axis, bool enabled)
+            => Task.FromResult(CommandResult.DoneWithReason($"模拟链路：定位臂轴{axis}{(enabled ? "已上电" : "已断电")}。"));
+        public Task<CommandResult> ResetArmAxisAsync(int axis)
+            => Task.FromResult(CommandResult.DoneWithReason($"模拟链路：定位臂轴{axis}复位命令已发送。"));
+        public Task<CommandResult> SetArmCartesianJogAsync(int mode, int speedMilli)
+            => Task.FromResult(CommandResult.DoneWithReason("模拟链路：定位臂末端点动命令已发送。"));
+        public Task<CommandResult> StopArmAsync()
+            => Task.FromResult(CommandResult.DoneWithReason("模拟链路：定位臂停止命令已发送。"));
+        public Task<CommandResult> ReturnArmProgramZeroAsync()
+            => Task.FromResult(CommandResult.DoneWithReason("模拟链路：定位臂程序归零命令已发送。"));
+        public Task<CommandResult> SetArmCartesianParameterAsync(int field, int valueMilli)
+            => Task.FromResult(CommandResult.Done());
+        public void SetArmAxisJog(int axis, int direction) { }
+        public void KeepArmCartesianAlive() { }
+
         public async Task<CommandResult> SetYValveClosedAsync(bool closed)
         {
             var guard = Guard();

@@ -1,0 +1,112 @@
+<?xml version="1.0" encoding="utf-8"?>
+<TcPlcObject Version="1.1.0.1" ProductVersion="3.1.4024.15">
+  <POU Name="InjectorManual" Id="{d9a0e8a4-1d53-4b82-bd9a-875e6d5b3e11}" SpecialFunc="None">
+    <Declaration><![CDATA[FUNCTION_BLOCK InjectorManual
+VAR
+	i : INT;
+	req_dir : SINT;
+	cmd_velocity : LREAL := 30.0;
+	cmd_acc : LREAL := 100.0;
+	cmd_dec : LREAL := 100.0;
+	cmd_jerk : LREAL := 500.0;
+	axis_state : ARRAY[1..2] OF INT := [0,0];
+	current_dir : ARRAY[1..2] OF SINT := [0,0];
+	pending_dir : ARRAY[1..2] OF SINT := [0,0];
+	move_exec : ARRAY[1..2] OF BOOL := [FALSE,FALSE];
+	stop_exec : ARRAY[1..2] OF BOOL := [FALSE,FALSE];
+	move_direction : ARRAY[1..2] OF MC_Direction;
+	fb_power : ARRAY[1..2] OF MC_Power;
+	fb_move_vel : ARRAY[1..2] OF MC_MoveVelocity;
+	fb_stop : ARRAY[1..2] OF MC_Stop;
+END_VAR]]></Declaration>
+    <Implementation>
+      <ST><![CDATA[FOR i:=1 TO 2 DO
+	IF G.host_comm_timeout THEN
+		G.inject_push_req[i] := FALSE;
+		G.inject_pull_req[i] := FALSE;
+	END_IF
+
+	fb_power[i](
+		Axis:=G.inject_axis[i],
+		Enable:=TRUE,
+		Enable_Positive:=TRUE,
+		Enable_Negative:=TRUE
+	);
+
+	IF G.inject_push_req[i] AND NOT G.inject_pull_req[i] THEN
+		req_dir := 1;
+	ELSIF G.inject_pull_req[i] AND NOT G.inject_push_req[i] THEN
+		req_dir := -1;
+	ELSE
+		req_dir := 0;
+	END_IF
+
+	IF axis_state[i] = 0 THEN
+		IF req_dir <> 0 THEN
+			current_dir[i] := req_dir;
+			IF req_dir > 0 THEN
+				move_direction[i] := MC_Direction.MC_Positive_Direction;
+			ELSE
+				move_direction[i] := MC_Direction.MC_Negative_Direction;
+			END_IF
+			move_exec[i] := TRUE;
+			axis_state[i] := 10;
+		END_IF
+	ELSIF axis_state[i] = 10 THEN
+		IF req_dir = current_dir[i] THEN
+			move_exec[i] := TRUE;
+		ELSIF req_dir <> 0 THEN
+			pending_dir[i] := req_dir;
+			move_exec[i] := FALSE;
+			stop_exec[i] := TRUE;
+			current_dir[i] := 0;
+			axis_state[i] := 30;
+		ELSE
+			pending_dir[i] := 0;
+			move_exec[i] := FALSE;
+			stop_exec[i] := TRUE;
+			current_dir[i] := 0;
+			axis_state[i] := 20;
+		END_IF
+	ELSIF axis_state[i] = 20 OR axis_state[i] = 30 THEN
+		move_exec[i] := FALSE;
+		stop_exec[i] := TRUE;
+		IF fb_stop[i].Done OR (ABS(G.inject_axis[i].NcToPlc.ActVelo) <= 0.05) THEN
+			stop_exec[i] := FALSE;
+			IF axis_state[i] = 30 AND pending_dir[i] <> 0 AND req_dir = pending_dir[i] THEN
+				current_dir[i] := pending_dir[i];
+				IF current_dir[i] > 0 THEN
+					move_direction[i] := MC_Direction.MC_Positive_Direction;
+				ELSE
+					move_direction[i] := MC_Direction.MC_Negative_Direction;
+				END_IF
+				move_exec[i] := TRUE;
+				pending_dir[i] := 0;
+				axis_state[i] := 10;
+			ELSE
+				current_dir[i] := 0;
+				pending_dir[i] := 0;
+				axis_state[i] := 0;
+			END_IF
+		END_IF
+	END_IF
+
+	fb_move_vel[i](
+		Axis:=G.inject_axis[i],
+		Execute:=move_exec[i],
+		Velocity:=cmd_velocity,
+		Acceleration:=cmd_acc,
+		Deceleration:=cmd_dec,
+		Jerk:=cmd_jerk,
+		Direction:=move_direction[i]
+	);
+	fb_stop[i](
+		Axis:=G.inject_axis[i],
+		Execute:=stop_exec[i],
+		Deceleration:=cmd_dec,
+		Jerk:=cmd_jerk
+	);
+END_FOR]]></ST>
+    </Implementation>
+  </POU>
+</TcPlcObject>

@@ -32,6 +32,11 @@
       <HintPath>Runtime\Math4wpf.dll</HintPath>
       <Private>true</Private>
     </Reference>
+    <Reference Include="can4wpf">
+      <HintPath>Runtime\can4wpf.dll</HintPath>
+      <Private>true</Private>
+    </Reference>
+    <None Include="Runtime\can4wpf.dll" Link="can4wpf.dll" CopyToOutputDirectory="PreserveNewest" />
     <None Update="URDF\**\*">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>

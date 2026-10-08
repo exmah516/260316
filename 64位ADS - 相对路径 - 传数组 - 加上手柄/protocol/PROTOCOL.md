@@ -146,10 +146,21 @@ M→S {"t":"release","id":2}
 | name | 参数 | 从端对应既有动作 |
 |---|---|---|
 | `prepare_position` | `catheter_mm`（5–95），`wire_mm`（10–639） | `SetSelfCheckAxisPos` + `StartSelfCheck`（进入器械准备位置） |
-| `start_control` | — | `SelectDirectControl`（已到达准备位置后，在当前位置直接进入手柄控制） |
+  | `start_control` | — | `SelectDirectControl`（已到达准备位置后，在当前位置直接进入手柄控制） |
+  | `refresh_handles_begin` | — | 从端先暂停远程手柄输入、清除旧采样/力输出，并在主循环确认保持后返回 `accepted/done` |
+  | `refresh_handles` | `success_mask`（1=582，2=587）和 `after_seq`（主端刷新后控制帧序号） | 仅接受 `after_seq` 之后的新 UDP 采样；从端重建手柄/机器人基准后才返回 `done`。部分成功保持双手柄输入暂停 |
 | `force_feedback` | `enable`（bool） | 开启前自动零点采集（`ZeroForceSensor`），完成后 `ToggleForceFeedback`；零点采集期间状态帧 `ff_zeroing=1` |
 | `cylinder` | `index`（1–4），`engaged`（bool） | engaged=true：电缸 1/3 写 2000，电缸 2/4 写 10（`SetCylinderManualPosition`）；engaged=false：`ResetCylinderManual` 恢复原状态 |
 | `yvalve` | `closed`（bool） | `SetYValveOpen(!closed)` |
+| `arm_manual_enable` | `enable`（bool） | `SetArmManualEnable` |
+| `arm_axis_enable` | `axis`（1–5），`enable`（bool） | `SetArmAxisEnable` |
+| `arm_axis_reset` | `axis`（1–5） | `RequestArmAxisReset` |
+| `arm_axis_jog` | `axis`（1–5），`direction`（-1/0/1） | `SetArmAxisJog`；主端按住期间周期重发 |
+| `arm_cartesian_jog` | `mode`（1–5），`speed`（mm/s 或 °/s ×1000） | `SetArmCartesianJog`；主端按住期间周期重发 |
+| `arm_cartesian_parameter` | `field`（0–3），`value`（单位 ×1000） | `SetArmCartesianParameter` |
+| `arm_program_zero` | — | `ReturnArmProgramZero` |
+| `arm_stop` | — | `StopArmCartesian` + 清零各轴点动 |
+| `arm_cartesian_alive` | — | `KeepArmCartesianAlive` |
 | `ping` | — | 返回 `pong`，用于 TCP 保活（5 s） |
 
 注射器推拉和轴4点动**不是**命令：它们是“按住才动”的动作，随 ControlFrame 持续发送方向，松手或断网后从端因帧超时自动归零，见 3.3 节。

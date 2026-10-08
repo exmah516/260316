@@ -55,6 +55,8 @@ struct RemoteExtraState
 	bool handle_soft_hold = false;
 	bool ads_soft_hold = false;
 	bool connection_hold = false;
+	int handle_refresh_ticket = 0;
+	int handle_refresh_mask = -1; // -1=保持已建立，0=重建失败，1..3=已重建物理槽位
 };
 
 class RemoteGateway
@@ -87,6 +89,7 @@ private:
 		CylinderOff,
 		YValve,
 		StartControl,
+		RefreshHandles,
 	};
 
 	struct Pending
@@ -99,6 +102,8 @@ private:
 		bool flag = false;   // YValve: 目标是否为“关闭”
 		std::uint32_t zero_ok0 = 0;
 		std::uint32_t zero_fail0 = 0;
+		int refresh_ticket = 0;
+		std::uint32_t after_seq = 0;
 	};
 
 	enum class AuthState { Hello, Challenge, Authed };
@@ -165,6 +170,12 @@ private:
 	bool lease_held_ = false;
 	bool seq_has_ = false;
 	std::uint32_t seq_last_ = 0;
+	bool refresh_active_ = false;
+	bool refresh_receiving_ = false;
+	std::uint32_t refresh_after_seq_ = 0;
+	std::uint32_t refresh_sample_seq_ = 0;
+	int refresh_sample_mask_ = 0;
+	int refresh_ticket_ = 0;
 	std::uint32_t tx_seq_ = 0;
 	bool peer_valid_ = false;
 	std::uint32_t peer_ip_ = 0;      // 网络字节序

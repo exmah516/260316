@@ -1,0 +1,756 @@
+<?xml version="1.0" encoding="utf-8"?>
+<TcPlcObject Version="1.1.0.1" ProductVersion="3.1.4024.15">
+  <POU Name="ProgrammedDeliveryExperiment" Id="{6d3d667f-8bb1-4a31-9baa-9e2f84efdd82}" SpecialFunc="None">
+    <Declaration><![CDATA[FUNCTION_BLOCK ProgrammedDeliveryExperiment
+VAR
+    i : INT;
+    state : USINT := 0; // 0空闲，1准备，2就绪，3基准，4前向触发，5释放，6回退，7重夹，8周期判定，9最终前向，10完成，11中止，12错误
+    initialized : BOOL := FALSE;
+    active_mode : USINT := 0;
+    active_axis : ARRAY[1..7] OF BOOL;
+    setup_exec : ARRAY[1..7] OF BOOL;
+    setup_done : ARRAY[1..7] OF BOOL;
+    setup_target : ARRAY[1..7] OF LREAL;
+    stop_exec : ARRAY[1..7] OF BOOL;
+    fb_setup_move : ARRAY[1..7] OF MC_MoveAbsolute;
+    fb_forward_move : MC_MoveAbsolute;
+    fb_return_move : MC_MoveAbsolute;
+    fb_final_move : MC_MoveAbsolute;
+    fb_stop : ARRAY[1..7] OF MC_Stop;
+    baseline_timer : TON;
+    release_timer : TON;
+    reclamp_timer : TON;
+    release_lead_timer : TON;
+    reclamp_lead_timer : TON;
+    setup_release_wait_active : BOOL := FALSE;
+    initial_reclamp_wait_active : BOOL := FALSE;
+    release_lead_active : BOOL := FALSE;
+    release_wait_active : BOOL := FALSE;
+    reclamp_lead_active : BOOL := FALSE;
+    reclamp_wait_active : BOOL := FALSE;
+    forward_exec : BOOL := FALSE;
+    return_exec : BOOL := FALSE;
+    final_exec : BOOL := FALSE;
+    all_setup_done : BOOL;
+    moving_axis : INT := 1;
+    last_phase : USINT := 0;
+    last_sync_state : USINT := 0;
+    external_mode : BOOL;
+    fb_external_sync : ExternalValidationSync;
+    forward_done : BOOL;
+    final_done : BOOL;
+    motion_allowed : BOOL;
+END_VAR]]></Declaration>
+    <Implementation>
+      <ST><![CDATA[// 新模式完全使用 MC_MoveAbsolute，不读取手柄参考值。
+// 所有直线轴目标均由左限位绝对值加“距左限位距离”得到。
+
+IF NOT initialized THEN
+    state := 0;
+    active_mode := G.program_test_mode;
+    G.program_test_phase := 0;
+    G.program_test_enable := FALSE;
+    G.program_test_setup_busy := FALSE;
+    G.program_test_setup_done := FALSE;
+    G.program_test_cycle_index := 0;
+    G.program_test_cycle_total := 0;
+    G.program_test_status_error_id := 0;
+    G.program_test_wait_action := 0;
+    G.program_test_error_source := 0;
+    G.program_test_error_axis := 0;
+    G.program_test_error_phase := 0;
+    G.program_test_error_target_abs := 0.0;
+    G.program_test_sample_arm := FALSE;
+    G.program_test_event_sequence := 0;
+    last_phase := 0;
+    last_sync_state := 0;
+    G.program_test_sync_state := 0;
+    setup_release_wait_active := FALSE;
+    initial_reclamp_wait_active := FALSE;
+    release_lead_active := FALSE;
+    release_wait_active := FALSE;
+    reclamp_lead_active := FALSE;
+    reclamp_wait_active := FALSE;
+    forward_exec := FALSE;
+    return_exec := FALSE;
+    final_exec := FALSE;
+    FOR i := 1 TO 7 DO
+        setup_exec[i] := FALSE;
+        setup_done[i] := FALSE;
+        stop_exec[i] := FALSE;
+        setup_target[i] := G.axis[i].NcToPlc.ActPos;
+    END_FOR
+    initialized := TRUE;
+END_IF
+
+// 运行中的模式变更由 PLC 拒绝；空闲、完成和中止阶段可重新选择模式。
+IF G.program_test_mode <> active_mode THEN
+    IF (state = 0) OR (state = 10) OR (state = 11) OR (state = 12) THEN
+        active_mode := G.program_test_mode;
+        state := 0;
+        G.program_test_phase := 0;
+        G.program_test_setup_busy := FALSE;
+        G.program_test_setup_done := FALSE;
+        G.program_test_cycle_index := 0;
+        G.program_test_cycle_total := 0;
+        G.program_test_status_error_id := 0;
+        G.program_test_wait_action := 0;
+        G.program_test_error_source := 0;
+        G.program_test_error_axis := 0;
+        G.program_test_error_phase := 0;
+        G.program_test_error_target_abs := 0.0;
+        G.program_test_sample_arm := FALSE;
+        setup_release_wait_active := FALSE;
+        initial_reclamp_wait_active := FALSE;
+        release_lead_active := FALSE;
+        release_wait_active := FALSE;
+        reclamp_lead_active := FALSE;
+        reclamp_wait_active := FALSE;
+        forward_exec := FALSE;
+        return_exec := FALSE;
+        final_exec := FALSE;
+        FOR i := 1 TO 7 DO
+            setup_exec[i] := FALSE;
+            setup_done[i] := FALSE;
+            stop_exec[i] := FALSE;
+        END_FOR
+    ELSE
+        G.program_test_mode := active_mode;
+        G.program_test_setup_req := FALSE;
+        G.program_test_start_req := FALSE;
+        G.program_test_status_error_id := 16#7102;
+    END_IF
+END_IF
+
+FOR i := 1 TO 7 DO
+    active_axis[i] := FALSE;
+END_FOR
+external_mode := active_mode = 4;
+IF (active_mode = 1) OR external_mode THEN
+    active_axis[1] := TRUE;
+    active_axis[2] := TRUE;
+    moving_axis := 1;
+    IF external_mode THEN
+        active_axis[6] := TRUE;
+        active_axis[7] := TRUE;
+    END_IF
+ELSIF active_mode = 2 THEN
+    active_axis[5] := TRUE;
+    active_axis[6] := TRUE;
+    active_axis[7] := TRUE;
+    moving_axis := 6;
+END_IF
+
+// 新模式独占 1..7 轴的使能和外部给定状态；未参与轴始终断使能。
+FOR i := 1 TO 7 DO
+    G.power_[i](Axis := G.axis[i], Enable := active_axis[i], Enable_Positive := TRUE, Enable_Negative := TRUE);
+    G.power_output[i].Done := G.power_[i].Status;
+    G.power_output[i].Busy := G.power_[i].Busy;
+    G.power_output[i].Active := G.power_[i].Active;
+    G.power_output[i].Error := G.power_[i].Error;
+    G.power_output[i].ErrorID := G.power_[i].ErrorID;
+    G.SetPointGenEnable[i](Axis := G.axis[i], Execute := FALSE);
+    G.SetPointGenDisable[i](Axis := G.axis[i], Execute := TRUE);
+    G.SetPointGenDisable_output[i].Done := G.SetPointGenDisable[i].Done;
+    G.SetPointGenDisable_output[i].Busy := G.SetPointGenDisable[i].Busy;
+    G.SetPointGenDisable_output[i].Error := G.SetPointGenDisable[i].Error;
+    G.SetPointGenDisable_output[i].ErrorID := G.SetPointGenDisable[i].ErrorID;
+END_FOR
+
+G.estop_hold_req := FALSE;
+baseline_timer(IN := state = 3, PT := T#1S);
+release_lead_timer(IN := (state = 5) AND release_lead_active,
+    PT := UDINT_TO_TIME(G.program_test_release_lead_ms));
+release_timer(IN := ((state = 1) AND setup_release_wait_active) OR ((state = 5) AND release_wait_active),
+    PT := UDINT_TO_TIME(G.program_test_release_wait_ms));
+reclamp_lead_timer(IN := (state = 7) AND reclamp_lead_active,
+    PT := UDINT_TO_TIME(G.program_test_reclamp_lead_ms));
+reclamp_timer(IN := ((state = 2) AND initial_reclamp_wait_active) OR ((state = 7) AND reclamp_wait_active),
+    PT := UDINT_TO_TIME(G.program_test_reclamp_wait_ms));
+
+IF G.program_test_abort_req THEN
+    G.program_test_abort_req := FALSE;
+    state := 11;
+END_IF
+
+// 外源验证模式使用轴1作为主轴、轴6作为从轴，仅在运动段建立电子齿轮；
+// 夹持和回退阶段保持从轴独立停稳，避免解除耦合时带入额外运动。
+fb_external_sync(Master := G.axis[1], Slave := G.axis[6],
+    Enable := external_mode AND (state >= 3) AND (state <= 9),
+    Request := forward_exec OR final_exec,
+    MoveDone := (forward_exec AND fb_forward_move.Done) OR (final_exec AND fb_final_move.Done));
+G.program_test_sync_state := fb_external_sync.SyncState;
+motion_allowed := NOT external_mode OR fb_external_sync.ReadyToMove;
+forward_done := (NOT external_mode AND fb_forward_move.Done)
+    OR (external_mode AND forward_exec AND fb_external_sync.SegmentDone);
+final_done := (NOT external_mode AND fb_final_move.Done)
+    OR (external_mode AND final_exec AND fb_external_sync.SegmentDone);
+IF external_mode AND fb_external_sync.Error THEN
+    G.program_test_status_error_id := fb_external_sync.ErrorID;
+    G.program_test_error_source := fb_external_sync.ErrorSource;
+    G.program_test_error_axis := 6;
+    G.program_test_error_phase := G.program_test_phase;
+    G.program_test_error_target_abs := G.axis[6].NcToPlc.ActPos;
+    state := 12;
+END_IF
+
+// 完成、中止或错误后，新的准备请求启动下一次独立实验。
+IF ((state = 10) OR (state = 11) OR (state = 12)) AND G.program_test_setup_req THEN
+    state := 0;
+    G.program_test_setup_done := FALSE;
+    G.program_test_setup_busy := FALSE;
+    G.program_test_start_req := FALSE;
+    G.program_test_status_error_id := 0;
+    G.program_test_wait_action := 0;
+    G.program_test_error_source := 0;
+    G.program_test_error_axis := 0;
+    G.program_test_error_phase := 0;
+    G.program_test_error_target_abs := 0.0;
+    setup_release_wait_active := FALSE;
+    initial_reclamp_wait_active := FALSE;
+    release_lead_active := FALSE;
+    release_wait_active := FALSE;
+    reclamp_lead_active := FALSE;
+    reclamp_wait_active := FALSE;
+    G.program_test_sample_arm := FALSE;
+    forward_exec := FALSE;
+    return_exec := FALSE;
+    final_exec := FALSE;
+    FOR i := 1 TO 7 DO
+        setup_exec[i] := FALSE;
+        setup_done[i] := FALSE;
+        stop_exec[i] := FALSE;
+    END_FOR
+END_IF
+
+CASE state OF
+0: // Idle
+    G.program_test_enable := FALSE;
+    G.program_test_phase := 0;
+    G.program_test_sample_arm := FALSE;
+    IF G.program_test_setup_req THEN
+        G.program_test_setup_req := FALSE;
+        G.program_test_status_error_id := 0;
+        G.program_test_wait_action := 0;
+        G.program_test_error_source := 0;
+        G.program_test_error_axis := 0;
+        G.program_test_error_phase := 0;
+        G.program_test_error_target_abs := 0.0;
+        setup_release_wait_active := FALSE;
+        initial_reclamp_wait_active := FALSE;
+        release_lead_active := FALSE;
+        release_wait_active := FALSE;
+        reclamp_lead_active := FALSE;
+        reclamp_wait_active := FALSE;
+        IF NOT G.self_check_done THEN
+            G.program_test_status_error_id := 16#7201;
+            state := 12;
+        ELSIF (active_mode <> 1) AND (active_mode <> 2) AND (active_mode <> 4) THEN
+            G.program_test_status_error_id := 16#7202;
+            state := 12;
+        ELSIF G.program_test_cycle_count < 1 THEN
+            G.program_test_status_error_id := 16#7203;
+            state := 12;
+        ELSIF ((active_mode = 1) OR external_mode) AND
+              ((G.program_test_axis1_trigger_from_left_mm < 0.0) OR
+               (G.program_test_axis1_prepare_from_left_mm <= G.program_test_axis1_trigger_from_left_mm) OR
+               (G.program_test_final_forward_distance_mm < 0.0) OR
+               (G.program_test_final_forward_distance_mm >
+                G.program_test_axis1_prepare_from_left_mm - G.program_test_axis1_trigger_from_left_mm)) THEN
+            G.program_test_status_error_id := 16#7204;
+            state := 12;
+        ELSIF (active_mode = 2) AND
+              ((G.program_test_axis5_from_left_mm < 0.0) OR
+               (G.program_test_axis5_from_left_mm > 670.0) OR
+               (G.program_test_axis6_trigger_from_left_mm < 0.0) OR
+               (G.program_test_axis6_prepare_from_left_mm > 670.0) OR
+               (G.program_test_axis6_prepare_from_left_mm <= G.program_test_axis6_trigger_from_left_mm) OR
+               (G.program_test_final_forward_distance_mm < 0.0) OR
+               (G.program_test_final_forward_distance_mm >
+                G.program_test_axis6_prepare_from_left_mm - G.program_test_axis6_trigger_from_left_mm)) THEN
+            G.program_test_status_error_id := 16#7204;
+            state := 12;
+        ELSIF (G.program_test_forward_velocity <= 0.0) OR (G.program_test_forward_acceleration <= 0.0) OR
+              (G.program_test_forward_deceleration <= 0.0) OR (G.program_test_forward_jerk <= 0.0) OR
+              (G.program_test_return_velocity <= 0.0) OR (G.program_test_return_acceleration <= 0.0) OR
+              (G.program_test_return_deceleration <= 0.0) OR (G.program_test_return_jerk <= 0.0) THEN
+            G.program_test_status_error_id := 16#7205;
+            state := 12;
+        ELSIF (G.program_test_release_wait_ms > 60000) OR (G.program_test_reclamp_wait_ms > 60000) OR
+              (G.program_test_release_lead_ms > 60000) OR (G.program_test_reclamp_lead_ms > 60000) THEN
+            G.program_test_status_error_id := 16#7207;
+            state := 12;
+        ELSE
+            G.program_test_setup_busy := TRUE;
+            G.program_test_setup_done := FALSE;
+            G.program_test_cycle_index := 0;
+            G.program_test_cycle_total := G.program_test_cycle_count;
+            G.program_test_target_axis2_deg := G.program_test_axis2_angle_deg;
+            G.program_test_target_axis7_deg := G.program_test_axis7_angle_deg;
+            G.program_test_target_axis1_abs := G.leftlimit[1] + G.program_test_axis1_prepare_from_left_mm;
+            G.program_test_target_axis5_abs := G.leftlimit[5] + G.program_test_axis5_from_left_mm;
+            G.program_test_target_axis6_abs := G.leftlimit[6] + G.program_test_axis6_prepare_from_left_mm;
+            IF (active_mode = 1) OR external_mode THEN
+                setup_target[1] := G.program_test_target_axis1_abs;
+                setup_target[2] := G.program_test_target_axis2_deg;
+                G.program_test_trigger_target_abs := G.leftlimit[1] + G.program_test_axis1_trigger_from_left_mm;
+                G.program_test_return_target_abs := G.program_test_target_axis1_abs;
+                G.program_test_final_target_abs := G.program_test_target_axis1_abs - G.program_test_final_forward_distance_mm;
+                // 准备移动时沿用原流程进入释放状态；触发后的释放错开在状态5处理。
+                G.cylinder1_value := 400;
+                IF G.program_test_cylinder1_coupling_enable THEN
+                    G.cylinder1_value := 0;
+                END_IF
+                G.cylinder2_value := G.program_test_cylinder2_open_word;
+                IF external_mode THEN
+                    // 外源模式只定位轴1、轴6；轴5和轴7保持当前位置，不发旋转指令。
+                    setup_target[6] := G.program_test_target_axis6_abs;
+                    G.program_test_target_axis5_abs := G.axis[5].NcToPlc.ActPos;
+                    G.program_test_target_axis7_deg := G.axis[7].NcToPlc.ActPos;
+                    G.program_test_cylinder1_coupling_enable := TRUE;
+                    G.program_test_cylinder3_coupling_enable := FALSE;
+                    G.cylinder1_value := 0;
+                    G.cylinder3_value := 400;
+                    G.cylinder4_value := G.program_test_cylinder4_open_word;
+                END_IF
+            ELSE
+                setup_target[5] := G.program_test_target_axis5_abs;
+                setup_target[6] := G.program_test_target_axis6_abs;
+                setup_target[7] := G.program_test_target_axis7_deg;
+                G.program_test_trigger_target_abs := G.leftlimit[6] + G.program_test_axis6_trigger_from_left_mm;
+                G.program_test_return_target_abs := G.program_test_target_axis6_abs;
+                G.program_test_final_target_abs := G.program_test_target_axis6_abs - G.program_test_final_forward_distance_mm;
+                // 准备移动时沿用原流程进入释放状态；触发后的释放错开在状态5处理。
+                G.cylinder3_value := 400;
+                IF G.program_test_cylinder3_coupling_enable THEN
+                    G.cylinder3_value := 50;
+                END_IF
+                G.cylinder4_value := G.program_test_cylinder4_open_word;
+            END_IF
+            setup_release_wait_active := TRUE;
+            initial_reclamp_wait_active := FALSE;
+            FOR i := 1 TO 7 DO
+                setup_done[i] := NOT active_axis[i] OR (external_mode AND (i = 7));
+                setup_exec[i] := FALSE;
+                stop_exec[i] := FALSE;
+            END_FOR
+            state := 1;
+        END_IF
+    END_IF
+
+1: // SetupMove
+    G.program_test_enable := TRUE;
+    G.program_test_phase := 1;
+    IF setup_release_wait_active THEN
+        G.program_test_wait_action := 1;
+        IF release_timer.Q THEN
+            setup_release_wait_active := FALSE;
+            G.program_test_wait_action := 0;
+            FOR i := 1 TO 7 DO
+                setup_exec[i] := active_axis[i] AND NOT (external_mode AND (i = 7));
+            END_FOR
+        END_IF
+    ELSE
+        all_setup_done := TRUE;
+        FOR i := 1 TO 7 DO
+            IF active_axis[i] AND NOT (external_mode AND (i = 7)) THEN
+                IF fb_setup_move[i].Done THEN
+                    setup_done[i] := TRUE;
+                    setup_exec[i] := FALSE;
+                ELSIF fb_setup_move[i].Error OR fb_setup_move[i].CommandAborted THEN
+                    G.program_test_status_error_id := fb_setup_move[i].ErrorID;
+                    IF G.program_test_status_error_id = 0 THEN G.program_test_status_error_id := 16#7301; END_IF
+                    G.program_test_error_source := 1;
+                    G.program_test_error_axis := INT_TO_USINT(i);
+                    G.program_test_error_phase := G.program_test_phase;
+                    G.program_test_error_target_abs := setup_target[i];
+                    setup_exec[i] := FALSE;
+                    state := 12;
+                END_IF
+                IF NOT setup_done[i] THEN all_setup_done := FALSE; END_IF
+            END_IF
+        END_FOR
+        IF all_setup_done THEN
+            initial_reclamp_wait_active := TRUE;
+            G.program_test_wait_action := 2;
+            state := 2;
+        END_IF
+    END_IF
+
+2: // Ready
+    G.program_test_enable := TRUE;
+    G.program_test_phase := 2;
+    IF (active_mode = 1) OR external_mode THEN
+        G.cylinder1_value := 400;
+        G.cylinder2_value := G.program_test_cylinder2_close_word;
+        IF external_mode THEN
+            G.cylinder3_value := 400;
+            G.cylinder4_value := G.program_test_cylinder4_close_word;
+        END_IF
+    ELSE
+        G.cylinder3_value := 400;
+        G.cylinder4_value := G.program_test_cylinder4_close_word;
+    END_IF
+    IF initial_reclamp_wait_active THEN
+        G.program_test_wait_action := 2;
+        IF reclamp_timer.Q THEN
+            initial_reclamp_wait_active := FALSE;
+            G.program_test_wait_action := 0;
+            G.program_test_setup_busy := FALSE;
+            G.program_test_setup_done := TRUE;
+        END_IF
+    ELSIF G.program_test_start_req THEN
+        G.program_test_start_req := FALSE;
+        G.program_test_cycle_index := 1;
+        G.program_test_sample_arm := TRUE;
+        state := 3;
+    END_IF
+
+3: // Baseline
+    G.program_test_enable := TRUE;
+    G.program_test_phase := 3;
+    G.program_test_sample_arm := TRUE;
+    IF baseline_timer.Q THEN
+        forward_exec := TRUE;
+        state := 4;
+    END_IF
+
+4: // ForwardToTrigger
+    G.program_test_enable := TRUE;
+    G.program_test_phase := 4;
+    G.program_test_sample_arm := TRUE;
+        IF forward_done THEN
+        forward_exec := FALSE;
+        // 每次到达触发位置时都重新初始化释放阶段，避免上一周期的TON完成状态残留。
+        release_lead_active := FALSE;
+        release_wait_active := FALSE;
+        IF (active_mode = 1) OR external_mode THEN
+            G.cylinder1_value := 400;
+            IF G.program_test_cylinder1_coupling_enable THEN
+                G.cylinder1_value := 0;
+                release_lead_active := G.program_test_release_lead_ms > 0;
+            ELSE
+                release_lead_active := FALSE;
+            END_IF
+            release_wait_active := NOT release_lead_active;
+            IF release_wait_active THEN
+                G.cylinder2_value := G.program_test_cylinder2_open_word;
+            END_IF
+        ELSE
+            G.cylinder3_value := 400;
+            IF G.program_test_cylinder3_coupling_enable THEN
+                G.cylinder3_value := 50;
+                release_lead_active := G.program_test_release_lead_ms > 0;
+            ELSE
+                release_lead_active := FALSE;
+            END_IF
+            release_wait_active := NOT release_lead_active;
+            IF release_wait_active THEN
+                G.cylinder4_value := G.program_test_cylinder4_open_word;
+            END_IF
+        END_IF
+        G.program_test_wait_action := 1;
+        state := 5;
+    ELSIF fb_forward_move.Error OR fb_forward_move.CommandAborted THEN
+        G.program_test_status_error_id := fb_forward_move.ErrorID;
+        IF G.program_test_status_error_id = 0 THEN G.program_test_status_error_id := 16#7302; END_IF
+        G.program_test_error_source := 2;
+        G.program_test_error_axis := INT_TO_USINT(moving_axis);
+        G.program_test_error_phase := G.program_test_phase;
+        G.program_test_error_target_abs := G.program_test_trigger_target_abs;
+        forward_exec := FALSE;
+        state := 12;
+    END_IF
+
+5: // ReleaseMovingClamp
+    G.program_test_enable := TRUE;
+    G.program_test_phase := 5;
+    G.program_test_sample_arm := TRUE;
+    G.program_test_wait_action := 1;
+    IF release_lead_active THEN
+        // 先释放配合电缸，等待设定时间后再释放运动端电缸。
+        IF (G.program_test_release_lead_ms = 0) OR release_lead_timer.Q THEN
+            release_lead_active := FALSE;
+            release_wait_active := TRUE;
+        IF (active_mode = 1) OR external_mode THEN
+            G.cylinder2_value := G.program_test_cylinder2_open_word;
+            ELSE
+                G.cylinder4_value := G.program_test_cylinder4_open_word;
+            END_IF
+        END_IF
+    ELSIF release_wait_active AND release_timer.Q THEN
+        release_wait_active := FALSE;
+        G.program_test_wait_action := 0;
+        return_exec := TRUE;
+        state := 6;
+    END_IF
+
+6: // ReturnMoving
+    G.program_test_enable := TRUE;
+    G.program_test_phase := 6;
+    G.program_test_sample_arm := TRUE;
+    IF fb_return_move.Done THEN
+        return_exec := FALSE;
+        // 每次回退到位时都重新初始化重新夹紧阶段，避免上一周期的TON完成状态残留。
+        reclamp_lead_active := FALSE;
+        reclamp_wait_active := FALSE;
+        IF (active_mode = 1) OR external_mode THEN
+            G.cylinder2_value := G.program_test_cylinder2_close_word;
+            IF G.program_test_cylinder1_coupling_enable THEN
+                reclamp_lead_active := G.program_test_reclamp_lead_ms > 0;
+            ELSE
+                reclamp_lead_active := FALSE;
+            END_IF
+            reclamp_wait_active := NOT reclamp_lead_active;
+            IF reclamp_wait_active THEN
+                G.cylinder1_value := 400;
+            END_IF
+        ELSE
+            G.cylinder4_value := G.program_test_cylinder4_close_word;
+            IF G.program_test_cylinder3_coupling_enable THEN
+                reclamp_lead_active := G.program_test_reclamp_lead_ms > 0;
+            ELSE
+                reclamp_lead_active := FALSE;
+            END_IF
+            reclamp_wait_active := NOT reclamp_lead_active;
+            IF reclamp_wait_active THEN
+                G.cylinder3_value := 400;
+            END_IF
+        END_IF
+        state := 7;
+    ELSIF fb_return_move.Error OR fb_return_move.CommandAborted THEN
+        G.program_test_status_error_id := fb_return_move.ErrorID;
+        IF G.program_test_status_error_id = 0 THEN G.program_test_status_error_id := 16#7303; END_IF
+        G.program_test_error_source := 3;
+        G.program_test_error_axis := INT_TO_USINT(moving_axis);
+        G.program_test_error_phase := G.program_test_phase;
+        G.program_test_error_target_abs := G.program_test_return_target_abs;
+        return_exec := FALSE;
+        state := 12;
+    END_IF
+
+7: // ReclampMovingClamp
+    G.program_test_enable := TRUE;
+    G.program_test_phase := 7;
+    G.program_test_sample_arm := TRUE;
+    G.program_test_wait_action := 2;
+    IF reclamp_lead_active THEN
+        // 先夹紧运动端电缸，等待设定时间后再夹紧配合电缸。
+        IF (G.program_test_reclamp_lead_ms = 0) OR reclamp_lead_timer.Q THEN
+            reclamp_lead_active := FALSE;
+            reclamp_wait_active := TRUE;
+        IF (active_mode = 1) OR external_mode THEN
+            G.cylinder1_value := 400;
+            ELSE
+                G.cylinder3_value := 400;
+            END_IF
+        END_IF
+    ELSIF reclamp_wait_active AND reclamp_timer.Q THEN
+        reclamp_wait_active := FALSE;
+        G.program_test_wait_action := 0;
+        state := 8;
+    END_IF
+
+8: // CycleDecision
+    G.program_test_enable := TRUE;
+    G.program_test_phase := 8;
+    G.program_test_sample_arm := TRUE;
+    IF G.program_test_cycle_index < G.program_test_cycle_total THEN
+        G.program_test_cycle_index := G.program_test_cycle_index + 1;
+        forward_exec := TRUE;
+        state := 4;
+    ELSIF G.program_test_final_forward_distance_mm > 0.0 THEN
+        final_exec := TRUE;
+        state := 9;
+    ELSE
+        G.program_test_sample_arm := FALSE;
+        state := 10;
+    END_IF
+
+9: // FinalForward，完成后绝不进入释放或回退状态。
+    G.program_test_enable := TRUE;
+    G.program_test_phase := 9;
+    G.program_test_sample_arm := TRUE;
+        IF final_done THEN
+        final_exec := FALSE;
+        G.program_test_sample_arm := FALSE;
+        state := 10;
+    ELSIF fb_final_move.Error OR fb_final_move.CommandAborted THEN
+        G.program_test_status_error_id := fb_final_move.ErrorID;
+        IF G.program_test_status_error_id = 0 THEN G.program_test_status_error_id := 16#7304; END_IF
+        G.program_test_error_source := 4;
+        G.program_test_error_axis := INT_TO_USINT(moving_axis);
+        G.program_test_error_phase := G.program_test_phase;
+        G.program_test_error_target_abs := G.program_test_final_target_abs;
+        final_exec := FALSE;
+        state := 12;
+    END_IF
+
+10: // Completed
+    G.program_test_enable := FALSE;
+    G.program_test_phase := 10;
+    G.program_test_sample_arm := FALSE;
+    G.program_test_wait_action := 0;
+
+11: // Aborted
+    G.program_test_enable := FALSE;
+    G.program_test_phase := 11;
+    G.program_test_sample_arm := FALSE;
+    G.program_test_wait_action := 0;
+    setup_release_wait_active := FALSE;
+    initial_reclamp_wait_active := FALSE;
+    release_lead_active := FALSE;
+    release_wait_active := FALSE;
+    reclamp_lead_active := FALSE;
+    reclamp_wait_active := FALSE;
+    G.program_test_setup_busy := FALSE;
+    forward_exec := FALSE;
+    return_exec := FALSE;
+    final_exec := FALSE;
+    FOR i := 1 TO 7 DO
+        setup_exec[i] := FALSE;
+        stop_exec[i] := active_axis[i];
+    END_FOR
+    IF (active_mode = 1) OR external_mode THEN
+        G.cylinder1_value := 400;
+        G.cylinder2_value := G.program_test_cylinder2_close_word;
+        IF external_mode THEN
+            G.cylinder3_value := 400;
+            G.cylinder4_value := G.program_test_cylinder4_close_word;
+        END_IF
+    ELSIF active_mode = 2 THEN
+        G.cylinder3_value := 400;
+        G.cylinder4_value := G.program_test_cylinder4_close_word;
+    END_IF
+
+12: // Error
+    G.program_test_enable := FALSE;
+    G.program_test_phase := 12;
+    G.program_test_sample_arm := FALSE;
+    G.program_test_wait_action := 0;
+    setup_release_wait_active := FALSE;
+    initial_reclamp_wait_active := FALSE;
+    release_lead_active := FALSE;
+    release_wait_active := FALSE;
+    reclamp_lead_active := FALSE;
+    reclamp_wait_active := FALSE;
+    G.program_test_setup_busy := FALSE;
+    forward_exec := FALSE;
+    return_exec := FALSE;
+    final_exec := FALSE;
+    FOR i := 1 TO 7 DO
+        setup_exec[i] := FALSE;
+        stop_exec[i] := active_axis[i];
+    END_FOR
+    IF (active_mode = 1) OR external_mode THEN
+        G.cylinder1_value := 400;
+        G.cylinder2_value := G.program_test_cylinder2_close_word;
+        IF external_mode THEN
+            G.cylinder3_value := 400;
+            G.cylinder4_value := G.program_test_cylinder4_close_word;
+        END_IF
+    ELSIF active_mode = 2 THEN
+        G.cylinder3_value := 400;
+        G.cylinder4_value := G.program_test_cylinder4_close_word;
+    END_IF
+END_CASE
+
+// 阶段变化先更新事件号，再写入本周期样本。
+IF (G.program_test_phase <> last_phase) OR (G.program_test_sync_state <> last_sync_state) THEN
+    G.program_test_event_sequence := G.program_test_event_sequence + 1;
+    last_phase := G.program_test_phase;
+    last_sync_state := G.program_test_sync_state;
+END_IF
+
+IF external_mode THEN
+    // 外源同步状态作为阶段内子状态记录，但不改变上位机的主阶段编号。
+    G.program_test_phase := state;
+    IF state >= 2 THEN
+        G.cylinder3_value := 400;
+        G.cylinder4_value := G.program_test_cylinder4_close_word;
+    END_IF
+END_IF
+
+FOR i := 1 TO 7 DO
+    fb_setup_move[i](Axis := G.axis[i], Position := setup_target[i],
+        Velocity := G.program_test_forward_velocity,
+        Acceleration := G.program_test_forward_acceleration,
+        Deceleration := G.program_test_forward_deceleration,
+        Jerk := G.program_test_forward_jerk,
+        Execute := setup_exec[i]);
+    fb_stop[i](Axis := G.axis[i], Deceleration := G.program_test_return_deceleration,
+        Jerk := G.program_test_return_jerk, Execute := stop_exec[i]);
+END_FOR
+
+fb_forward_move(Axis := G.axis[moving_axis], Position := G.program_test_trigger_target_abs,
+    Velocity := G.program_test_forward_velocity,
+    Acceleration := G.program_test_forward_acceleration,
+    Deceleration := G.program_test_forward_deceleration,
+    Jerk := G.program_test_forward_jerk,
+    Execute := forward_exec AND motion_allowed);
+fb_return_move(Axis := G.axis[moving_axis], Position := G.program_test_return_target_abs,
+    Velocity := G.program_test_return_velocity,
+    Acceleration := G.program_test_return_acceleration,
+    Deceleration := G.program_test_return_deceleration,
+    Jerk := G.program_test_return_jerk,
+    Execute := return_exec);
+fb_final_move(Axis := G.axis[moving_axis], Position := G.program_test_final_target_abs,
+    Velocity := G.program_test_forward_velocity,
+    Acceleration := G.program_test_forward_acceleration,
+    Deceleration := G.program_test_forward_deceleration,
+    Jerk := G.program_test_forward_jerk,
+    Execute := final_exec AND motion_allowed);
+
+IF G.program_test_sample_clear THEN
+    G.program_test_sample_count := 0;
+    G.program_test_sample_overflow := FALSE;
+    G.program_test_sample_clear := FALSE;
+END_IF
+
+IF G.program_test_sample_arm AND NOT G.program_test_sample_overflow THEN
+    IF G.program_test_sample_count < 32768 THEN
+        i := UDINT_TO_INT(G.program_test_sample_count);
+        G.program_test_sample_index[i] := G.program_test_sample_count;
+        G.program_test_sample_time_us[i] := UDINT_TO_ULINT(G.program_test_sample_count) * 1000;
+        G.program_test_sample_phase[i] := G.program_test_phase;
+        G.program_test_sample_event_sequence[i] := G.program_test_event_sequence;
+        G.program_test_sample_cycle_index[i] := G.program_test_cycle_index;
+        G.program_test_sample_sync_state[i] := G.program_test_sync_state;
+        IF (active_mode = 1) OR external_mode THEN
+            G.program_test_sample_axis1_pos[i] := G.axis[1].NcToPlc.ActPos;
+            G.program_test_sample_axis1_vel[i] := G.axis[1].NcToPlc.ActVelo;
+            G.program_test_sample_axis1_acc[i] := G.axis[1].NcToPlc.ActAcc;
+            G.program_test_sample_axis2_pos[i] := G.axis[2].NcToPlc.ActPos;
+            G.program_test_sample_axis2_vel[i] := G.axis[2].NcToPlc.ActVelo;
+            G.program_test_sample_axis2_acc[i] := G.axis[2].NcToPlc.ActAcc;
+            G.program_test_sample_cylinder1[i] := G.cylinder1_value;
+            G.program_test_sample_cylinder2[i] := G.cylinder2_value;
+            G.program_test_sample_fn1[i] := G.fn_1_value;
+            G.program_test_sample_ft1[i] := G.ft_1_value;
+        END_IF
+        IF (active_mode = 2) OR external_mode THEN
+            G.program_test_sample_axis5_pos[i] := G.axis[5].NcToPlc.ActPos;
+            G.program_test_sample_axis5_vel[i] := G.axis[5].NcToPlc.ActVelo;
+            G.program_test_sample_axis5_acc[i] := G.axis[5].NcToPlc.ActAcc;
+            G.program_test_sample_axis6_pos[i] := G.axis[6].NcToPlc.ActPos;
+            G.program_test_sample_axis6_vel[i] := G.axis[6].NcToPlc.ActVelo;
+            G.program_test_sample_axis6_acc[i] := G.axis[6].NcToPlc.ActAcc;
+            G.program_test_sample_axis7_pos[i] := G.axis[7].NcToPlc.ActPos;
+            G.program_test_sample_axis7_vel[i] := G.axis[7].NcToPlc.ActVelo;
+            G.program_test_sample_axis7_acc[i] := G.axis[7].NcToPlc.ActAcc;
+            G.program_test_sample_cylinder3[i] := G.cylinder3_value;
+            G.program_test_sample_cylinder4[i] := G.cylinder4_value;
+            G.program_test_sample_fn2[i] := G.fn_2_value;
+            G.program_test_sample_ft2[i] := G.ft_2_value;
+        END_IF
+        G.program_test_sample_count := G.program_test_sample_count + 1;
+    ELSE
+        G.program_test_sample_overflow := TRUE;
+    END_IF
+END_IF]]></ST>
+    </Implementation>
+    <LineIds Name="ProgrammedDeliveryExperiment">
+      <LineId Id="1" Count="1" />
+    </LineIds>
+  </POU>
+</TcPlcObject>

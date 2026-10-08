@@ -2,9 +2,12 @@ using System;
 using System.Globalization;
 using System.IO;
 using System.Text;
+using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Input;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
+using System.Windows.Threading;
 using MasterConsole.Services;
 using MasterConsole.ViewModels;
 
@@ -19,6 +22,12 @@ namespace MasterConsole.Views
         private readonly DsaJpegReceiver _dsaReceiver;
         private readonly string[] _dsaStreamStatus = { "未连接", "未连接" };
         private readonly object _dsaStatusSync = new object();
+        private readonly DispatcherTimer _armKeepaliveTimer;
+        private int _armJogAxis;
+        private int _armJogDirection;
+        private int _armCartesianMode;
+        private int _armCartesianSpeedMilli;
+        private bool _armProgramReturnActive;
 
         public MainWindow()
         {
@@ -29,9 +38,12 @@ namespace MasterConsole.Views
             _dsaReceiver.FrameReceived += DsaFrameReceived;
             _dsaReceiver.StatusChanged += DsaStatusChanged;
             _dsaReceiver.Start();
+            _armKeepaliveTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(100) };
+            _armKeepaliveTimer.Tick += ArmKeepaliveTimer_Tick;
+            _armKeepaliveTimer.Start();
             if (_linkNotice != null) _vm.PostLog("warn", _linkNotice);
             else if (_linkTokenPath != null) _vm.PostLog("info", "已加载密钥：" + _linkTokenPath);
-            Closed += (s, e) => { _dsaReceiver.Dispose(); DsaImageView.Dispose(); HikCamera1.Dispose(); HikCamera2.Dispose(); _vm.Dispose(); RobotModelViewport.Dispose(); };
+            Closed += (s, e) => { _armKeepaliveTimer.Stop(); _vm.StopAllHoldActions(); _dsaReceiver.Dispose(); DsaImageView.Dispose(); HikCamera1.Dispose(); HikCamera2.Dispose(); _vm.Dispose(); RobotModelViewport.Dispose(); };
         }
 
         private void DsaFrameReceived(int stream, byte[] jpeg, DateTime receivedUtc) => DsaImageView.PublishJpeg(jpeg, receivedUtc);
@@ -90,13 +102,11 @@ namespace MasterConsole.Views
             {
                 DisplayTopRow.Height = new GridLength(2, GridUnitType.Star);
                 DisplayBottomRow.Height = new GridLength(3, GridUnitType.Star);
-                DisplayLogColumn.Width = new GridLength(120);
             }
             else
             {
                 DisplayTopRow.Height = new GridLength(3, GridUnitType.Star);
                 DisplayBottomRow.Height = new GridLength(2, GridUnitType.Star);
-                DisplayLogColumn.Width = new GridLength(180);
             }
         }
 
@@ -142,7 +152,10 @@ namespace MasterConsole.Views
                 _linkNotice = null;
                 _linkTokenPath = c;
                 // 手柄服务随链路创建：应用启动即开始打开本机手柄，连接从端时已就绪。
-                return new RemoteRobotLink(new RemoteLinkSettings { Host = host, Token = token }, new HandleService());
+                return new RemoteRobotLink(
+                    new RemoteLinkSettings { Host = host, Token = token },
+                    new HandleService(),
+                    new DsaCanControlSender(host));
             }
             _linkNotice = rejected != null
                 ? "密钥文件太短（至少 16 个字符）：" + rejected + "。已退回模拟链路，命令不会发给从端。"
@@ -169,6 +182,130 @@ namespace MasterConsole.Views
         }
 
         private void Window_Deactivated(object sender, EventArgs e) => _vm.StopAllHoldActions();
+
+        private async void ArmManualEnable_Click(object sender, RoutedEventArgs e)
+        {
+            if (!(sender is ToggleButton button)) return;
+            await _vm.SetArmManualEnableAsync(button.IsChecked == true);
+        }
+
+        private async void ArmAxisEnable_Click(object sender, RoutedEventArgs e)
+        {
+            if (!(sender is ToggleButton button) || !int.TryParse(Convert.ToString(button.Tag, CultureInfo.InvariantCulture), out int axis)) return;
+            await _vm.SetArmAxisEnableAsync(axis, button.IsChecked == true);
+        }
+
+        private async void ArmAxisReset_Click(object sender, RoutedEventArgs e)
+        {
+            if (!(sender is Button button) || !int.TryParse(Convert.ToString(button.Tag, CultureInfo.InvariantCulture), out int axis)) return;
+            await _vm.ResetArmAxisAsync(axis);
+        }
+
+        private void ArmJogButton_Down(object sender, MouseButtonEventArgs e)
+        {
+            if (!(sender is Button button) || !TryArmJog(button, out int axis, out int direction)) return;
+            _armJogAxis = axis;
+            _armJogDirection = direction;
+            _vm.SetArmAxisJog(axis, direction);
+            button.CaptureMouse();
+            e.Handled = true;
+        }
+
+        private void ArmJogButton_Up(object sender, RoutedEventArgs e)
+        {
+            if (!(sender is Button button) || !int.TryParse(Convert.ToString(button.Tag, CultureInfo.InvariantCulture), out int axis)) return;
+            if (_armJogAxis == axis) { _armJogAxis = 0; _armJogDirection = 0; }
+            _vm.SetArmAxisJog(axis, 0);
+            if (button.IsMouseCaptured) button.ReleaseMouseCapture();
+        }
+
+        private async void ArmCartesian_Down(object sender, MouseButtonEventArgs e)
+        {
+            if (_armCartesianMode != 0 || !(sender is Button button)) return;
+            ArmCartesianError.Text = "";
+            if (!int.TryParse(Convert.ToString(button.CommandParameter, CultureInfo.InvariantCulture), out int direction) ||
+                !double.TryParse(ArmCartesianSpeed.Text, NumberStyles.Float, CultureInfo.InvariantCulture, out double speed) ||
+                double.IsNaN(speed) || double.IsInfinity(speed) || speed < 0.001 || speed > 100)
+            {
+                ArmCartesianError.Text = "速度须在 0.001 至 100 之间。";
+                return;
+            }
+            if (!await SendArmCartesianParametersAsync(false)) return;
+            _armCartesianMode = ArmCartesianMode.SelectedIndex + 1;
+            _armCartesianSpeedMilli = direction * (int)Math.Round(speed * 1000.0);
+            if (!await _vm.SetArmCartesianJogAsync(_armCartesianMode, _armCartesianSpeedMilli))
+            {
+                _armCartesianMode = 0;
+                _armCartesianSpeedMilli = 0;
+                return;
+            }
+            button.CaptureMouse();
+            e.Handled = true;
+        }
+
+        private void ArmCartesian_Up(object sender, RoutedEventArgs e)
+        {
+            if (_armCartesianMode == 0) return;
+            _armCartesianMode = 0;
+            _armCartesianSpeedMilli = 0;
+            _ = _vm.StopArmAsync();
+            if (sender is Button button && button.IsMouseCaptured) button.ReleaseMouseCapture();
+        }
+
+        private async void ArmProgramZero_Click(object sender, RoutedEventArgs e)
+        {
+            if (_armCartesianMode != 0 || _armJogAxis != 0) return;
+            ArmCartesianError.Text = "";
+            if (!await SendArmCartesianParametersAsync(true)) return;
+            _armProgramReturnActive = await _vm.ReturnArmProgramZeroAsync();
+        }
+
+        private async Task<bool> SendArmCartesianParametersAsync(bool home)
+        {
+            TextBox[] inputs = { ArmLiftMin, ArmHomeTravel, ArmHomeTip, ArmHomeRotation };
+            int count = home ? inputs.Length : 1;
+            for (int i = 0; i < count; i++)
+            {
+                if (!double.TryParse(inputs[i].Text, NumberStyles.Float, CultureInfo.InvariantCulture, out double value) ||
+                    double.IsNaN(value) || double.IsInfinity(value) || Math.Abs(value) > 100000 || (i != 0 && value <= 0))
+                {
+                    ArmCartesianError.Text = home
+                        ? "归零需要填写轴1下端、正数行程、位移和转角上限。"
+                        : "末端点动需要填写轴1下端读数。";
+                    return false;
+                }
+                if (!await _vm.SetArmCartesianParameterAsync(i, (int)Math.Round(value * 1000.0)))
+                {
+                    ArmCartesianError.Text = "定位臂参数发送失败。";
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        private void ArmStop_Click(object sender, RoutedEventArgs e)
+        {
+            _armProgramReturnActive = false;
+            _armCartesianMode = 0;
+            _armJogAxis = 0;
+            _armJogDirection = 0;
+            _ = _vm.StopArmAsync();
+        }
+
+        private void ArmKeepaliveTimer_Tick(object sender, EventArgs e)
+        {
+            if (_armJogAxis != 0 && _armJogDirection != 0) _vm.SetArmAxisJog(_armJogAxis, _armJogDirection);
+            if (_armCartesianMode != 0) _ = _vm.SetArmCartesianJogAsync(_armCartesianMode, _armCartesianSpeedMilli);
+            if (_armProgramReturnActive) _vm.KeepArmCartesianAlive();
+        }
+
+        private static bool TryArmJog(Button button, out int axis, out int direction)
+        {
+            axis = direction = 0;
+            return int.TryParse(Convert.ToString(button.Tag, CultureInfo.InvariantCulture), out axis) && axis >= 1 && axis <= 5 &&
+                   int.TryParse(Convert.ToString(button.CommandParameter, CultureInfo.InvariantCulture), out direction) &&
+                   (direction == -1 || direction == 1);
+        }
 
         private void Apply(string target, int direction)
         {

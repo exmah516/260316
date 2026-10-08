@@ -95,8 +95,28 @@ namespace MasterConsole.Protocol
         public static string StartControl(int id)
             => Cmd(id, "start_control");
 
-        public static string RefreshHandles(int id, int successMask)
-            => Cmd(id, "refresh_handles", ("success_mask", successMask));
+        public static string BeginRefreshHandles(int id) => Cmd(id, "refresh_handles_begin");
+        public static string RefreshHandles(int id, int successMask, uint afterSeq)
+            => Cmd(id, "refresh_handles", ("success_mask", successMask), ("after_seq", afterSeq));
+
+        public static string ArmManualEnable(int id, bool enable)
+            => Cmd(id, "arm_manual_enable", ("enable", enable));
+        public static string ArmAxisEnable(int id, int axis, bool enable)
+            => Cmd(id, "arm_axis_enable", ("axis", axis), ("enable", enable));
+        public static string ArmAxisReset(int id, int axis)
+            => Cmd(id, "arm_axis_reset", ("axis", axis));
+        public static string ArmAxisJog(int id, int axis, int direction)
+            => Cmd(id, "arm_axis_jog", ("axis", axis), ("direction", direction));
+        public static string ArmCartesianJog(int id, int mode, int speedMilli)
+            => Cmd(id, "arm_cartesian_jog", ("mode", mode), ("speed", speedMilli));
+        public static string ArmStop(int id)
+            => Cmd(id, "arm_stop");
+        public static string ArmProgramZero(int id)
+            => Cmd(id, "arm_program_zero");
+        public static string ArmCartesianParameter(int id, int field, int valueMilli)
+            => Cmd(id, "arm_cartesian_parameter", ("field", field), ("value", valueMilli));
+        public static string ArmCartesianAlive(int id)
+            => Cmd(id, "arm_cartesian_alive");
 
         /// <summary>Y 阀：closed=true 为关闭，false 为打开（取消关闭）。</summary>
         public static string YValve(int id, bool closed)

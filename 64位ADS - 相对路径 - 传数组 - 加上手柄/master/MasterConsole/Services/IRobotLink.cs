@@ -36,6 +36,7 @@ namespace MasterConsole.Services
         public bool Handle582Online { get; set; }
         public bool Handle587Online { get; set; }
         public bool HandleSdkMissing { get; set; }
+        public bool CatheterReversePressed { get; set; }
     }
 
     /// <summary>
@@ -68,6 +69,16 @@ namespace MasterConsole.Services
 
         /// <summary>重读主端手柄并请求从端按成功读取的手柄重建中立基准。</summary>
         Task<CommandResult> RefreshHandlesAsync();
+
+        Task<CommandResult> SetArmManualEnableAsync(bool enabled);
+        Task<CommandResult> SetArmAxisEnableAsync(int axis, bool enabled);
+        Task<CommandResult> ResetArmAxisAsync(int axis);
+        Task<CommandResult> SetArmCartesianJogAsync(int mode, int speedMilli);
+        Task<CommandResult> StopArmAsync();
+        Task<CommandResult> ReturnArmProgramZeroAsync();
+        Task<CommandResult> SetArmCartesianParameterAsync(int field, int valueMilli);
+        void SetArmAxisJog(int axis, int direction);
+        void KeepArmCartesianAlive();
 
         /// <summary>力反馈开关；开启前的零点采集由从端自动完成。</summary>
         Task<CommandResult> SetForceFeedbackAsync(bool enable);

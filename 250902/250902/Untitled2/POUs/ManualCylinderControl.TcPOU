@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="utf-8"?>
+<TcPlcObject Version="1.1.0.1" ProductVersion="3.1.4024.15">
+  <POU Name="ManualCylinderControl" Id="{6f8d5f26-1b6d-4d88-a2c4-7d60e6ef7d01}" SpecialFunc="None">
+    <Declaration><![CDATA[FUNCTION_BLOCK ManualCylinderControl
+VAR
+    i : INT;
+    experiment_busy : BOOL;
+    previous_manual_enable : BOOL := FALSE;
+END_VAR]]></Declaration>
+    <Implementation>
+      <ST><![CDATA[
+// 手动电缸控制不调用任何轴运动功能，只在旧实验和程序实验均未运动时接管四路输出。
+experiment_busy := ((G.dual_clamp_phase >= 3) AND (G.dual_clamp_phase <= 9)) OR
+                    (G.dual_clamp_phase = 14) OR
+                    ((G.program_test_phase >= 1) AND (G.program_test_phase <= 9));
+
+IF G.manual_cylinder_enable AND G.self_check_done AND NOT experiment_busy THEN
+    FOR i := 1 TO 4 DO
+        CASE i OF
+            1: G.cylinder1_value := G.manual_cylinder_cmd[i];
+            2: G.cylinder2_value := G.manual_cylinder_cmd[i];
+            3: G.cylinder3_value := G.manual_cylinder_cmd[i];
+            4: G.cylinder4_value := G.manual_cylinder_cmd[i];
+        END_CASE
+    END_FOR
+    G.manual_cylinder_error_id := 0;
+ELSE
+    // 自检未完成或实验进入运动阶段时，立即撤销手动接管，避免实验结束后恢复旧命令。
+    IF G.manual_cylinder_enable AND ((NOT G.self_check_done) OR experiment_busy) THEN
+        G.manual_cylinder_enable := FALSE;
+    END_IF
+    // 手动控制释放后恢复标准空闲输出；实验运动期间不覆盖实验状态机输出。
+    IF previous_manual_enable AND NOT G.manual_cylinder_enable AND NOT experiment_busy THEN
+        G.cylinder1_value := 1000;
+        G.cylinder2_value := 0;
+        G.cylinder3_value := 1000;
+        G.cylinder4_value := 0;
+    END_IF
+    IF G.manual_cylinder_enable AND NOT G.self_check_done THEN
+        G.manual_cylinder_error_id := 16#7102;
+    ELSIF G.manual_cylinder_enable AND experiment_busy THEN
+        G.manual_cylinder_error_id := 16#7103;
+    END_IF
+END_IF
+previous_manual_enable := G.manual_cylinder_enable;
+]]></ST>
+    </Implementation>
+  </POU>
+</TcPlcObject>

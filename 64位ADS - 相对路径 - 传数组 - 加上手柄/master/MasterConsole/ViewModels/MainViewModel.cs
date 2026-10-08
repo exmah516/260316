@@ -62,6 +62,7 @@ namespace MasterConsole.ViewModels
         private LinkStats _stats = new LinkStats();
         private bool _refreshingHandles;
         private string _handleRefreshText = "未刷新";
+        private string _armFeedbackText = "定位臂命令待发送";
 
         public MainViewModel(IRobotLink link)
         {
@@ -176,7 +177,7 @@ namespace MasterConsole.ViewModels
         /// <summary>模式只显示：0 导管 / 1 导丝（对应从端 guidewire_mode，当前仅作提示）。</summary>
         public bool IsCatheterMode => _hasStatus && _s.Mode == 0;
         public bool IsGuidewireMode => _hasStatus && _s.Mode == 1;
-        public string ModeText => !_hasStatus ? "—" : (_s.Mode == 0 ? "导管" : "导丝");
+        public string ModeText => !IsConnected ? "—" : (_stats.CatheterReversePressed ? "撤出" : "递送");
         public string PhaseText => !_hasStatus ? "未连接"
             : ControlActive ? "手柄控制中"
             : Has(StatusFlags.SelfCheckDone) ? "待开始控制"
@@ -254,7 +255,7 @@ namespace MasterConsole.ViewModels
         {
             if (!CanRefreshHandles) return;
             _refreshingHandles = true;
-            _handleRefreshText = "正在刷新…";
+            _handleRefreshText = "正在整体重启两只手柄，输入暂停；等待从端基准确认…";
             OnPropertyChanged(nameof(CanRefreshHandles));
             OnPropertyChanged(nameof(HandleRefreshText));
             try
@@ -319,6 +320,8 @@ namespace MasterConsole.ViewModels
             _link.SetInjector(1, 0);
             _link.SetInjector(2, 0);
             _link.SetAxis4(0);
+            for (int axis = 1; axis <= 5; axis++) _link.SetArmAxisJog(axis, 0);
+            _ = _link.StopArmAsync();
         }
 
         private Task Report(string what, CommandResult r)
@@ -343,6 +346,43 @@ namespace MasterConsole.ViewModels
             ? "手柄 SDK 未加载（缺 FLCatheter.dll）"
             : "582 " + (_stats.Handle582Online ? "在线" : "离线") + " / 587 " + (_stats.Handle587Online ? "在线" : "离线");
         public string HandleRefreshText => _handleRefreshText;
+        public string ArmFeedbackText => _armFeedbackText;
+
+        public async Task SetArmManualEnableAsync(bool enabled) =>
+            await ReportArm("定位臂总使能", await _link.SetArmManualEnableAsync(enabled));
+        public async Task SetArmAxisEnableAsync(int axis, bool enabled) =>
+            await ReportArm($"定位臂轴{axis}{(enabled ? "上电" : "断电")}", await _link.SetArmAxisEnableAsync(axis, enabled));
+        public async Task ResetArmAxisAsync(int axis) =>
+            await ReportArm($"定位臂轴{axis}复位", await _link.ResetArmAxisAsync(axis));
+        public void SetArmAxisJog(int axis, int direction) => _link.SetArmAxisJog(axis, direction);
+        public async Task<bool> SetArmCartesianJogAsync(int mode, int speedMilli)
+        {
+            var result = await _link.SetArmCartesianJogAsync(mode, speedMilli);
+            await ReportArm("定位臂末端点动", result);
+            return result.Ok;
+        }
+        public async Task StopArmAsync() => await ReportArm("定位臂停止", await _link.StopArmAsync());
+        public async Task<bool> ReturnArmProgramZeroAsync()
+        {
+            var result = await _link.ReturnArmProgramZeroAsync();
+            await ReportArm("定位臂程序归零", result);
+            return result.Ok;
+        }
+        public async Task<bool> SetArmCartesianParameterAsync(int field, int valueMilli)
+        {
+            var result = await _link.SetArmCartesianParameterAsync(field, valueMilli);
+            await ReportArm("定位臂参数", result);
+            return result.Ok;
+        }
+        public void KeepArmCartesianAlive() => _link.KeepArmCartesianAlive();
+
+        private Task ReportArm(string what, CommandResult result)
+        {
+            _armFeedbackText = result.Ok ? $"{what}：已发送" : $"{what}失败：{result.Reason}";
+            OnPropertyChanged(nameof(ArmFeedbackText));
+            if (!result.Ok) AddLog("warn", _armFeedbackText);
+            return Task.CompletedTask;
+        }
 
         private void RefreshStats()
         {
@@ -356,6 +396,7 @@ namespace MasterConsole.ViewModels
             OnPropertyChanged(nameof(AdsText));
             OnPropertyChanged(nameof(HandlesOnline));
             OnPropertyChanged(nameof(HandleText));
+            OnPropertyChanged(nameof(ModeText));
             // 状态过期是由时间推移产生的，需要在这里重新评估。
             OnPropertyChanged(nameof(StatusFresh));
             OnPropertyChanged(nameof(CanOperate));
@@ -405,8 +446,12 @@ namespace MasterConsole.ViewModels
         /// <summary>供窗口写入一条日志（须在 UI 线程调用）。</summary>
         public void PostLog(string level, string text) => AddLog(level, text);
 
+        public string LastWarning { get; private set; } = "";
+
         private void AddLog(string level, string text, DateTime? time = null)
         {
+            if (level == "warn" || level == "error")
+            { LastWarning = text; OnPropertyChanged(nameof(LastWarning)); }
             Log.Insert(0, new LogItem
             {
                 Time = (time ?? DateTime.Now).ToString("HH:mm:ss"),

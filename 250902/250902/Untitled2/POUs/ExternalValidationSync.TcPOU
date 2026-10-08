@@ -1,0 +1,73 @@
+<?xml version="1.0" encoding="utf-8"?>
+<TcPlcObject Version="1.1.0.1" ProductVersion="3.1.4024.15">
+  <POU Name="ExternalValidationSync" Id="{8e9691bf-f005-43ef-84ce-ad579ec179b9}" SpecialFunc="None">
+    <Declaration><![CDATA[FUNCTION_BLOCK ExternalValidationSync
+VAR_INPUT
+    Enable : BOOL;
+    Request : BOOL;
+    MoveDone : BOOL;
+END_VAR
+VAR_IN_OUT
+    Master : AXIS_REF;
+    Slave : AXIS_REF;
+END_VAR
+VAR_OUTPUT
+    ReadyToMove : BOOL;
+    SegmentDone : BOOL;
+    SyncState : USINT; // 0独立保持，1等待耦合，2已耦合，3等待解除，4已解除
+    Error : BOOL;
+    ErrorID : UDINT;
+    ErrorSource : USINT;
+END_VAR
+VAR
+    gear_in : MC_GearIn;
+    gear_out : MC_GearOut;
+    gear_in_exec : BOOL;
+    gear_out_exec : BOOL;
+    standstill : BOOL;
+END_VAR]]></Declaration>
+    <Implementation>
+      <ST><![CDATA[
+// 只在两轴停稳时建立或解除耦合；正常步骤不包含超时、重试或自动恢复。
+standstill := (ABS(Master.NcToPlc.ActVelo) <= 0.01)
+    AND (ABS(Slave.NcToPlc.ActVelo) <= 0.01);
+IF NOT Enable OR NOT Request THEN
+    SyncState := 0;
+    Error := FALSE;
+    ErrorID := 0;
+    ErrorSource := 0;
+ELSIF NOT Error THEN
+    CASE SyncState OF
+    0:
+        IF standstill THEN SyncState := 1; END_IF
+    1:
+        IF gear_in.InGear THEN
+            SyncState := 2;
+        ELSIF gear_in.Error OR gear_in.CommandAborted THEN
+            Error := TRUE;
+            ErrorID := gear_in.ErrorID;
+            ErrorSource := 5;
+        END_IF
+    2:
+        IF MoveDone AND standstill THEN SyncState := 3; END_IF
+    3:
+        IF gear_out.Done THEN
+            SyncState := 4;
+        ELSIF gear_out.Error THEN
+            Error := TRUE;
+            ErrorID := gear_out.ErrorID;
+            ErrorSource := 6;
+        END_IF
+    END_CASE
+END_IF
+gear_in_exec := Enable AND Request AND (SyncState = 1) AND NOT Error;
+gear_out_exec := Enable AND Request AND (SyncState = 3) AND NOT Error;
+gear_in(Master := Master, Slave := Slave, Execute := gear_in_exec,
+    RatioNumerator := 1.0, RatioDenominator := 1, BufferMode := MC_Aborting);
+gear_out(Slave := Slave, Execute := gear_out_exec);
+ReadyToMove := Enable AND Request AND (SyncState = 2) AND NOT Error;
+SegmentDone := Enable AND Request AND (SyncState = 4) AND NOT Error;
+]]></ST>
+    </Implementation>
+  </POU>
+</TcPlcObject>

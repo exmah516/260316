@@ -1026,17 +1026,130 @@ void RemoteGateway::handle_command(std::uintptr_t sock_handle, int id, const std
 		return;
 	}
 
-	if (name == "refresh_handles")
+	if (name == "arm_manual_enable")
 	{
-		double mask_num = 0;
-		if (!get_num(f, "success_mask", mask_num) || mask_num < 0 || mask_num > 3)
+		bool enable = false;
+		if (!get_bool(f, "enable", enable)) { send_ack(sock, id, "rejected", "参数缺失"); return; }
+		push_cmd(VisCommandType::SetArmManualEnable, enable ? 1 : 0);
+		send_ack(sock, id, "done");
+		return;
+	}
+	if (name == "arm_axis_enable")
+	{
+		double axis_num = 0;
+		bool enable = false;
+		if (!get_num(f, "axis", axis_num) || !get_bool(f, "enable", enable))
+		{ send_ack(sock, id, "rejected", "参数缺失"); return; }
+		const int axis = static_cast<int>(axis_num);
+		if (axis < 1 || axis > 5) { send_ack(sock, id, "rejected", "定位臂轴号必须为 1–5"); return; }
+		push_cmd(VisCommandType::SetArmAxisEnable, axis, enable ? 1 : 0);
+		send_ack(sock, id, "done");
+		return;
+	}
+	if (name == "arm_axis_reset")
+	{
+		double axis_num = 0;
+		if (!get_num(f, "axis", axis_num)) { send_ack(sock, id, "rejected", "参数缺失"); return; }
+		const int axis = static_cast<int>(axis_num);
+		if (axis < 1 || axis > 5) { send_ack(sock, id, "rejected", "定位臂轴号必须为 1–5"); return; }
+		push_cmd(VisCommandType::RequestArmAxisReset, axis);
+		send_ack(sock, id, "done");
+		return;
+	}
+	if (name == "arm_axis_jog")
+	{
+		double axis_num = 0, direction_num = 0;
+		if (!get_num(f, "axis", axis_num) || !get_num(f, "direction", direction_num))
+		{ send_ack(sock, id, "rejected", "参数缺失"); return; }
+		const int axis = static_cast<int>(axis_num);
+		const int direction = static_cast<int>(direction_num);
+		if (axis < 1 || axis > 5 || direction < -1 || direction > 1)
+		{ send_ack(sock, id, "rejected", "定位臂点动参数无效"); return; }
+		push_cmd(VisCommandType::SetArmAxisJog, axis, direction);
+		send_ack(sock, id, "done");
+		return;
+	}
+	if (name == "arm_cartesian_jog")
+	{
+		double mode_num = 0, speed_num = 0;
+		if (!get_num(f, "mode", mode_num) || !get_num(f, "speed", speed_num))
+		{ send_ack(sock, id, "rejected", "参数缺失"); return; }
+		const int mode = static_cast<int>(mode_num);
+		const int speed = static_cast<int>(speed_num);
+		if (mode < 1 || mode > 5 || speed < -100000 || speed > 100000)
+		{ send_ack(sock, id, "rejected", "定位臂末端点动参数无效"); return; }
+		push_cmd(VisCommandType::SetArmCartesianJog, mode, speed);
+		send_ack(sock, id, "done");
+		return;
+	}
+	if (name == "arm_cartesian_parameter")
+	{
+		double field_num = 0, value_num = 0;
+		if (!get_num(f, "field", field_num) || !get_num(f, "value", value_num))
+		{ send_ack(sock, id, "rejected", "参数缺失"); return; }
+		const int field = static_cast<int>(field_num);
+		if (field < 0 || field > 3 || value_num < -100000 || value_num > 100000)
+		{ send_ack(sock, id, "rejected", "定位臂参数无效"); return; }
+		push_cmd(VisCommandType::SetArmCartesianParameter, field, static_cast<int>(value_num));
+		send_ack(sock, id, "done");
+		return;
+	}
+	if (name == "arm_program_zero")
+	{
+		push_cmd(VisCommandType::ReturnArmProgramZero);
+		send_ack(sock, id, "done");
+		return;
+	}
+	if (name == "arm_stop")
+	{
+		push_cmd(VisCommandType::StopArmCartesian);
+		for (int axis = 1; axis <= 5; ++axis) push_cmd(VisCommandType::SetArmAxisJog, axis, 0);
+		send_ack(sock, id, "done");
+		return;
+	}
+	if (name == "arm_cartesian_alive")
+	{
+		push_cmd(VisCommandType::KeepArmCartesianAlive);
+		send_ack(sock, id, "done");
+		return;
+	}
+
+	if (name == "refresh_handles_begin" || name == "refresh_handles")
+	{
+		const bool begin = name == "refresh_handles_begin";
+		double mask_num = -1, seq_num = 0;
+		if (!begin && (!get_num(f, "success_mask", mask_num) || mask_num < 1 || mask_num > 3 ||
+			std::floor(mask_num) != mask_num || !get_num(f, "after_seq", seq_num) ||
+			seq_num < 0 || seq_num > 4294967295.0 || std::floor(seq_num) != seq_num))
 		{
 			send_ack(sock, id, "rejected", "手柄刷新参数无效");
 			return;
 		}
-		// 主循环会再次 poll 两只手柄；success_mask 只用于保留主端已确认的部分状态。
-		push_cmd(VisCommandType::RefreshHandles, static_cast<int>(mask_num));
-		send_ack(sock, id, "done", "手柄刷新请求已排队");
+		for (const auto& item : pending)
+			if (item.kind == PendingKind::RefreshHandles)
+			{ send_ack(sock, id, "rejected", "手柄刷新尚未完成"); return; }
+		{
+			std::lock_guard<std::mutex> lock(m_);
+			if (!begin && !refresh_active_)
+			{ send_ack(sock, id, "rejected", "请先建立刷新保持"); return; }
+			refresh_active_ = true;
+			refresh_receiving_ = !begin;
+			refresh_after_seq_ = static_cast<std::uint32_t>(seq_num);
+			refresh_sample_mask_ = 0;
+			p.refresh_ticket = ++refresh_ticket_;
+			if (!begin) remote_handle_bridge::clear_samples();
+			remote_handle_bridge::clear_outputs();
+			const int stopped[3] = {};
+			apply_holds_locked(stopped, now);
+		}
+		p.kind = PendingKind::RefreshHandles;
+		p.index = static_cast<int>(mask_num);
+		p.after_seq = static_cast<std::uint32_t>(seq_num);
+		p.flag = begin;
+		p.deadline_ms = now + 4000;
+		if (begin) push_cmd(VisCommandType::RefreshHandles, -1, p.refresh_ticket);
+		pending.push_back(p);
+		send_ack(sock, id, "accepted");
 		return;
 	}
 
@@ -1076,6 +1189,41 @@ void RemoteGateway::process_pending(std::uintptr_t sock_handle, std::vector<Pend
 
 		switch (p.kind)
 		{
+		case PendingKind::RefreshHandles:
+		{
+			// TCP 到达不代表新 UDP 采样到达；只接受指定序号之后的有效物理槽位。
+			if (!p.flag && !timed_out)
+			{
+				std::lock_guard<std::mutex> lock(m_);
+				if (lease_held_ && refresh_receiving_ &&
+					static_cast<std::int32_t>(refresh_sample_seq_ - p.after_seq) > 0 &&
+					(refresh_sample_mask_ & p.index) == p.index)
+				{
+					push_cmd(VisCommandType::RefreshHandles, p.index, p.refresh_ticket);
+					p.flag = true;
+				}
+			}
+			if (st.valid && st.extra.handle_refresh_ticket == p.refresh_ticket)
+			{
+				finished = true;
+				ok = st.lease && st.extra.handle_refresh_mask == p.index;
+				reason = ok ? (p.index < 0 ? "从端已暂停手柄输入" : "新采样基准已重建") : "从端基准重建失败，保持输入暂停";
+				if (ok && p.index == 3)
+				{
+					std::lock_guard<std::mutex> lock(m_);
+					refresh_active_ = refresh_receiving_ = false;
+				}
+			}
+			else if (timed_out)
+			{ finished = true; reason = "刷新确认超时，保持输入暂停"; }
+			if (finished && !ok)
+			{
+				std::lock_guard<std::mutex> lock(m_);
+				refresh_receiving_ = false;
+				remote_handle_bridge::clear_samples();
+			}
+			break;
+		}
 		case PendingKind::Prepare:
 			if (st.vs.self_check_done) { finished = ok = true; }
 			else if (settled && st.vs.selfcheck_status == 4) { finished = true; reason = "从端拒绝命令或 ADS 写入失败"; }
@@ -1247,13 +1395,21 @@ bool RemoteGateway::handle_udp(const unsigned char* data, int len, std::uint32_t
 	std::memcpy(&p, data + rp::kHeaderLen, sizeof(p));
 
 	int dirs[3] = { 0, 0, 0 };
-	if (!lease_held_)
+	if (lease_held_ && refresh_active_ && !refresh_receiving_)
+	{
+		// 主循环处理 begin 时才清样本，保持与清样本在同一拍生效。
+		apply_holds_locked(dirs, now);
+		return true;
+	}
+	if (!lease_held_ || (refresh_active_ && (!refresh_receiving_ ||
+		static_cast<std::int32_t>(h.seq - refresh_after_seq_) <= 0)))
 	{
 		// 未持有控制权：不接收任何手柄输入。
 		remote_handle_bridge::clear_samples();
 	}
 	else
 	{
+		int sample_mask = 0;
 		// 手柄采样：A=物理 582，B=物理 587，写入数据桥，由 Handle（远程模式）读取。
 		for (int i = 0; i < 2; ++i)
 		{
@@ -1262,15 +1418,22 @@ bool RemoteGateway::handle_udp(const unsigned char* data, int len, std::uint32_t
 			s.buttons = p.handle[i].buttons;
 			for (int k = 0; k < 2; ++k)
 			{
+				if (!std::isfinite(p.handle[i].joints[k]) || !std::isfinite(p.handle[i].vels[k])) s.valid = false;
 				s.encoders[k] = p.handle[i].encoders[k];
 				s.joints[k] = std::isfinite(p.handle[i].joints[k]) ? p.handle[i].joints[k] : 0.0f;
 				s.vels[k] = std::isfinite(p.handle[i].vels[k]) ? p.handle[i].vels[k] : 0.0f;
 			}
 			remote_handle_bridge::put_sample(i, s);
+			if (s.valid) sample_mask |= 1 << i;
 		}
-		dirs[0] = clamp_dir(p.injector_dir[0]);
-		dirs[1] = clamp_dir(p.injector_dir[1]);
-		dirs[2] = clamp_dir(p.axis4_dir);
+		refresh_sample_seq_ = h.seq;
+		refresh_sample_mask_ = sample_mask;
+		if (!refresh_active_)
+		{
+			dirs[0] = clamp_dir(p.injector_dir[0]);
+			dirs[1] = clamp_dir(p.injector_dir[1]);
+			dirs[2] = clamp_dir(p.axis4_dir);
+		}
 	}
 	apply_holds_locked(dirs, now);
 	return true;
@@ -1293,7 +1456,7 @@ void RemoteGateway::send_haptic(std::uintptr_t udp_handle)
 		for (int i = 0; i < 2; ++i)
 		{
 			// 未持有控制权时一律回 0，主端手柄不输出力。
-			const remote_handle_bridge::Output o = lease_held_
+			const remote_handle_bridge::Output o = lease_held_ && !refresh_active_
 				? remote_handle_bridge::get_output(i) : remote_handle_bridge::Output();
 			hp.handle[i].enable = o.enable ? 1 : 0;
 			hp.handle[i].axis = static_cast<std::int8_t>(o.axis < 0 ? 0 : (o.axis > 2 ? 2 : o.axis));

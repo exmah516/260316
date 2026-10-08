@@ -51,12 +51,19 @@ namespace MasterConsole.Services
         private SeqGuard _rxGuardHaptic = new SeqGuard();    // 触觉帧（与状态帧共用发送序号，各自独立判重）
         private int _nextId;
         private readonly HandleService _handles;
+        private readonly DsaCanControlSender _dsaCan;
         private long _lastHapticMs = -1;
 
         private volatile bool _connected;
         private volatile bool _hasControl;
         private long _acquiredAtMs;
         private volatile int _inj1, _inj2, _axis4;
+        private volatile StatusFlags _statusFlags;
+        private readonly object _controlSendLock = new object();
+        private int _refreshBusy, _jogNeedsRelease;
+        private volatile bool _refreshBlocked, _refreshUpload, _refreshWaitingForHold;
+        private HandleSample _refreshA, _refreshB;
+        private long _hapticAfterMs = -1;
 
         // 统计
         private readonly Stopwatch _clock = Stopwatch.StartNew();
@@ -69,10 +76,11 @@ namespace MasterConsole.Services
         private long _dropped;
 
         /// <param name="handles">本机手柄服务；传入后由本链路负责释放。为 null 时不上传手柄。</param>
-        public RemoteRobotLink(RemoteLinkSettings cfg, HandleService handles = null)
+        public RemoteRobotLink(RemoteLinkSettings cfg, HandleService handles = null, DsaCanControlSender dsaCan = null)
         {
             _cfg = cfg ?? throw new ArgumentNullException(nameof(cfg));
             _handles = handles;
+            _dsaCan = dsaCan;
         }
 
         public string Name => "远程链路 " + _cfg.Host;
@@ -145,6 +153,7 @@ namespace MasterConsole.Services
                 _lastHapticMs = -1;
                 _cts = new CancellationTokenSource();
                 _hasControl = false;
+                _statusFlags = StatusFlags.None;
                 _inj1 = _inj2 = _axis4 = 0;
                 _lastStatusMs = -1;
                 _statusCountWindow = 0;
@@ -156,8 +165,12 @@ namespace MasterConsole.Services
             }
             timeBeginPeriod(1);
 
+            try { _dsaCan?.Open(); }
+            catch (Exception ex) { Log("warn", "DSA CAN 原始链路未启动：" + ex.Message); }
+
             var token = _cts.Token;
             StartThread("控制帧发送", () => ControlLoop(token));
+            StartThread("DSA CAN 原始发送", () => DsaLoop(token));
             StartThread("状态帧接收", () => UdpReceiveLoop(token));
             StartThread("命令通道接收", () => TcpReadLoop(token));
             StartThread("链路保活", () => KeepAliveLoop(token));
@@ -188,6 +201,7 @@ namespace MasterConsole.Services
                 try { _stream?.Close(); } catch { }
                 try { _tcp?.Close(); } catch { }
                 try { _udp?.Close(); } catch { }
+                try { _dsaCan?.Dispose(); } catch { }
                 _stream = null; _tcp = null; _udp = null;
             }
             foreach (var kv in _pending)
@@ -233,20 +247,115 @@ namespace MasterConsole.Services
         public Task<CommandResult> StartControlAsync()
             => RequestAsync(id => CommandMessages.StartControl(id), 10000);
 
+        private const int HandleRefreshTotalMs = 12000;
+        private const int HandleRefreshConfirmMs = 4000; // 与从端刷新确认期限一致，设备恢复不得占用此预留预算。
+
         public async Task<CommandResult> RefreshHandlesAsync()
         {
-            int mask = _handles?.RefreshNow() ?? 0;
-            if (mask < 0) return CommandResult.Rejected("刷新已在进行中");
-            var result = await RequestAsync(id => CommandMessages.RefreshHandles(id, mask), 5000);
-            if (!result.Ok) return result;
-            return CommandResult.DoneWithReason(HandleRefreshMessage(mask));
+            if (_handles == null || !_connected || !_hasControl) return CommandResult.Rejected("需要连接、控制权及本机手柄服务");
+            if (Interlocked.CompareExchange(ref _refreshBusy, 1, 0) != 0) return CommandResult.Rejected("刷新已在进行中");
+            long deadline = _clock.ElapsedMilliseconds + HandleRefreshTotalMs;
+            int Remaining() => (int)Math.Max(0, deadline - _clock.ElapsedMilliseconds);
+            try
+            {
+                if (_handles.RefreshInProgress) return CommandResult.Rejected("上次 SDK 操作仍未结束，输入保持暂停");
+                lock (_controlSendLock)
+                {
+                    _refreshBlocked = true;
+                    _refreshWaitingForHold = true;
+                    _refreshUpload = false;
+                    _refreshA = _refreshB = default;
+                    _jogNeedsRelease |= (_inj1 != 0 ? 1 : 0) | (_inj2 != 0 ? 2 : 0) | (_axis4 != 0 ? 4 : 0);
+                    _inj1 = _inj2 = _axis4 = 0;
+                    _handles.PauseInput();
+                }
+                var held = await RequestAsync(CommandMessages.BeginRefreshHandles, Math.Min(HandleRefreshConfirmMs, Remaining()), deadline);
+                _refreshWaitingForHold = false;
+                if (!held.Ok) return CommandResult.Rejected("从端保持确认失败：" + held.Reason + "；输入保持暂停");
+                // SDK 调用仍由采样线程串行执行；等待移到线程池，UI 不阻塞。
+                int mask = await Task.Run(() => _handles.RefreshNow(Remaining() - HandleRefreshConfirmMs));
+                if (mask == -2) return CommandResult.Rejected("设备恢复预算已到期；输入保持暂停。" + (_handles.RefreshInProgress ? "原生操作仍未结束，暂不能再次刷新。" : "") + _handles.RefreshDetails);
+                if (mask < 0) return CommandResult.Rejected("SDK 刷新仍在进行中");
+                if (mask == 0) return CommandResult.Rejected("582、587 均未恢复；输入保持暂停。" + _handles.RefreshDetails);
+                uint afterSeq;
+                lock (_controlSendLock)
+                {
+                    // 同一批新采样重复上传至基准确认，防止确认途中移动手柄造成控制增量。
+                    _refreshA = _handles.GetSample(0, true);
+                    _refreshB = _handles.GetSample(1, true);
+                    int sampledMask = (_refreshA.Valid ? 1 : 0) | (_refreshB.Valid ? 2 : 0);
+                    if ((sampledMask & mask) != mask) return CommandResult.Rejected("重新初始化后的采样已失效，输入保持暂停");
+                    afterSeq = _txSeq;
+                    _refreshUpload = true;
+                }
+                if (Remaining() <= 0) return CommandResult.Rejected("从端确认前总预算已到期；输入保持暂停。" + _handles.RefreshDetails);
+                var result = await RequestAsync(id => CommandMessages.RefreshHandles(id, mask, afterSeq), Remaining(), deadline);
+                if (!result.Ok) return CommandResult.Rejected("从端新采样/基准确认失败：" + result.Reason + "；输入保持暂停。" + _handles.RefreshDetails);
+                if (Remaining() <= 0) return CommandResult.Rejected("从端确认到达时总预算已到期；输入保持暂停。" + _handles.RefreshDetails);
+                if (mask == 3)
+                {
+                    lock (_controlSendLock)
+                    {
+                        if (!_hasControl || !_handles.GetSample(0, true).Valid || !_handles.GetSample(1, true).Valid)
+                            return CommandResult.Rejected("确认期间设备或控制权失效，输入保持暂停");
+                        Interlocked.Exchange(ref _hapticAfterMs, _clock.ElapsedMilliseconds);
+                        _handles.ResumeInput();
+                        _refreshBlocked = false;
+                    }
+                }
+                return CommandResult.DoneWithReason(HandleRefreshMessage(mask) + _handles.RefreshDetails);
+            }
+            finally
+            {
+                lock (_controlSendLock)
+                {
+                    _refreshUpload = false;
+                    _refreshWaitingForHold = false;
+                    _refreshA = _refreshB = default;
+                }
+                Volatile.Write(ref _refreshBusy, 0);
+            }
+        }
+
+
+        public Task<CommandResult> SetArmManualEnableAsync(bool enabled)
+            => RequestAsync(id => CommandMessages.ArmManualEnable(id, enabled), 5000);
+
+        public Task<CommandResult> SetArmAxisEnableAsync(int axis, bool enabled)
+            => RequestAsync(id => CommandMessages.ArmAxisEnable(id, axis, enabled), 5000);
+
+        public Task<CommandResult> ResetArmAxisAsync(int axis)
+            => RequestAsync(id => CommandMessages.ArmAxisReset(id, axis), 5000);
+
+        public Task<CommandResult> SetArmCartesianJogAsync(int mode, int speedMilli)
+            => RequestAsync(id => CommandMessages.ArmCartesianJog(id, mode, speedMilli), 5000);
+
+        public Task<CommandResult> StopArmAsync()
+            => RequestAsync(id => CommandMessages.ArmStop(id), 5000);
+
+        public Task<CommandResult> ReturnArmProgramZeroAsync()
+            => RequestAsync(id => CommandMessages.ArmProgramZero(id), 5000);
+
+        public Task<CommandResult> SetArmCartesianParameterAsync(int field, int valueMilli)
+            => RequestAsync(id => CommandMessages.ArmCartesianParameter(id, field, valueMilli), 5000);
+
+        public void SetArmAxisJog(int axis, int direction)
+        {
+            if (!_connected || !_hasControl) direction = 0;
+            if (axis < 1 || axis > 5 || direction < -1 || direction > 1) return;
+            _ = RequestAsync(id => CommandMessages.ArmAxisJog(id, axis, direction), 2000);
+        }
+
+        public void KeepArmCartesianAlive()
+        {
+            if (!_connected || !_hasControl) return;
+            _ = RequestAsync(id => CommandMessages.ArmCartesianAlive(id), 2000);
         }
 
         private static string HandleRefreshMessage(int mask)
-            => mask == 3 ? "两只手柄已重读并建立新中立基准。"
-             : mask == 1 ? "仅手柄 582 重读成功；587 保留原状态和基准。"
-             : mask == 2 ? "仅手柄 587 重读成功；582 保留原状态和基准。"
-             : "本次未读到有效手柄；原状态和基准已保留。";
+            => mask == 3 ? "582、587 重新初始化成功；从端已确认新采样基准，输入恢复。"
+             : mask == 1 ? "部分成功：582 已初始化并重建基准；587 离线，双手柄控制保持暂停。"
+             : "部分成功：587 已初始化并重建基准；582 离线，双手柄控制保持暂停。";
 
         public Task<CommandResult> SetForceFeedbackAsync(bool enable)
             => RequestAsync(id => CommandMessages.ForceFeedback(id, enable), 15000);
@@ -259,16 +368,27 @@ namespace MasterConsole.Services
 
         public void SetInjector(int index, int direction)
         {
-            if (!_connected || !_hasControl) direction = 0;
-            direction = Math.Max(-1, Math.Min(1, direction));
-            if (index == 1) _inj1 = direction;
-            else if (index == 2) _inj2 = direction;
+            lock (_controlSendLock)
+            {
+                int bit = index == 1 ? 1 : 2;
+                if (direction == 0) _jogNeedsRelease &= ~bit;
+                else if (_refreshBlocked) _jogNeedsRelease |= bit;
+                if (!_connected || !_hasControl || _refreshBlocked || (_jogNeedsRelease & bit) != 0) direction = 0;
+                direction = Math.Max(-1, Math.Min(1, direction));
+                if (index == 1) _inj1 = direction;
+                else if (index == 2) _inj2 = direction;
+            }
         }
 
         public void SetAxis4(int direction)
         {
-            if (!_connected || !_hasControl) direction = 0;
-            _axis4 = Math.Max(-1, Math.Min(1, direction));
+            lock (_controlSendLock)
+            {
+                if (direction == 0) _jogNeedsRelease &= ~4;
+                else if (_refreshBlocked) _jogNeedsRelease |= 4;
+                if (!_connected || !_hasControl || _refreshBlocked || (_jogNeedsRelease & 4) != 0) direction = 0;
+                _axis4 = Math.Max(-1, Math.Min(1, direction));
+            }
         }
 
         public LinkStats GetStats()
@@ -294,25 +414,31 @@ namespace MasterConsole.Services
                     Handle582Online = _handles != null && _handles.IsOnline(0),
                     Handle587Online = _handles != null && _handles.IsOnline(1),
                     HandleSdkMissing = _handles != null && _handles.SdkMissing,
+                    // 从端当前 swap_handle_roles=true：导管/轴1使用物理 587（ControlFrame.HandleB）。
+                    CatheterReversePressed = _handles != null && ((_handles.GetSample(1).Buttons & 0x40) != 0),
                 };
             }
         }
 
-        private async Task<CommandResult> RequestAsync(Func<int, string> build, int timeoutMs)
+        private async Task<CommandResult> RequestAsync(Func<int, string> build, int timeoutMs, long deadlineMs = 0)
         {
             if (!_connected) return CommandResult.Rejected("未连接");
+            if (deadlineMs > 0) deadlineMs = Math.Min(deadlineMs, _clock.ElapsedMilliseconds + timeoutMs);
             int id = Interlocked.Increment(ref _nextId);
             var tcs = new TaskCompletionSource<CommandResult>(TaskCreationOptions.RunContinuationsAsynchronously);
             _pending[id] = tcs;
             try
             {
-                WriteFrame(build(id));
+                // 仅刷新使用总预算；同步发送也移离 UI，锁等待和写入共用剩余时间。
+                if (deadlineMs > 0) await Task.Run(() => WriteFrame(build(id), deadlineMs));
+                else WriteFrame(build(id));
             }
             catch (Exception ex)
             {
                 _pending.TryRemove(id, out _);
                 return CommandResult.Rejected("发送失败：" + ex.Message);
             }
+            if (deadlineMs > 0) timeoutMs = (int)Math.Max(0, deadlineMs - _clock.ElapsedMilliseconds);
             var finished = await Task.WhenAny(tcs.Task, Task.Delay(timeoutMs));
             if (finished != tcs.Task)
             {
@@ -344,14 +470,23 @@ namespace MasterConsole.Services
                 }
                 next = now + ControlPeriodMs;
 
+                lock (_controlSendLock)
+                {
+                // 先等主循环进入保持，避免无效采样抢在 TCP 保持命令前改变电缸状态。
+                if (_refreshWaitingForHold) continue;
                 var frame = new ControlFrame
                 {
-                    HandleA = _handles != null ? _handles.GetSample(0) : default,
-                    HandleB = _handles != null ? _handles.GetSample(1) : default,
+                    HandleA = _refreshUpload ? _refreshA : (_handles != null ? _handles.GetSample(0) : default),
+                    HandleB = _refreshUpload ? _refreshB : (_handles != null ? _handles.GetSample(1) : default),
                     Injector1Dir = (sbyte)_inj1,
                     Injector2Dir = (sbyte)_inj2,
                     Axis4Dir = (sbyte)_axis4,
                 };
+                if (_refreshUpload)
+                {
+                    frame.HandleA.Valid &= _handles.GetSample(0, true).Valid;
+                    frame.HandleB.Valid &= _handles.GetSample(1, true).Valid;
+                }
                 var header = new FrameHeader
                 {
                     Session = _session,
@@ -366,7 +501,34 @@ namespace MasterConsole.Services
                 catch (SocketException) { /* 对端暂不可达：下一拍继续 */ }
                 catch (ObjectDisposedException) { break; }
                 catch (NullReferenceException) { break; }
+                }
             }
+        }
+
+        private void DsaLoop(CancellationToken token)
+        {
+            while (!token.IsCancellationRequested)
+            {
+                if (DsaControlReady())
+                {
+                    try { _dsaCan?.PollAndSend(); }
+                    catch (Exception ex) { Log("warn", "DSA CAN 原始采样失败：" + ex.Message); break; }
+                }
+                if (token.WaitHandle.WaitOne(20)) break;
+            }
+        }
+
+        private bool DsaControlReady()
+        {
+            lock (_statsLock)
+            {
+                if (_lastStatusMs < 0 || _clock.ElapsedMilliseconds - _lastStatusMs >= ProtocolConstants.StatusTimeoutMs)
+                    return false;
+            }
+            StatusFlags flags = _statusFlags;
+            return _connected && _hasControl && !_refreshBlocked &&
+                   (flags & StatusFlags.ControlActive) != 0 &&
+                   (flags & (StatusFlags.EstopHold | StatusFlags.HostCommTimeout)) == 0;
         }
 
         private void UdpReceiveLoop(CancellationToken token)
@@ -397,6 +559,8 @@ namespace MasterConsole.Services
                     }
                     if (!_rxGuardHaptic.Accept(hh.Seq)) continue;
                     lock (_statsLock) { _lastHapticMs = _clock.ElapsedMilliseconds; }
+                    long afterMs = Interlocked.Read(ref _hapticAfterMs);
+                    if (_refreshBlocked || (afterMs >= 0 && unchecked((int)(hap.EchoTsMs - (uint)afterMs)) <= 0)) continue;
                     _handles?.SetHaptic(0, hap.HandleA);
                     _handles?.SetHaptic(1, hap.HandleB);
                     continue;
@@ -421,6 +585,7 @@ namespace MasterConsole.Services
                             _rttMs = double.IsNaN(_rttMs) ? rtt : _rttMs * 0.8 + rtt * 0.2;
                     }
                 }
+                _statusFlags = st.Flags;
 
                 // 控制权以从端为准：从端因超时等原因收回时，主端同步更新。
                 bool lease = st.Has(StatusFlags.LeaseHeld);
@@ -462,7 +627,7 @@ namespace MasterConsole.Services
                     string state = GetString(m, "state");
                     if (state == "accepted") return; // 已接收，等最终回执
                     if (_pending.TryRemove(id, out var tcs))
-                        tcs.TrySetResult(state == "done" ? CommandResult.Done() : CommandResult.Rejected(GetString(m, "reason") ?? "被从端拒绝"));
+                        tcs.TrySetResult(state == "done" ? CommandResult.DoneWithReason(GetString(m, "reason")) : CommandResult.Rejected(GetString(m, "reason") ?? "被从端拒绝"));
                     break;
                 }
                 case "event":
@@ -493,14 +658,26 @@ namespace MasterConsole.Services
 
         // ================================================================ 帧读写
 
-        private void WriteFrame(string json)
+        private void WriteFrame(string json, long deadlineMs = 0)
         {
             var stream = _stream ?? throw new IOException("命令通道未连接");
             byte[] body = Encoding.UTF8.GetBytes(json);
             byte[] frame = new byte[4 + body.Length];
             BitConverter.GetBytes((uint)body.Length).CopyTo(frame, 0); // 小端
             Buffer.BlockCopy(body, 0, frame, 4, body.Length);
-            lock (_writeLock) stream.Write(frame, 0, frame.Length);
+            if (deadlineMs == 0) { lock (_writeLock) stream.Write(frame, 0, frame.Length); return; }
+            if (!Monitor.TryEnter(_writeLock, (int)Math.Max(0, deadlineMs - _clock.ElapsedMilliseconds)))
+                throw new TimeoutException("刷新命令发送锁等待超时");
+            try
+            {
+                int remaining = (int)Math.Max(0, deadlineMs - _clock.ElapsedMilliseconds);
+                if (remaining == 0) throw new TimeoutException("刷新命令发送预算已到期");
+                int previousTimeout = stream.WriteTimeout;
+                try { stream.WriteTimeout = remaining; stream.Write(frame, 0, frame.Length); }
+                catch { stream.Close(); throw; } // 写入可能只有半帧，关闭通道，避免后续命令拼接成错误帧。
+                finally { if (stream.CanWrite) stream.WriteTimeout = previousTimeout; }
+            }
+            finally { Monitor.Exit(_writeLock); }
         }
 
         private static async Task WriteFrameAsync(NetworkStream stream, string json)

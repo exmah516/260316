@@ -9,6 +9,7 @@
 #include "motion_sync.h"
 #include "plc_io.h"
 #include "remote_gateway.h"
+#include "手柄/remote_handle_bridge.h"
 #include "startup_sequence.h"
 #include "tcp_force_daq.h"
 #include "vis_server.h"
@@ -883,6 +884,10 @@ int main(int argc, char* argv[])
 	bool handle6_reconnect_pending_poll = false;
 	bool handle_soft_hold_active = true;
 	bool connection_hold_active_prev = true;
+	bool handle_refresh_hold = false;
+	bool refresh_cylinder5_press = false;
+	int remote_handle_refresh_ticket = 0;
+	int remote_handle_refresh_mask = -1;
 
 	enum class CylinderManualMode : unsigned char
 	{
@@ -1123,7 +1128,7 @@ int main(int argc, char* argv[])
 		const ULONGLONG loop_now_ms = GetTickCount64();
 
 		// 启动阶段未锁定模式时持续重试
-		if (!handle_startup_locked)
+		if (!handle_startup_locked && !handle_refresh_hold)
 		{
 			if (loop_now_ms >= handle1_next_retry_ms)
 			{
@@ -1279,7 +1284,7 @@ int main(int argc, char* argv[])
 				std::cout << "ADS 快照中断：保持最后参考并丢弃故障期间手柄增量。" << std::endl;
 			}
 		}
-		else if ((ads_soft_hold_active || (connection_hold_active_prev && initial_sync_done)) &&
+		else if (!handle_refresh_hold && (ads_soft_hold_active || (connection_hold_active_prev && initial_sync_done)) &&
 			!planned_return.active())
 		{
 			if (!handle_soft_hold_active)
@@ -1315,14 +1320,14 @@ int main(int argc, char* argv[])
 			}
 		}
 
-		const bool connection_hold_active = !initial_sync_done || ads_soft_hold_active || handle_soft_hold_active;
+		const bool connection_hold_active = !initial_sync_done || ads_soft_hold_active || handle_soft_hold_active || handle_refresh_hold;
 		const bool connection_hold_enter_edge = connection_hold_active && !connection_hold_active_prev;
 		const bool connection_hold_exit_edge = !connection_hold_active && connection_hold_active_prev;
 		connection_hold_active_prev = connection_hold_active;
 
 		if (connection_hold_enter_edge)
 		{
-			clear_cylinder_manual_overrides();
+			if (!handle_refresh_hold) clear_cylinder_manual_overrides();
 			if (planned_return.active())
 			{
 				(void)cancel_active_return_motion(true);
@@ -1344,7 +1349,7 @@ int main(int argc, char* argv[])
 				<< plc_act_pos[1] << "，axis7=" << plc_act_pos[6] << "（相对角度）" << std::endl;
 		}
 
-		if (!initial_sync_done)
+		if (!initial_sync_done && !handle_refresh_hold)
 		{
 			if (ads_motion_cycle_valid && !handle_soft_hold_active && handle_startup_locked)
 			{
@@ -1643,7 +1648,7 @@ int main(int argc, char* argv[])
 			axis4_ui_reverse_pressed = false;
 			axis4_ui_jog_deadline_ms = 0;
 		}
-		const bool axis4_jog_allowed = ads_motion_cycle_valid && !estop_hold_active && !startup_sequence_active &&
+		const bool axis4_jog_allowed = !handle_refresh_hold && ads_motion_cycle_valid && !estop_hold_active && !startup_sequence_active &&
 			!emergency_retract_active &&
 			!spacing_recovery.active() && !spacing_recovery.requested;
 		// 轴4只保留UI点动，物理手柄按键不再映射到轴4。
@@ -3158,11 +3163,17 @@ int main(int argc, char* argv[])
 						const bool axis6_at_trigger_edge = axis6_reverse_mode
 							? axis6_abs >= (axis6_trigger_edge_abs - cfg.crawl_arrive_tol_mm)
 							: axis6_abs <= (axis6_trigger_edge_abs + cfg.crawl_arrive_tol_mm);
+						// 轴4后退的命令目标先到达窗口右边缘时，实际反馈可能仍有一拍滞后；
+						// 以同一窗口边界触发计划回退，避免后退停在边缘而不进入快速换端。
+						const bool axis6_command_at_trigger_edge = axis4_reverse_request &&
+							(axis6_reverse_mode
+								? axis6_cmd_abs >= (axis6_trigger_edge_abs - cfg.crawl_arrive_tol_mm)
+								: axis6_cmd_abs <= (axis6_trigger_edge_abs + cfg.crawl_arrive_tol_mm));
 						// 到达触发边后仍可由后续同向输入触发换手，不要求到位与输入发生在同一拍。
 						axis6_ready_to_trigger =
 							axis6_increment_active &&
 							axis6_toward_trigger &&
-							axis6_at_trigger_edge;
+							(axis6_at_trigger_edge || axis6_command_at_trigger_edge);
 						if (axis6_ready_to_trigger)
 						{
 							axis6_reverse_switch_guard_active = false;
@@ -3688,6 +3699,9 @@ int main(int argc, char* argv[])
 				// 递送：近患者端(from-left 小)触发，远端为限位；撤出相反。限位端内缩 inset，
 				// 同时就是换手后的重定位位置。窗口内部两个方向都可自由推拉（不做棘轮）。
 				const bool reverse = axis1_reverse_pressed || guidewire_b6_pressed;
+				// 轴4只接管导丝链方向；导管链仍遵循原手柄方向。
+				const bool axis6_reverse = guidewire_mode == GuidewireMode::None &&
+					(axis4_forward_request || axis4_reverse_request) ? axis4_reverse_request : reverse;
 				// 限位端相对窗口端点向外扩 inset（递送：远端限位外扩；撤出：近端限位外扩）。
 				const double lo1 = reverse ? (w1_left - inset) : w1_left;
 				const double hi1 = reverse ? w1_right : (w1_right + inset);
@@ -3731,7 +3745,7 @@ int main(int argc, char* argv[])
 				const double a5_left_cmd = cmd5_start - plc_leftlimit[4];
 				// g 的下端 gmin=0 为机构接触位置，不外扩；只有递送时的上限位外扩 inset。
 				const double g_wire_lo = gmin;
-				const double g_wire_hi = reverse ? gmax : (gmax + inset);
+				const double g_wire_hi = axis6_reverse ? gmax : (gmax + inset);
 				const double abs6_lo = plc_leftlimit[5] + a5_left_cmd + g_wire_lo;
 				const double abs6_soft = plc_leftlimit[5] + cfg.axis6_soft_limit_from_left_mm;
 				const double abs6_hi = (std::max)(abs6_lo,
@@ -3785,9 +3799,9 @@ int main(int argc, char* argv[])
 				const bool g_toward_hi = inc6 > 0.0 || inc1 < 0.0;
 				const bool g_toward_lo = inc6 < 0.0 || inc1 > 0.0;
 				const bool hit_g_hi = (g_now >= g_wire_hi - tol) &&
-					((reverse && inc6 > 0.0) || inc1 < 0.0);
+					((axis6_reverse && inc6 > 0.0) || inc1 < 0.0);
 				const bool hit_g_lo = !hit_g_hi && (g_now <= gmin + tol) &&
-					((!reverse && inc6 < 0.0) || inc1 > 0.0);
+					((!axis6_reverse && inc6 < 0.0) || inc1 > 0.0);
 				const bool trig_1_left = axis1_window_ok && !reverse &&
 					(cmd1 <= w1_left + tol) && inc1 < 0.0;
 				const bool trig_1_right = axis1_window_ok && reverse &&
@@ -3804,8 +3818,8 @@ int main(int argc, char* argv[])
 				}
 				else if (!(hit_g_hi || hit_g_lo) && (trig_1_left || trig_1_right))
 				{
-					if (reverse && g_now >= g_wire_hi - merge_eps && !g_toward_lo) do_g_hi = true;
-					else if (!reverse && g_now <= gmin + merge_eps && !g_toward_hi) do_g_lo = true;
+					if (axis6_reverse && g_now >= g_wire_hi - merge_eps && !g_toward_lo) do_g_hi = true;
+					else if (!axis6_reverse && g_now <= gmin + merge_eps && !g_toward_hi) do_g_lo = true;
 				}
 
 				const bool want_axis1_leg = do_1_left || do_1_right;
@@ -3818,9 +3832,9 @@ int main(int argc, char* argv[])
 					const double axis5_left_now = axis5_abs - plc_leftlimit[4];
 					// 导丝自身触发 → 重定位到限位端（递送：gmax+inset；撤出：gmin）。
 					// 导管推动 g 触边 → 重定位到窗口中点，避免换手后立刻再次触边。
-					const bool wire_caused_g = reverse ? do_g_hi : do_g_lo;
+					const bool wire_caused_g = axis6_reverse ? do_g_hi : do_g_lo;
 					const double g_target = wire_caused_g
-						? (reverse ? gmin : (gmax + inset))
+						? (axis6_reverse ? gmin : (gmax + inset))
 						: (0.5 * (gmin + gmax));
 					double axis6_target_abs = plc_leftlimit[5] + axis5_left_now + g_target;
 					axis6_target_abs = (std::min)(axis6_target_abs, abs6_soft); // 越限只夹取，不停机
@@ -4278,14 +4292,15 @@ int main(int argc, char* argv[])
 
 		// 10) 构建本拍离散输出；与 refer 一起交给 100 Hz 通信线程。
 		bool cylinder5_req = emergency_retract_active || y_valve_open;
-		const bool cylinder_manual_allowed = ads_motion_cycle_valid && !connection_hold_active &&
+		const bool cylinder_manual_safe = ads_motion_cycle_valid &&
 			control_active && !estop_hold_active && !return_ads_fault_hold &&
 			!motion_startup_active && !emergency_retract_active &&
 			!spacing_recovery.active() && !spacing_recovery.requested &&
 			!axis6_soft_limit_hold && !planned_return.active();
-		if (!cylinder_manual_allowed)
+		const bool cylinder_manual_allowed = cylinder_manual_safe && !connection_hold_active;
+		if (!cylinder_manual_safe || (connection_hold_active && !handle_refresh_hold))
 		{
-			// 被安全条件或自动流程接管后不保留待执行的手动目标。
+			// 安全/自动接管仍清理覆盖；仅刷新保持保留已有夹爪位置，避免刷新后自动夹松。
 			clear_cylinder_manual_overrides();
 		}
 		const bool cylinder_output_enabled = !connection_hold_active &&
@@ -4539,7 +4554,8 @@ int main(int argc, char* argv[])
 		ads_output.cylinder[2] = cylinder3_cmd;
 		ads_output.cylinder[3] = cylinder4_cmd;
 		ads_output.cylinder_valid = cylinder_output_enabled;
-		ads_output.cylinder5_press_req = cylinder_output_enabled && cylinder5_req;
+		ads_output.cylinder5_press_req = handle_refresh_hold && !estop_hold_active && ads_motion_cycle_valid && !return_ads_fault_hold
+			? refresh_cylinder5_press : (cylinder_output_enabled && cylinder5_req);
 		const bool axis4_paused_by_axis6 =
 			planned_return.active() || axis6_soft_limit_hold;
 		ads_output.axis4_forward_req =
@@ -4813,6 +4829,8 @@ int main(int argc, char* argv[])
 				remote_extra.handle_soft_hold = handle_soft_hold_active;
 				remote_extra.ads_soft_hold = ads_soft_hold_active;
 				remote_extra.connection_hold = connection_hold_active;
+				remote_extra.handle_refresh_ticket = remote_handle_refresh_ticket;
+				remote_extra.handle_refresh_mask = remote_handle_refresh_mask;
 				remote_gateway.publish_state(vs, remote_extra);
 			}
 		}
@@ -4928,55 +4946,64 @@ int main(int argc, char* argv[])
 				}
 				case VisCommandType::RefreshHandles:
 				{
-					// 刷新只重建成功读取到的手柄基准；不改 PLC 目标，也不清除另一只手柄的缓存。
-					const int refresh_mask = vcmd.param1 & 0x03;
-					if (!handle_axis1.is_open()) (void)handle_axis1.init();
-					if (!handle_axis6.is_open()) (void)handle_axis6.init();
-					const bool refreshed_axis1 = (refresh_mask & 0x01) != 0 &&
-						handle_axis1.is_open() && handle_axis1.poll();
-					const bool refreshed_axis6 = (refresh_mask & 0x02) != 0 &&
-						handle_axis6.is_open() && handle_axis6.poll();
-					auto reset_axis1_baseline = [&]()
+					if (!remote_handles_active) break;
+					remote_handle_refresh_ticket = vcmd.param2;
+					remote_handle_refresh_mask = 0;
+					if (vcmd.param1 == -1)
 					{
-						axis1_handle_filter.reset(handle_axis1.fJoints2[0], handle_axis1.fJoints2[1]);
-						axis1_crawl.handle_ref = axis1_handle_filter.axis0_filtered;
-						axis1_crawl.rot_ref = axis1_handle_filter.axis1_filtered;
-						axis1_prev_linear_filtered = axis1_handle_filter.axis0_filtered;
-						axis1_prev_rot_filtered = axis1_handle_filter.axis1_filtered;
-					};
-					auto reset_axis6_baseline = [&]()
-					{
-						axis6_handle_filter.reset(handle_axis6.fJoints2[0], handle_axis6.fJoints2[1]);
-						axis6_crawl.handle_ref = axis6_handle_filter.axis0_filtered;
-						axis6_crawl.rot_ref = axis6_handle_filter.axis1_filtered;
-						axis6_prev_linear_filtered = axis6_handle_filter.axis0_filtered;
-						axis6_prev_rot_filtered = axis6_handle_filter.axis1_filtered;
-					};
+						if (!handle_refresh_hold) refresh_cylinder5_press = ads_output.cylinder5_press_req;
+						handle_refresh_hold = true;
+						remote_handle_bridge::clear_samples();
+						axis4_ui_forward_pressed = axis4_ui_reverse_pressed = false;
+						axis4_ui_jog_deadline_ms = 0;
+						axis4_axis6_coupling_active_prev = false;
+						axis4_axis6_coupling_last_ms = 0;
+						for (int i = 0; i < 2; ++i)
+						{ injector_ui_direction[i] = 0; injector_ui_jog_deadline_ms[i] = 0; }
+						clear_force_output();
+						if (planned_return.active()) (void)cancel_active_return_motion(true);
+						remote_handle_refresh_mask = -1;
+						break;
+					}
+					// 网关已验证新的 UDP 序号；保持期间只按当前真实位置重建，不发送运动/夹爪命令。
+					if (!handle_refresh_hold || !ads_motion_cycle_valid || planned_return.active() ||
+						return_ads_fault_hold || startup_sequence_active || emergency_retract_active) break;
+					const int mask = vcmd.param1 & 3;
+					const int bit1 = 1 << remote_handle_bridge::slot_of(handle_axis1.serial());
+					const int bit6 = 1 << remote_handle_bridge::slot_of(handle_axis6.serial());
+					if ((mask & bit1) && !handle_axis1.is_open()) (void)handle_axis1.init();
+					if ((mask & bit6) && !handle_axis6.is_open()) (void)handle_axis6.init();
+					const bool fresh1 = (mask & bit1) && handle_axis1.is_open() && handle_axis1.poll();
+					const bool fresh6 = (mask & bit6) && handle_axis6.is_open() && handle_axis6.poll();
+					if ((fresh1 ? bit1 : 0) + (fresh6 ? bit6 : 0) != mask) break;
+					if (fresh1) axis1_handle_filter.reset(handle_axis1.fJoints2[0], handle_axis1.fJoints2[1]);
+					if (fresh6) axis6_handle_filter.reset(handle_axis6.fJoints2[0], handle_axis6.fJoints2[1]);
 					if (single_handle_mode)
 					{
-						if (refreshed_axis1 || refreshed_axis6)
-						{
-							Handle* active = refreshed_axis1 ? &handle_axis1 : &handle_axis6;
-							axis1_handle_filter.reset(active->fJoints2[0], active->fJoints2[1]);
-							axis6_handle_filter.reset(active->fJoints2[0], active->fJoints2[1]);
-							axis1_crawl.handle_ref = axis1_handle_filter.axis0_filtered;
-							axis1_crawl.rot_ref = axis1_handle_filter.axis1_filtered;
-							axis6_crawl.handle_ref = axis6_handle_filter.axis0_filtered;
-							axis6_crawl.rot_ref = axis6_handle_filter.axis1_filtered;
-							axis1_prev_linear_filtered = axis1_handle_filter.axis0_filtered;
-							axis6_prev_linear_filtered = axis6_handle_filter.axis0_filtered;
-							axis1_prev_rot_filtered = axis1_handle_filter.axis1_filtered;
-							axis6_prev_rot_filtered = axis6_handle_filter.axis1_filtered;
-						}
+						if (!axis1_input_handle->poll() || !axis6_input_handle->poll()) break;
+						axis1_handle_filter.reset(axis1_input_handle->fJoints2[0], axis1_input_handle->fJoints2[1]);
+						axis6_handle_filter.reset(axis6_input_handle->fJoints2[0], axis6_input_handle->fJoints2[1]);
+					}
+					bool rebuilt = true;
+					if (mask == 3 && !single_handle_mode)
+					{
+						rebuilt = motion_sync::rebase_dual_after_return(ctx);
+						if (rebuilt && guidewire_mode == GuidewireMode::Independent)
+							rebuilt = motion_sync::rebase_axis6_after_return(ctx);
 					}
 					else
 					{
-						if (refreshed_axis1) reset_axis1_baseline();
-						if (refreshed_axis6) reset_axis6_baseline();
+						if (fresh1 || single_handle_mode) rebuilt = motion_sync::rebase_axis1_after_return(ctx);
+						if (fresh6 || single_handle_mode) rebuilt = motion_sync::rebase_axis6_after_return(ctx) && rebuilt;
 					}
-					std::cout << "手柄刷新：582=" << (refreshed_axis1 ? "成功" : "保留原状态")
-						<< "，587=" << (refreshed_axis6 ? "成功" : "保留原状态")
-						<< "；不会直接产生运动。" << std::endl;
+					if (!rebuilt) break;
+					catheter_mode_button_pressed_prev = (axis1_input_handle->buttons2 & cfg.btn_b7) != 0;
+					guidewire_mode_button_pressed_prev = (axis6_input_handle->buttons2 & cfg.btn_b7) != 0;
+					axis1_fast_return = axis6_fast_retract = false;
+					remote_handle_refresh_mask = mask;
+					// 部分恢复继续保持双手柄保护，不改变 single_handle_mode，不解除急停或故障。
+					handle_refresh_hold = mask != 3;
+					std::cout << "手柄设备重启后的新采样基准已重建，物理槽位掩码=" << mask << std::endl;
 					break;
 				}
 				case VisCommandType::RequestModeSwitch:
@@ -5187,6 +5214,7 @@ int main(int argc, char* argv[])
 					break;
 				}
 				case VisCommandType::SetAxis4ManualJog:
+					if (handle_refresh_hold && vcmd.param1 != 0) break;
 					if (vcmd.param1 >= -1 && vcmd.param1 <= 1)
 					{
 						axis4_ui_forward_pressed = vcmd.param1 > 0;
@@ -5201,6 +5229,7 @@ int main(int argc, char* argv[])
 					std::cout << "UI：Y阀：" << (y_valve_open ? "打开。" : "关闭。") << std::endl;
 					break;
 				case VisCommandType::SetInjectorManualJog:
+					if (handle_refresh_hold && vcmd.param2 != 0) break;
 					if (vcmd.param1 >= 1 && vcmd.param1 <= 2 &&
 						vcmd.param2 >= -1 && vcmd.param2 <= 1)
 					{
