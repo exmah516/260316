@@ -95,9 +95,8 @@ namespace MasterConsole.Protocol
         public static string StartControl(int id)
             => Cmd(id, "start_control");
 
-        public static string BeginRefreshHandles(int id) => Cmd(id, "refresh_handles_begin");
-        public static string RefreshHandles(int id, int successMask, uint afterSeq)
-            => Cmd(id, "refresh_handles", ("success_mask", successMask), ("after_seq", afterSeq));
+        public static string RefreshHandles(int id, int successMask)
+            => Cmd(id, "refresh_handles", ("success_mask", successMask));
 
         public static string ArmManualEnable(int id, bool enable)
             => Cmd(id, "arm_manual_enable", ("enable", enable));

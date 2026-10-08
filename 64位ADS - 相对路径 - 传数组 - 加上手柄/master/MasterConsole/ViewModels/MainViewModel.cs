@@ -255,7 +255,7 @@ namespace MasterConsole.ViewModels
         {
             if (!CanRefreshHandles) return;
             _refreshingHandles = true;
-            _handleRefreshText = "正在整体重启两只手柄，输入暂停；等待从端基准确认…";
+            _handleRefreshText = "正在刷新…";
             OnPropertyChanged(nameof(CanRefreshHandles));
             OnPropertyChanged(nameof(HandleRefreshText));
             try

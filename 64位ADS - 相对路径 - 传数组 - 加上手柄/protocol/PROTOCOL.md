@@ -146,9 +146,7 @@ M→S {"t":"release","id":2}
 | name | 参数 | 从端对应既有动作 |
 |---|---|---|
 | `prepare_position` | `catheter_mm`（5–95），`wire_mm`（10–639） | `SetSelfCheckAxisPos` + `StartSelfCheck`（进入器械准备位置） |
-  | `start_control` | — | `SelectDirectControl`（已到达准备位置后，在当前位置直接进入手柄控制） |
-  | `refresh_handles_begin` | — | 从端先暂停远程手柄输入、清除旧采样/力输出，并在主循环确认保持后返回 `accepted/done` |
-  | `refresh_handles` | `success_mask`（1=582，2=587）和 `after_seq`（主端刷新后控制帧序号） | 仅接受 `after_seq` 之后的新 UDP 采样；从端重建手柄/机器人基准后才返回 `done`。部分成功保持双手柄输入暂停 |
+| `start_control` | — | `SelectDirectControl`（已到达准备位置后，在当前位置直接进入手柄控制） |
 | `force_feedback` | `enable`（bool） | 开启前自动零点采集（`ZeroForceSensor`），完成后 `ToggleForceFeedback`；零点采集期间状态帧 `ff_zeroing=1` |
 | `cylinder` | `index`（1–4），`engaged`（bool） | engaged=true：电缸 1/3 写 2000，电缸 2/4 写 10（`SetCylinderManualPosition`）；engaged=false：`ResetCylinderManual` 恢复原状态 |
 | `yvalve` | `closed`（bool） | `SetYValveOpen(!closed)` |

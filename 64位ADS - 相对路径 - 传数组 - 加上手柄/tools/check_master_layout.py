@@ -52,7 +52,7 @@ class LayoutCheck {
   Check(model.ActualHeight>100,"model height remains usable");
  }
  var vm=w.DataContext;
- vm.GetType().GetField("_handleRefreshText",flags).SetValue(vm,"正在整体重启两只手柄，输入暂停；等待从端基准确认…");
+ vm.GetType().GetField("_handleRefreshText",flags).SetValue(vm,"正在刷新…");
  w.DataContext=null;w.DataContext=vm;w.UpdateLayout();Pump(50);
  var feedback=RefreshText(w);var feedbackParent=(FrameworkElement)VisualTreeHelper.GetParent(feedback);
  Check(feedback.ActualWidth>100 && feedback.ActualWidth<feedbackParent.ActualWidth && feedback.TextWrapping==TextWrapping.Wrap,
