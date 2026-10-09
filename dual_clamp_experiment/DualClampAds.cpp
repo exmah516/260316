@@ -232,6 +232,7 @@ bool DualClampAds::read_self_check(CADSComm& comm, SelfCheckState& state)
 
 void DualClampAds::host_loop()
 {
+	unsigned consecutive_failures = 0;
 	while (host_running_.load())
 	{
 		SelfCheckState state;
@@ -239,10 +240,19 @@ void DualClampAds::host_loop()
 		if (!host_comm_.ADSWrite("G.host_heartbeat_sequence", sizeof(heartbeat_sequence_), &heartbeat_sequence_))
 		{
 			state.error = "独立心跳写入失败：" + host_comm_.GetLastErrorCopy();
-			session_ready_.store(false);
-			host_running_.store(false);
+			++consecutive_failures;
+			// 容忍最多连续3次失败（30ms），避免单次瞬态通信抖动导致会话中断
+			if (consecutive_failures >= 3)
+			{
+				session_ready_.store(false);
+				host_running_.store(false);
+			}
 		}
-		else read_self_check(host_comm_, state);
+		else
+		{
+			consecutive_failures = 0;
+			read_self_check(host_comm_, state);
+		}
 		{
 			std::lock_guard<std::mutex> lock(host_mutex_);
 			self_check_ = state;

@@ -26,7 +26,14 @@ namespace
 	bool motion_session_ready(const DualClampController& controller)
 	{
 		const auto state = controller.self_check();
-		return state.valid && state.done && state.status == 4 && state.gen_state == 6 && !state.host_timeout;
+		const bool ready = state.valid && state.done && state.status == 4 && state.gen_state == 6 && !state.host_timeout;
+		if (!ready)
+		{
+			std::cout << "[DEBUG motion_session_ready] valid=" << state.valid
+				<< " done=" << state.done << " status=" << state.status
+				<< " gen_state=" << state.gen_state << " host_timeout=" << state.host_timeout << std::endl;
+		}
+		return ready;
 	}
 
 	std::string read_line(HANDLE pipe)

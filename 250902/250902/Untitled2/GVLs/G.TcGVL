@@ -137,6 +137,9 @@ VAR_GLOBAL
 	program_test_forward_deceleration, program_test_forward_jerk : LREAL := 100.0;
 	program_test_return_velocity, program_test_return_acceleration : LREAL := 20.0;
 	program_test_return_deceleration, program_test_return_jerk : LREAL := 100.0;
+	program_test_forward_pause_enabled : BOOL := FALSE;
+	program_test_forward_pause_distance_mm : LREAL := 10.0;
+	program_test_forward_pause_duration_ms : UDINT := 3000;
 	program_test_enable : BOOL := FALSE;
 	program_test_phase : USINT := 0;
 	program_test_cycle_index, program_test_cycle_total : UINT := 0;
