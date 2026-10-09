@@ -1,0 +1,1173 @@
+#include "ProgrammedDeliveryController.h"
+#include "ExternalHandleMotion.h"
+#include "ForceCalibration.h"
+
+#include <cmath>
+#include <filesystem>
+#include <fstream>
+#include <iomanip>
+#include <sstream>
+#include <chrono>
+
+void ProgrammedDeliveryController::reset_model_locked(const char* reason)
+{
+	pulse_guard_.reset();
+	pulse_compute_us_ = 0.0;
+	illustration_.reset();
+	illustration_gate_.reset();
+	predictor_.reset(reason);
+	last_prediction_ = {};
+	curves_.reset();
+	external_curves_.reset();
+	model_compute_us_ = model_block_span_ms_ = 0.0;
+	model_zero_valid_ = false;
+}
+
+std::string ProgrammedDeliveryController::curve_response(std::uint64_t after, std::uint64_t generation) const
+{
+	std::lock_guard<std::mutex> lock(mutex_);
+	const bool valid = clampdynamics::valid_config(config_.dynamics) && config_.dynamics.motion_model_available;
+	return curves_.response(after, generation, static_cast<int>(config_.mode), valid,
+		stream_status_.zero.valid, !recorder_.failed(), model_compute_us_, model_block_span_ms_, clampdynamics::kVersion)
+		+ "|dynamics_reconstruct|" + std::to_string(config_.dynamics.axial_sign)
+		+ "|" + (config_.dynamics.validation_mode ? "1" : "0")
+		+ "|" + last_prediction_.status + "|" + last_prediction_.reset_reason
+		+ "|" + std::to_string(config_.dynamics.installation_gain)
+		+ "|" + forcepulse::kVersion + "|" + std::to_string(pulse_compute_us_)
+		+ "|" + (config_.dynamics.reconstruct_external ? "1" : "0");
+}
+
+ProgrammedDeliveryController::ProgrammedDeliveryController()
+{
+	// 不在构造阶段同步阻塞ADS连接；先启动后端和UI，再由连接命令执行重试。
+	mode_dynamics_[static_cast<unsigned>(ProgrammedDeliveryMode::Catheter)] = clampdynamics::kCatheter;
+	mode_dynamics_[static_cast<unsigned>(ProgrammedDeliveryMode::Guidewire)] = clampdynamics::kGuidewire;
+	mode_dynamics_[static_cast<unsigned>(ProgrammedDeliveryMode::ExternalValidation)] = clampdynamics::kCatheter;
+	config_.dynamics = clampdynamics::kCatheter;
+	// Experimental estimates are not routed to the haptic device from recording blocks.
+}
+
+std::string ProgrammedDeliveryController::external_curve_response(std::uint64_t after, std::uint64_t generation) const
+{
+	std::lock_guard<std::mutex> lock(mutex_);
+	return external_curves_.response(after, generation, stream_status_.zero.valid, !recorder_.failed());
+}
+
+bool ProgrammedDeliveryController::open_ads()
+{
+	std::lock_guard<std::mutex> lock(mutex_);
+	return open_ads_locked();
+}
+
+bool ProgrammedDeliveryController::open_ads_locked()
+{
+	if (ads_.is_open() && live_.valid) return true;
+	if (!ads_.open())
+	{
+		last_error_ = "程序递送ADS连接失败：" + ads_.last_error();
+		live_.valid = false;
+		ads_.close();
+		return false;
+	}
+	ProgrammedDeliveryLiveFrame frame{};
+	if (!ads_.read_live(frame))
+	{
+		last_error_ = "程序递送接口缺失或读取失败，连接已关闭：" + ads_.last_error();
+		live_.valid = false;
+		ads_.close();
+		return false;
+	}
+	live_ = frame;
+	if (stream_ads_.is_open()) stream_ads_.invalidate_zero();
+	last_error_.clear();
+	return true;
+}
+
+void ProgrammedDeliveryController::close_ads()
+{
+	std::lock_guard<std::mutex> lock(mutex_);
+	if (stream_block_pending_)
+	{
+		stream_block_future_.wait();
+		stream_block_pending_ = false;
+	}
+		handle_582_.close();
+		handle_anchor_valid_ = false;
+		handle_phase_active_ = false;
+		reset_model_locked("connection_closed");
+	if (recorder_.active())
+	{
+		ads_.request_abort();
+		std::string finalize_error;
+		const char* status = live_.phase == ProgrammedDeliveryPhase::Completed ? "Completed" : "Error";
+		if (!recorder_.finalize(status, "ADS连接已断开", stream_status_.zero, finalize_error)) last_error_ = finalize_error;
+		started_ = false;
+	}
+	ads_.close();
+	live_.valid = false;
+	if (stream_ads_.is_open()) stream_ads_.invalidate_zero();
+	stream_ads_.close();
+	stream_status_.zero = {};
+}
+
+bool ProgrammedDeliveryController::is_ads_open() const
+{
+	std::lock_guard<std::mutex> lock(mutex_);
+	return ads_.is_open();
+}
+
+bool ProgrammedDeliveryController::select_mode(ProgrammedDeliveryMode mode)
+{
+	std::lock_guard<std::mutex> lock(mutex_);
+	if (recorder_.active())
+	{
+		last_error_ = "请先归档当前实验记录，再切换程序递送模式";
+		return false;
+	}
+	if (mode != ProgrammedDeliveryMode::Legacy && !is_catheter_motion(mode) && mode != ProgrammedDeliveryMode::Guidewire)
+	{
+		last_error_ = "程序递送模式编号无效";
+		return false;
+	}
+	if (live_.valid && live_.mode != mode && live_.phase != ProgrammedDeliveryPhase::Idle &&
+		live_.phase != ProgrammedDeliveryPhase::Completed && live_.phase != ProgrammedDeliveryPhase::Aborted &&
+		live_.phase != ProgrammedDeliveryPhase::Error)
+	{
+		last_error_ = "实验正在运行或准备中，不能切换模式";
+		return false;
+	}
+	if (!open_ads_locked()) return false;
+	if (!ads_.select_mode(mode))
+	{
+		last_error_ = "切换PLC实验模式失败：" + ads_.last_error();
+		return false;
+	}
+	if (mode != ProgrammedDeliveryMode::ExternalValidation)
+	{
+		handle_582_.close();
+		handle_anchor_valid_ = false;
+	}
+	// ADS 写入成功只代表变量写入成功，不代表 MAIN 已接受状态机切换。
+	// 等待 PLC 一个或多个任务周期并回读模式，避免随后 PREPARE 被静默拒绝。
+	ProgrammedDeliveryMode observed_mode = ProgrammedDeliveryMode::Legacy;
+	ProgrammedDeliveryPhase observed_phase = ProgrammedDeliveryPhase::Idle;
+	std::uint32_t status_error_id = 0;
+	bool accepted = false;
+	for (int attempt = 0; attempt < 10; ++attempt)
+	{
+		if (ads_.read_mode_phase(observed_mode, observed_phase, status_error_id) &&
+			observed_mode == mode)
+		{
+			accepted = true;
+			break;
+		}
+		std::this_thread::sleep_for(std::chrono::milliseconds(20));
+	}
+	if (!accepted)
+	{
+		if (status_error_id == 0x7101)
+			last_error_ = "PLC拒绝切换程序递送模式：旧双机构尚未处于空闲、完成或中止状态，请先停止/归档旧实验";
+		else if (status_error_id == 0x7102)
+			last_error_ = "PLC拒绝切换程序递送模式：程序递送仍在运行或准备中";
+		else if (status_error_id != 0)
+			last_error_ = "PLC拒绝切换程序递送模式，错误ID：" + std::to_string(status_error_id);
+		else
+			last_error_ = "PLC未确认程序递送模式切换，请检查PLC工程版本和运行状态";
+		return false;
+	}
+	if (!stream_ads_.is_open() && !stream_ads_.open())
+	{
+		last_error_ = "实时记录ADS连接失败：" + stream_ads_.last_error();
+		return false;
+	}
+	if (!stream_ads_.invalidate_zero())
+	{
+		last_error_ = "切换模式后清除力感零点失败：" + stream_ads_.last_error();
+		return false;
+	}
+	stream_status_.zero = {};
+	mode_dynamics_[static_cast<unsigned>(config_.mode)] = config_.dynamics;
+	config_.mode = mode;
+	config_.dynamics = mode_dynamics_[static_cast<unsigned>(mode)];
+	// 切换侧别后必须重新确认实际实验条件，不能沿用上次人工确认。
+	config_.dynamics.conditions_confirmed = false;
+	reset_model_locked("mode_changed");
+	last_error_.clear();
+	return true;
+}
+
+bool ProgrammedDeliveryController::validate_config(const ProgrammedDeliveryConfig& config, std::string& error) const
+{
+	if (!clampdynamics::valid_config(config.dynamics))
+	{
+		error = config.dynamics.validation_mode && !config.dynamics.conditions_confirmed
+			? "验证模式须人工确认无器械、夹爪张开、仅轴向运动"
+			: "运动补偿模型参数无效，请检查模型配置";
+		return false;
+	}
+	const auto finite_positive = [](double value) { return std::isfinite(value) && value > 0.0; };
+	if (!is_catheter_motion(config.mode) && config.mode != ProgrammedDeliveryMode::Guidewire)
+	{
+		error = "请选择导管、导丝或外源验证模式";
+		return false;
+	}
+	if (config.cycle_count < 1)
+	{
+		error = "往复夹持次数必须至少为1";
+		return false;
+	}
+	if (!std::isfinite(config.final_forward_distance_mm) || config.final_forward_distance_mm < 0.0)
+	{
+		error = "最终前向距离必须为不小于0的有限数";
+		return false;
+	}
+	if (is_catheter_motion(config.mode))
+	{
+		if (!std::isfinite(config.axis1_prepare_from_left_mm) || !std::isfinite(config.axis1_trigger_from_left_mm) ||
+			config.axis1_trigger_from_left_mm < 0.0 || config.axis1_prepare_from_left_mm <= config.axis1_trigger_from_left_mm)
+		{
+			error = "导管模式要求轴1准备位置大于触发位置，且触发位置不小于0";
+			return false;
+		}
+		if (config.final_forward_distance_mm > config.axis1_prepare_from_left_mm - config.axis1_trigger_from_left_mm)
+		{
+			error = "最终前向距离不得超过轴1准备位置与触发位置之差";
+			return false;
+		}
+	}
+	else
+	{
+		if (!std::isfinite(config.axis5_from_left_mm) || config.axis5_from_left_mm < 0.0 || config.axis5_from_left_mm > 670.0)
+		{
+			error = "导丝模式轴5初始位置必须在0至670 mm之间";
+			return false;
+		}
+		if (!std::isfinite(config.axis6_prepare_from_left_mm) || !std::isfinite(config.axis6_trigger_from_left_mm) ||
+			config.axis6_trigger_from_left_mm < 0.0 || config.axis6_prepare_from_left_mm > 670.0 ||
+			config.axis6_prepare_from_left_mm <= config.axis6_trigger_from_left_mm)
+		{
+			error = "导丝模式要求轴6初始位置大于触发位置，且两者均不得超过670 mm";
+			return false;
+		}
+		if (config.final_forward_distance_mm > config.axis6_prepare_from_left_mm - config.axis6_trigger_from_left_mm)
+		{
+			error = "导丝模式最终前向距离不得超过轴6初始位置与触发位置之差";
+			return false;
+		}
+	}
+	if (config.mode == ProgrammedDeliveryMode::ExternalValidation &&
+		(!std::isfinite(config.axis6_prepare_from_left_mm) ||
+		config.axis6_prepare_from_left_mm < 0.0 || config.axis6_prepare_from_left_mm > 670.0))
+	{
+		error = "轴6初始位置必须在0至670 mm之间";
+		return false;
+	}
+	if (config.mode == ProgrammedDeliveryMode::ExternalValidation &&
+		(config.axis1_prepare_from_left_mm > 96.0 ||
+		 config.axis6_prepare_from_left_mm < externalvalidation::total_forward(config)))
+	{
+		error = "外源模式要求轴1准备位置不超过96 mm，且轴6剩余行程覆盖全部周期";
+		return false;
+	}
+	if (config.release_wait_ms > 60000 || config.reclamp_wait_ms > 60000 ||
+		config.release_lead_ms > 60000 || config.reclamp_lead_ms > 60000)
+	{
+		error = "电缸等待和错开时间必须在0至60000 ms之间";
+		return false;
+	}
+	if (!finite_positive(config.forward_velocity_mm_s) || !finite_positive(config.forward_acceleration_mm_s2) ||
+		!finite_positive(config.forward_deceleration_mm_s2) || !finite_positive(config.forward_jerk_mm_s3) ||
+		!finite_positive(config.return_velocity_mm_s) || !finite_positive(config.return_acceleration_mm_s2) ||
+		!finite_positive(config.return_deceleration_mm_s2) || !finite_positive(config.return_jerk_mm_s3))
+	{
+		error = "前向和回退速度、加速度、减速度、Jerk必须是有限正数";
+		return false;
+	}
+	const double angle = is_catheter_motion(config.mode) ? config.axis2_angle_deg : config.axis7_angle_deg;
+	if (!std::isfinite(angle) || angle < -360.0 || angle > 360.0)
+	{
+		error = "周向角度必须在-360至360度之间";
+		return false;
+	}
+	return true;
+}
+
+bool ProgrammedDeliveryController::prepare(const ProgrammedDeliveryConfig& requested)
+{
+	std::lock_guard<std::mutex> lock(mutex_);
+	ProgrammedDeliveryConfig config = requested;
+	if (config.mode == ProgrammedDeliveryMode::ExternalValidation) {
+		config.final_forward_distance_mm = 0.0;
+		config.axis7_angle_deg = config.axis2_angle_deg;
+		config.cylinder1_coupling_enabled = true;
+		config.cylinder3_coupling_enabled = false;
+		config.dynamics.validation_mode = false;
+		config.dynamics.conditions_confirmed = false;
+	}
+	config.dynamics.guidewire = config.mode == ProgrammedDeliveryMode::Guidewire;
+	config.dynamics.moving_open_word = config.dynamics.guidewire ?
+		config.cylinder4_open_word : config.cylinder2_open_word;
+	config.dynamics.moving_close_word = config.dynamics.guidewire ?
+		config.cylinder4_close_word : config.cylinder2_close_word;
+	// 配置（包括电缸配合开关）只能在空闲、完成、中止或错误后重新准备时修改。
+	// 防止绕过WPF直接发送PROGRAM_PREPARE，在运动或夹爪等待阶段改写PLC参数。
+	if (started_ || live_.setup_busy ||
+		(live_.valid && live_.phase >= ProgrammedDeliveryPhase::Baseline && live_.phase <= ProgrammedDeliveryPhase::FinalForward))
+	{
+		last_error_ = "实验正在运行或准备中，不能修改程序递送配置";
+		return false;
+	}
+	if (stream_block_pending_)
+	{
+		stream_block_future_.wait();
+		stream_block_pending_ = false;
+	}
+	if (recorder_.active())
+	{
+		std::string close_error;
+		if (!recorder_.finalize("Aborted", "重新准备定位，结束上一条记录", stream_status_.zero, close_error))
+		{
+			last_error_ = close_error;
+			return false;
+		}
+	}
+	std::string validation_error;
+	if (!ads_.is_open())
+	{
+		last_error_ = "ADS尚未连接";
+		return false;
+	}
+	if (!live_.valid || !live_.selfcheck_done)
+	{
+		last_error_ = "自检或实时状态不可用，请先显式启动自检并等待完成";
+		return false;
+	}
+	if (!std::isfinite(live_.leftlimit_axis1_abs_mm) || !std::isfinite(live_.leftlimit_axis5_abs_mm) ||
+		!std::isfinite(live_.leftlimit_axis6_abs_mm))
+	{
+		last_error_ = "PLC左限位数据无效";
+		return false;
+	}
+	if (!validate_config(config, validation_error))
+	{
+		last_error_ = validation_error;
+		return false;
+	}
+	if (!ads_.clear_sample_buffer())
+	{
+		last_error_ = "清空程序递送采样缓冲失败：" + ads_.last_error();
+		return false;
+	}
+	if (!stream_ads_.is_open() && !stream_ads_.open())
+	{
+		last_error_ = "实时记录ADS连接失败：" + stream_ads_.last_error();
+		return false;
+	}
+	if (!stream_ads_.reset_recording())
+	{
+		last_error_ = "清空实时记录缓冲失败：" + stream_ads_.last_error();
+		return false;
+	}
+	stream_ads_.invalidate_zero();
+	stream_status_ = {};
+	expected_block_sequence_ = 0;
+	expected_sample_index_ = 0;
+	zero_file_written_ = false;
+	if (!ads_.write_config(config, true))
+	{
+		last_error_ = "下发程序递送准备参数失败：" + ads_.last_error();
+		return false;
+	}
+	config_ = config;
+	mode_dynamics_[static_cast<unsigned>(config_.mode)] = config_.dynamics;
+	reset_model_locked("prepared");
+	recorder_.set_dynamics_config(config_.dynamics);
+	recorder_.set_program_coupling(config_.cylinder1_coupling_enabled, config_.cylinder3_coupling_enabled);
+	recorder_.set_program_cylinder_words(config_.cylinder2_open_word, config_.cylinder2_close_word,
+		config_.cylinder4_open_word, config_.cylinder4_close_word);
+	recorder_.set_program_guidewire_positions(config_.axis5_from_left_mm, config_.axis6_prepare_from_left_mm,
+		config_.axis6_trigger_from_left_mm);
+	recorder_.set_program_context(config_, live_);
+	started_ = false;
+	last_error_.clear();
+	return true;
+}
+
+bool ProgrammedDeliveryController::start()
+{
+	std::lock_guard<std::mutex> lock(mutex_);
+	if (!ads_.is_open())
+	{
+		last_error_ = "ADS尚未连接";
+		return false;
+	}
+	if (!live_.valid || !live_.selfcheck_done)
+	{
+		last_error_ = "自检或实时状态不可用，请先显式启动自检并等待完成";
+		return false;
+	}
+	if (!live_.setup_done || live_.phase != ProgrammedDeliveryPhase::Ready)
+	{
+		last_error_ = "程序递送准备定位尚未完成";
+		return false;
+	}
+	if (!stream_status_.zero.valid)
+	{
+		last_error_ = "请先点击力感取零点";
+		return false;
+	}
+	if (config_.mode == ProgrammedDeliveryMode::ExternalValidation)
+	{
+		if (!handle_582_.init())
+		{
+			last_error_ = "外源验证启动失败：SN582手柄连接失败";
+			return false;
+		}
+		if (!handle_582_.poll_joints(handle_anchor_) ||
+			!ads_.read_handle_baseline(handle_axis_anchor_, handle_init_pos_))
+		{
+			handle_582_.close();
+			last_error_ = "外源验证启动失败：无法读取手柄或PLC参考位置";
+			return false;
+		}
+		handle_anchor_valid_ = true;
+		handle_cycle_ = 0;
+		handle_phase_active_ = false;
+	}
+	position_reference_ = live_;
+	recorder_.set_program_context(config_, position_reference_);
+	if (!recorder_.active())
+	{
+		std::string record_error;
+		if (!recorder_.begin(programmed_delivery_mode_name(config_.mode), config_.record_suffix, record_error))
+		{
+			last_error_ = "创建实时记录目录失败：" + record_error;
+			handle_582_.close();
+			handle_anchor_valid_ = false;
+			return false;
+		}
+	}
+	if (!ads_.request_start())
+	{
+		last_error_ = "下发程序递送开始请求失败：" + ads_.last_error();
+		handle_582_.close();
+		handle_anchor_valid_ = false;
+		return false;
+	}
+	reset_model_locked("started");
+	started_ = true;
+	last_error_.clear();
+	return true;
+}
+
+void ProgrammedDeliveryController::abort()
+{
+	std::lock_guard<std::mutex> lock(mutex_);
+	if (ads_.is_open() && !ads_.request_abort()) last_error_ = "下发中止请求失败：" + ads_.last_error();
+	started_ = false;
+	handle_582_.close();
+	handle_anchor_valid_ = false;
+	handle_phase_active_ = false;
+}
+
+void ProgrammedDeliveryController::tick()
+{
+	std::lock_guard<std::mutex> lock(mutex_);
+	if (!ads_.is_open()) {
+		live_.valid = false;
+		handle_582_.close();
+		handle_anchor_valid_ = false;
+		handle_phase_active_ = false;
+		return;
+	}
+	ProgrammedDeliveryLiveFrame frame{};
+	if (!ads_.read_live(frame))
+	{
+		live_.valid = false;
+		handle_582_.close();
+		handle_anchor_valid_ = false;
+		handle_phase_active_ = false;
+		reset_model_locked("live_read_failed");
+		const std::string ads_error = ads_.last_error();
+		if (config_.mode == ProgrammedDeliveryMode::ExternalValidation &&
+			ads_error.find("program_test_sync_state") != std::string::npos)
+		{
+			last_error_ = "外源验证PLC接口版本不匹配：缺少 G.program_test_sync_state；请人工编译并下载集成程序递送的handle工程";
+		}
+		else
+		{
+			last_error_ = "读取程序递送实时状态失败：" + ads_error;
+		}
+		if (started_)
+		{
+			ads_.request_abort();
+			if (recorder_.active())
+			{
+				std::string finalize_error;
+				recorder_.finalize("Error", last_error_, stream_status_.zero, finalize_error);
+			}
+			started_ = false;
+		}
+		return;
+	}
+	live_ = frame;
+	if (config_.mode == ProgrammedDeliveryMode::ExternalValidation && started_ && handle_anchor_valid_ &&
+		live_.mode == config_.mode && live_.phase == ProgrammedDeliveryPhase::ForwardToTrigger)
+	{
+		std::array<double, 2> joints{};
+		bool ok = handle_582_.poll_joints(joints);
+		if (ok && !handle_phase_active_)
+		{
+			// 以PLC进入本周期后的实际轴位置重新建立从端基准，避免把准备阶段
+			// 的旧角度/位置参考带入手柄递送。
+			ok = ads_.read_handle_baseline(handle_axis_anchor_, handle_init_pos_);
+			handle_anchor_ = joints;
+			handle_cycle_ = live_.cycle_index;
+			handle_phase_active_ = ok;
+		}
+		else if (ok && handle_cycle_ != live_.cycle_index)
+		{
+			ok = ads_.read_handle_baseline(handle_axis_anchor_, handle_init_pos_);
+			handle_anchor_ = joints;
+			handle_cycle_ = live_.cycle_index;
+		}
+		if (ok)
+		{
+			ok = externalhandle::map(joints, handle_anchor_, handle_axis_anchor_, handle_init_pos_,
+				live_.target_axis1_abs_mm, live_.trigger_target_abs_mm, handle_reference_) &&
+				ads_.write_refer(handle_reference_, handle_cycle_);
+			if (ok) handle_cycle_ = live_.cycle_index;
+		}
+		if (!ok)
+		{
+			last_error_ = "外源手柄输入或ADS写入失败，实验已请求中止";
+			ads_.request_abort();
+			started_ = false;
+		}
+	}
+	else if (config_.mode == ProgrammedDeliveryMode::ExternalValidation)
+	{
+		handle_phase_active_ = false;
+	}
+	poll_stream_locked();
+	if (!started_ || live_.mode != config_.mode)
+	{
+		handle_582_.close();
+		handle_anchor_valid_ = false;
+	}
+	if (live_.status_error_id == 0x7101)
+	{
+		last_error_ = "PLC拒绝进入程序递送：旧双机构尚未处于空闲、完成或中止状态，请先停止旧模式并等待其回到待机";
+	}
+	else if (live_.status_error_id == 0x7102)
+	{
+		last_error_ = "PLC拒绝切换程序递送模式：程序递送仍在运行或准备中，请先中止并等待终态";
+	}
+	else if (live_.status_error_id == 0x7305)
+	{
+		last_error_ = live_.error_source == 5
+			? "PLC暂未满足程序递送条件：存在轴未使能"
+			: live_.error_source == 6
+				? "PLC暂未满足程序递送条件：存在轴错误"
+				: live_.error_source == 7
+					? "PLC暂未满足程序递送条件：主机通信未恢复"
+					: "PLC暂未满足程序递送条件：轴未使能、存在轴错误或主机通信未恢复";
+	}
+	else if (live_.status_error_id != 0 || (live_.phase == ProgrammedDeliveryPhase::Error && live_.error_source >= 5))
+	{
+		const char* source = live_.error_source == 1 ? "准备定位" : live_.error_source == 2 ? "前向至触发位置" : live_.error_source == 3 ? "回退" : live_.error_source == 4 ? "最终前向" : "程序递送";
+		std::ostringstream detail;
+		detail << "PLC运动错误：ID " << live_.status_error_id << "；轴" << static_cast<unsigned>(live_.error_axis) << "；" << source;
+		if (live_.error_axis == 1 || live_.error_axis == 5 || live_.error_axis == 6)
+			detail << "；目标距左限位 " << live_.error_target_from_left_mm << " mm";
+		else
+			detail << "；目标值 " << live_.error_target_abs_mm;
+		last_error_ = detail.str();
+	}
+	else if (last_error_.rfind("PLC运动错误：", 0) == 0 ||
+		last_error_.rfind("PLC拒绝", 0) == 0 ||
+		last_error_.rfind("PLC暂未满足程序递送条件：", 0) == 0 ||
+		last_error_.rfind("读取程序递送实时状态失败：", 0) == 0)
+		last_error_.clear();
+	if (live_.phase == ProgrammedDeliveryPhase::Completed || live_.phase == ProgrammedDeliveryPhase::Aborted || live_.phase == ProgrammedDeliveryPhase::Error)
+	{
+		handle_582_.close();
+		handle_anchor_valid_ = false;
+		handle_phase_active_ = false;
+		// 实验记录随实验终态自动归档，不再要求上位机额外点击保存按钮。
+		// 只有PLC已经停止采样且最后一个分块已确认后才能关闭文件，避免终态切换与最后1ms采样竞态。
+		// 先明确写入停止请求，避免PLC记录使能因终态切换延后一周期而让界面长时间显示“继续记录”。
+		if (recorder_.active()) stream_ads_.stop_recording();
+		if (recorder_.active() && !stream_status_.recording &&
+			!stream_status_.block_ready[0] && !stream_status_.block_ready[1])
+		{
+			const bool completed = live_.phase == ProgrammedDeliveryPhase::Completed;
+			const char* status = completed ? "Completed" :
+				live_.phase == ProgrammedDeliveryPhase::Aborted ? "Aborted" : "Error";
+			const std::string reason = completed ? std::string() : last_error_;
+			std::string finalize_error;
+			if (!recorder_.finalize(status, reason, stream_status_.zero, finalize_error) && !finalize_error.empty())
+			{
+				last_error_ = finalize_error;
+			}
+		}
+		started_ = false;
+	}
+	// 记录器已经完成归档后，立即向UI反映非活动状态，不沿用PLC上一周期的使能值。
+	live_.recording = recorder_.active() && stream_status_.recording;
+	live_.recording_overflow = stream_status_.overflow;
+	live_.recording_sample_count = stream_status_.total_count;
+	live_.recording_error_id = stream_status_.error_id;
+	live_.zero_busy = stream_status_.zero.busy;
+	live_.zero_done = stream_status_.zero.done;
+	live_.zero_values = stream_status_.zero.value;
+	if (stream_status_.zero.error_id != 0) last_error_ = "力感取零失败，错误ID：" + std::to_string(stream_status_.zero.error_id);
+}
+
+void ProgrammedDeliveryController::poll_stream_locked()
+{
+	if (!stream_ads_.is_open() && !stream_ads_.open()) return;
+	const double saved_zero_axis2 = stream_status_.zero.axis2_angle_deg;
+	const double saved_zero_axis7 = stream_status_.zero.axis7_angle_deg;
+	if (recorder_.failed())
+	{
+		last_error_ = recorder_.last_error().empty() ? "实时记录写盘失败" : recorder_.last_error();
+		ads_.request_abort();
+		started_ = false;
+		return;
+	}
+	if (!stream_ads_.read_status(stream_status_))
+	{
+		reset_model_locked("stream_read_failed");
+		if (started_)
+		{
+			last_error_ = "实时记录状态读取失败：" + stream_ads_.last_error();
+			stream_status_.error_id = 0x7403;
+			ads_.request_abort();
+			started_ = false;
+		}
+		return;
+	}
+	if (!stream_status_.zero.valid && model_zero_valid_) reset_model_locked("zero_invalidated");
+	model_zero_valid_ = stream_status_.zero.valid;
+	if (stream_status_.zero.done)
+	{
+		if (zero_file_written_)
+		{
+			stream_status_.zero.axis2_angle_deg = saved_zero_axis2;
+			stream_status_.zero.axis7_angle_deg = saved_zero_axis7;
+		}
+		else
+		{
+			stream_status_.zero.axis2_angle_deg = live_.axis2_pos;
+			stream_status_.zero.axis7_angle_deg = live_.axis7_pos;
+		}
+	}
+	if (stream_status_.zero.done && !zero_file_written_ && recorder_.active())
+	{
+		std::vector<std::array<double, 4>> zero_samples;
+		std::string error;
+		if (stream_ads_.read_zero_samples(zero_samples))
+		{
+			bool ok = true;
+			for (std::size_t i = 0; i < zero_samples.size(); ++i)
+				ok = recorder_.append_zero(zero_samples[i], static_cast<std::uint64_t>(i) * 1000,
+					live_.axis2_pos, live_.axis7_pos, error) && ok;
+			ok = recorder_.finish_zero(stream_status_.zero, error) && ok;
+			if (!ok)
+			{
+				last_error_ = error;
+				ads_.request_abort();
+				started_ = false;
+				return;
+			}
+			zero_file_written_ = true;
+		}
+		else
+		{
+			last_error_ = "读取取零样本失败：" + stream_ads_.last_error();
+		}
+	}
+	if (stream_status_.overflow)
+	{
+		last_error_ = "实时记录缓冲区溢出，实验已中止";
+		ads_.request_abort();
+		started_ = false;
+		return;
+	}
+	if (!recorder_.active() || (stream_status_.source_mode != 1 && stream_status_.source_mode != 2 && stream_status_.source_mode != 4)) return;
+	int ready_slot = -1;
+	std::uint32_t ready_sequence = 0;
+	std::vector<ExperimentStreamSample> ready_raw;
+	if (stream_block_pending_)
+	{
+		if (stream_block_future_.wait_for(std::chrono::milliseconds(0)) != std::future_status::ready) return;
+		PendingStreamBlock result = stream_block_future_.get();
+		stream_block_pending_ = false;
+		if (!result.ok)
+		{
+			reset_model_locked("block_read_failed");
+			last_error_ = "实时记录分块读取失败：" + result.error;
+			ads_.request_abort();
+			started_ = false;
+			return;
+		}
+		ready_slot = result.slot;
+		ready_sequence = result.sequence;
+		ready_raw = std::move(result.samples);
+	}
+	for (int pass = 0; pass < 2; ++pass)
+	{
+		int slot = ready_slot;
+		if (slot < 0)
+		{
+			for (int candidate = 0; candidate < 2; ++candidate)
+			{
+				if (stream_status_.block_ready[candidate] && stream_status_.block_sequence[candidate] == expected_block_sequence_)
+				{
+					slot = candidate;
+					break;
+				}
+			}
+		}
+		if (slot < 0)
+		{
+			bool any_ready = stream_status_.block_ready[0] || stream_status_.block_ready[1];
+			if (any_ready)
+			{
+				reset_model_locked("block_gap");
+				last_error_ = "实时记录分块序号不连续";
+				ads_.request_abort();
+				started_ = false;
+			}
+			break;
+		}
+		if (ready_slot < 0)
+		{
+			const bool external_validation = config_.mode == ProgrammedDeliveryMode::ExternalValidation;
+			stream_block_pending_ = true;
+			stream_block_future_ = std::async(std::launch::async,
+				[this, slot, external_validation]()
+				{
+					PendingStreamBlock result;
+					result.slot = slot;
+					result.ok = stream_ads_.read_block(slot, result.samples, result.sequence, external_validation);
+					if (!result.ok) result.error = stream_ads_.last_error();
+					return result;
+				});
+			break;
+		}
+		std::vector<ExperimentStreamSample> raw = std::move(ready_raw);
+		const std::uint32_t sequence = ready_sequence;
+		ready_slot = -1;
+		if (sequence != expected_block_sequence_)
+		{
+			reset_model_locked("block_gap");
+			last_error_ = "实时记录分块序号不连续";
+			ads_.request_abort();
+			started_ = false;
+			return;
+		}
+		std::vector<ProgrammedDeliverySample> converted;
+		converted.reserve(raw.size());
+		model_block_span_ms_ = raw.empty() ? 0.0 :
+			static_cast<double>(raw.back().time_us - raw.front().time_us) / 1000.0;
+		model_compute_us_ = 0.0;
+		for (const auto& r : raw)
+		{
+			if (r.index != expected_sample_index_)
+			{
+				reset_model_locked("sample_gap");
+				last_error_ = "实时记录样本序号不连续";
+				ads_.request_abort();
+				started_ = false;
+				return;
+			}
+			++expected_sample_index_;
+			ProgrammedDeliverySample s{};
+			s.sample_index = r.index; s.plc_time_us = r.time_us; s.phase = r.phase; s.event_sequence = r.event_sequence; s.cycle_index = r.cycle_index;
+			s.sync_state = r.sync_state;
+			s.axis1_pos = r.axis1_pos; s.axis1_vel = r.axis1_vel; s.axis1_acc = r.axis1_acc; s.axis2_pos = r.axis2_pos; s.axis2_vel = r.axis2_vel; s.axis2_acc = r.axis2_acc;
+			s.axis5_pos = r.axis5_pos; s.axis5_vel = r.axis5_vel; s.axis5_acc = r.axis5_acc; s.axis6_pos = r.axis6_pos; s.axis6_vel = r.axis6_vel; s.axis6_acc = r.axis6_acc;
+			s.axis7_pos = r.axis7_pos; s.axis7_vel = r.axis7_vel; s.axis7_acc = r.axis7_acc;
+			s.cylinder1 = r.cylinder1; s.cylinder2 = r.cylinder2; s.cylinder3 = r.cylinder3; s.cylinder4 = r.cylinder4;
+			s.fn1 = r.fn1; s.ft1 = r.ft1; s.fn2 = r.fn2; s.ft2 = r.ft2;
+			s.position_reference_valid = position_reference_.valid && position_reference_.leftlimit_valid &&
+				live_.leftlimit_valid && live_.selfcheck_done && !live_.selfcheck_busy &&
+				std::isfinite(position_reference_.leftlimit_axis1_abs_mm) &&
+				std::isfinite(position_reference_.leftlimit_axis6_abs_mm) &&
+				live_.leftlimit_axis1_abs_mm == position_reference_.leftlimit_axis1_abs_mm &&
+				live_.leftlimit_axis6_abs_mm == position_reference_.leftlimit_axis6_abs_mm;
+			if (s.position_reference_valid) {
+				s.axis1_from_left_mm = s.axis1_pos-position_reference_.leftlimit_axis1_abs_mm;
+				s.axis6_from_left_mm = s.axis6_pos-position_reference_.leftlimit_axis6_abs_mm;
+			}
+			const bool guidewire = config_.mode == ProgrammedDeliveryMode::Guidewire;
+			auto params = config_.dynamics;
+			params.guidewire = guidewire;
+			params.moving_open_word = guidewire ? config_.cylinder4_open_word : config_.cylinder2_open_word;
+			params.moving_close_word = guidewire ? config_.cylinder4_close_word : config_.cylinder2_close_word;
+			const auto cal = forcecal::calculate(s.fn1, s.ft1, s.fn2, s.ft2,
+				stream_status_.zero.value, stream_status_.zero.valid);
+			const auto& side = guidewire ? cal.side2 : cal.side1;
+			const bool force_valid = cal.valid && std::isfinite(side.force_cal_delta_n) &&
+				std::isfinite(side.ft_cal_delta_n);
+			if (config_.mode != ProgrammedDeliveryMode::ExternalValidation) {
+			const auto pulse_begin = std::chrono::steady_clock::now();
+			const short raw_fn = guidewire ? s.fn2 : s.fn1, raw_ft = guidewire ? s.ft2 : s.ft1;
+			s.pulse = pulse_guard_.update(s.plc_time_us, s.sample_index, raw_fn, raw_ft, force_valid);
+			s.pulse_fn_N = side.force_cal_delta_n + (s.pulse.fn-raw_fn) *
+				(guidewire ? forcecal::kFn2SensorSlopeNPerCount : forcecal::kFn1SensorSlopeNPerCount) *
+				forcecal::kInstallationAxialGain;
+			s.pulse_ft_N = side.ft_cal_delta_n + (s.pulse.ft-raw_ft) *
+				(guidewire ? forcecal::kFt2SensorSlopeNPerCount : forcecal::kFt1SensorSlopeNPerCount) *
+				forcecal::kInstallationTorqueGainNmmPerN / forcecal::kTangentialArmMm;
+			s.pulse_compute_us = std::chrono::duration<double,std::micro>(
+				std::chrono::steady_clock::now()-pulse_begin).count();
+			pulse_compute_us_ = std::max(pulse_compute_us_,s.pulse_compute_us);
+			}
+			const auto begin = std::chrono::steady_clock::now();
+			const clampdynamics::Input input{s.plc_time_us * 1e-6,
+				guidewire ? s.axis6_vel : s.axis1_vel,
+				double(guidewire ? s.cylinder4 : s.cylinder2),
+				double(guidewire ? s.cylinder3 : s.cylinder1),
+				s.phase, s.cycle_index, guidewire ? s.axis6_acc : s.axis1_acc, force_valid, s.sample_index,
+				side.force_cal_delta_n, side.ft_cal_delta_n,
+				guidewire ? s.axis6_from_left_mm : s.axis1_from_left_mm,
+				guidewire ? s.axis7_pos : s.axis2_pos};
+			const auto prediction = predictor_.update(input, params);
+			last_prediction_ = prediction;
+			s.dynamics = prediction;
+			s.model_compute_us = std::chrono::duration<double, std::micro>(
+				std::chrono::steady_clock::now() - begin).count();
+			model_compute_us_ = std::max(model_compute_us_, s.model_compute_us);
+			s.model_valid = prediction.valid;
+			s.model_fn = prediction.fn_N;
+			s.model_ft = prediction.ft_N;
+			s.model_gate = prediction.gate;
+			s.feedback_force_N = force_valid ? side.force_cal_delta_n - prediction.fn_N : 0.0;
+			s.model_acceleration = prediction.acceleration_mm_s2;
+			s.model_inertia = params.beta_a * prediction.acceleration_m_s2;
+			s.model_viscous = params.beta_v * (params.axial_sign * (guidewire ? s.axis6_vel : s.axis1_vel) * 0.001);
+			handle_582_.update(stream_status_.zero.valid, s.feedback_force_N);
+			if (config_.mode == ProgrammedDeliveryMode::ExternalValidation) {
+				external_curves_.push({0, s.plc_time_us * 1e-6, externalvalidation::compare(cal, s),
+					s.phase, s.cycle_index, s.sync_state});
+			} else if (force_valid) {
+				s.illustration = illustration_.update(s.plc_time_us * 1e-6,
+					s.pulse_fn_N, s.pulse_ft_N, illustration_gate_.update(input));
+				curves_.push({0, s.plc_time_us * 1e-6, side.force_cal_delta_n, side.ft_cal_delta_n,
+					side.force_cal_delta_n - s.model_fn, side.ft_cal_delta_n - s.model_ft,
+					s.model_valid, s.phase, s.illustration.fn, s.illustration.ft,
+					s.illustration.valid_fn, s.illustration.valid_ft,
+					s.pulse_fn_N, s.pulse_ft_N, s.pulse.replaced, unsigned(s.pulse.status),
+					s.pulse.age_us, s.pulse.locked});
+			} else { illustration_.reset(); illustration_gate_.reset(); }
+			converted.push_back(s);
+		}
+		std::string error;
+		if (!recorder_.append_program(converted, 0, config_.mode, stream_status_.zero, error))
+		{
+			last_error_ = error;
+			ads_.request_abort();
+			started_ = false;
+			return;
+		}
+		if (!stream_ads_.acknowledge_block(slot, sequence))
+		{
+			last_error_ = "实时记录分块确认失败：" + stream_ads_.last_error();
+			ads_.request_abort();
+			started_ = false;
+			return;
+		}
+		++expected_block_sequence_;
+		stream_status_.block_ready[slot] = false;
+	}
+}
+
+bool ProgrammedDeliveryController::request_zero()
+{
+	try
+	{
+		std::lock_guard<std::mutex> lock(mutex_);
+		poll_stream_locked();
+		if (!ads_.is_open() || !live_.valid || !live_.selfcheck_done || !live_.setup_done || started_ ||
+			(live_.phase != ProgrammedDeliveryPhase::Ready && live_.phase != ProgrammedDeliveryPhase::Idle))
+		{
+			last_error_ = "取零点要求自检和准备定位完成，且实验未开始";
+			return false;
+		}
+		if (!stream_ads_.is_open() && !stream_ads_.open())
+		{
+			last_error_ = "实时记录ADS连接失败：" + stream_ads_.last_error();
+			return false;
+		}
+		if (!recorder_.active())
+		{
+			std::string error;
+			if (!recorder_.begin(programmed_delivery_mode_name(config_.mode), config_.record_suffix, error)) { last_error_ = error; return false; }
+		}
+		zero_file_written_ = false;
+		{
+			std::string reset_error;
+			if (!recorder_.reset_zero_file(reset_error)) { last_error_ = reset_error; return false; }
+		}
+		{
+			std::string event_error;
+			if (!recorder_.begin_zero(event_error)) { last_error_ = event_error; return false; }
+		}
+		if (!stream_ads_.request_zero())
+		{
+			last_error_ = "下发力感取零请求失败：" + stream_ads_.last_error();
+			return false;
+		}
+		reset_model_locked("zero_requested");
+		return true;
+	}
+	catch (const std::exception& ex)
+	{
+		last_error_ = std::string("力感取零过程异常：") + ex.what();
+		return false;
+	}
+}
+
+bool ProgrammedDeliveryController::set_record_suffix(const std::string& suffix)
+{
+	std::lock_guard<std::mutex> lock(mutex_);
+	if (started_ || (recorder_.active() && live_.phase != ProgrammedDeliveryPhase::Completed && live_.phase != ProgrammedDeliveryPhase::Aborted && live_.phase != ProgrammedDeliveryPhase::Error))
+	{
+		last_error_ = "实验进行中不能修改保存名称";
+		return false;
+	}
+	config_.record_suffix = suffix;
+	return true;
+}
+
+void ProgrammedDeliveryController::invalidate_zero()
+{
+	std::lock_guard<std::mutex> lock(mutex_);
+	reset_model_locked("zero_invalidated");
+	if (stream_ads_.is_open()) stream_ads_.invalidate_zero();
+	stream_status_.zero = {};
+}
+
+ForceZeroState ProgrammedDeliveryController::zero_state() const
+{
+	std::lock_guard<std::mutex> lock(mutex_);
+	return stream_status_.zero;
+}
+
+std::string ProgrammedDeliveryController::recording_directory() const
+{
+	std::lock_guard<std::mutex> lock(mutex_);
+	return recorder_.directory();
+}
+
+bool ProgrammedDeliveryController::recording_archived() const
+{
+	std::lock_guard<std::mutex> lock(mutex_);
+	return recorder_.archived();
+}
+
+bool ProgrammedDeliveryController::write_metadata(const std::string& directory, std::string& error) const
+{
+	std::ofstream out(std::filesystem::path(directory) / "experiment.json", std::ios::binary);
+	if (!out) { error = "无法创建experiment.json"; return false; }
+	if (config_.mode == ProgrammedDeliveryMode::ExternalValidation) {
+		out << std::setprecision(12) << "{\n  \"mode\": \"external_validation\",\n";
+		externalvalidation::write_metadata(out, config_);
+		out << "  \"cylinder1_coupling_enabled\": true,\n  \"cylinder3_coupling_enabled\": false,\n"
+			<< "  \"cylinder2_open_word\": " << config_.cylinder2_open_word << ",\n"
+			<< "  \"cylinder2_close_word\": " << config_.cylinder2_close_word << ",\n"
+			<< "  \"cylinder4_open_word\": " << config_.cylinder4_open_word << ",\n"
+			<< "  \"cylinder4_close_word\": " << config_.cylinder4_close_word << ",\n"
+			<< "  \"zero_valid\": " << (stream_status_.zero.valid ? "true" : "false") << ",\n"
+			<< "  \"zero_counts\": [" << stream_status_.zero.value[0] << ',' << stream_status_.zero.value[1]
+			<< ',' << stream_status_.zero.value[2] << ',' << stream_status_.zero.value[3] << "],\n"
+			<< "  \"model\": " << clampdynamics::snapshot(false, config_.dynamics, true) << "\n}\n";
+		return static_cast<bool>(out);
+	}
+	out << std::setprecision(12)
+		<< "{\n"
+		<< "  \"calibration_version\": \"two_stage_sensor_0_50g_plus_installed_2026-08-29\",\n"
+		<< "  \"calibration_chain\": \"sensor_0_50g_then_installed_calibration\",\n"
+		<< "  \"sensor_slopes_N_per_count\": {\"fn1\": " << forcecal::kFn1SensorSlopeNPerCount
+		<< ", \"ft1\": " << forcecal::kFt1SensorSlopeNPerCount << ", \"fn2\": " << forcecal::kFn2SensorSlopeNPerCount
+		<< ", \"ft2\": " << forcecal::kFt2SensorSlopeNPerCount << "},\n"
+		<< "  \"installation_axial_gain\": " << forcecal::kInstallationAxialGain << ",\n"
+		<< "  \"installation_axial_bias_N\": " << forcecal::kInstallationAxialBiasN << ",\n"
+		<< "  \"installation_torque_gain_Nmm_per_N\": " << forcecal::kInstallationTorqueGainNmmPerN << ",\n"
+		<< "  \"installation_torque_bias_Nmm\": " << forcecal::kInstallationTorqueBiasNmm << ",\n"
+		<< "  \"units\": {\"realtime_fn\": \"N\", \"realtime_ft\": \"N\", \"csv_torque\": \"N·mm\"},\n"
+		<< "  \"crosstalk_decoupling_applied\": true,\n"
+		<< "  \"gravity_compensation_applied\": false,\n"
+		<< "  \"mode\": \"" << programmed_delivery_mode_name(config_.mode) << "\",\n"
+		<< "  \"axis1_prepare_from_left_mm\": " << config_.axis1_prepare_from_left_mm << ",\n"
+		<< "  \"axis1_trigger_from_left_mm\": " << config_.axis1_trigger_from_left_mm << ",\n"
+		<< "  \"axis5_from_left_mm\": " << config_.axis5_from_left_mm << ",\n"
+		<< "  \"axis6_prepare_from_left_mm\": " << config_.axis6_prepare_from_left_mm << ",\n"
+		<< "  \"axis6_trigger_from_left_mm\": " << config_.axis6_trigger_from_left_mm << ",\n"
+		<< "  \"axis2_angle_deg\": " << config_.axis2_angle_deg << ",\n"
+		<< "  \"axis7_angle_deg\": " << config_.axis7_angle_deg << ",\n"
+		<< "  \"cycle_count\": " << config_.cycle_count << ",\n"
+		<< "  \"cylinder1_coupling_enabled\": " << (config_.cylinder1_coupling_enabled ? "true" : "false") << ",\n"
+		<< "  \"cylinder3_coupling_enabled\": " << (config_.cylinder3_coupling_enabled ? "true" : "false") << ",\n"
+		<< "  \"cylinder2_open_word\": " << config_.cylinder2_open_word << ",\n"
+		<< "  \"cylinder2_close_word\": " << config_.cylinder2_close_word << ",\n"
+		<< "  \"cylinder4_open_word\": " << config_.cylinder4_open_word << ",\n"
+		<< "  \"cylinder4_close_word\": " << config_.cylinder4_close_word << ",\n"
+		<< "  \"final_forward_distance_mm\": " << config_.final_forward_distance_mm << ",\n"
+		<< "  \"release_wait_ms\": " << config_.release_wait_ms << ",\n"
+		<< "  \"reclamp_wait_ms\": " << config_.reclamp_wait_ms << ",\n"
+		<< "  \"release_lead_ms\": " << config_.release_lead_ms << ",\n"
+		<< "  \"reclamp_lead_ms\": " << config_.reclamp_lead_ms << ",\n"
+		<< "  \"forward_velocity_mm_s\": " << config_.forward_velocity_mm_s << ",\n"
+		<< "  \"forward_acceleration_mm_s2\": " << config_.forward_acceleration_mm_s2 << ",\n"
+		<< "  \"forward_deceleration_mm_s2\": " << config_.forward_deceleration_mm_s2 << ",\n"
+		<< "  \"forward_jerk_mm_s3\": " << config_.forward_jerk_mm_s3 << ",\n"
+		<< "  \"return_velocity_mm_s\": " << config_.return_velocity_mm_s << ",\n"
+		<< "  \"return_acceleration_mm_s2\": " << config_.return_acceleration_mm_s2 << ",\n"
+		<< "  \"return_deceleration_mm_s2\": " << config_.return_deceleration_mm_s2 << ",\n"
+		<< "  \"return_jerk_mm_s3\": " << config_.return_jerk_mm_s3 << "\n"
+		<< "}\n";
+	return true;
+}
+
+bool ProgrammedDeliveryController::write_samples_csv(const std::string& directory,
+	const std::vector<ProgrammedDeliverySample>& samples, std::string& error) const
+{
+	std::ofstream out(std::filesystem::path(directory) / "samples_1khz.csv", std::ios::binary);
+	if (!out) { error = "无法创建samples_1khz.csv"; return false; }
+	out << std::setprecision(12);
+	if (config_.mode == ProgrammedDeliveryMode::ExternalValidation)
+	{
+		externalvalidation::write_header(out);
+		clampdynamics::Predictor predictor;
+		for (auto s : samples) {
+			const forcecal::Result cal = forcecal::calculate(s.fn1, s.ft1, s.fn2, s.ft2, stream_status_.zero.value, stream_status_.zero.valid);
+			const clampdynamics::Input input{s.plc_time_us * 1e-6, s.axis1_vel, double(s.cylinder2),
+				double(s.cylinder1), s.phase, s.cycle_index, s.axis1_acc, stream_status_.zero.valid, s.sample_index,
+				cal.side1.force_cal_delta_n, cal.side1.ft_cal_delta_n};
+			const auto result = predictor.update(input, config_.dynamics);
+			s.model_valid = result.valid; s.model_fn = result.fn_N; s.model_ft = result.ft_N;
+			externalvalidation::write_sample(out, s, stream_status_.zero.value, stream_status_.zero.valid);
+		}
+	}
+	else if (config_.mode == ProgrammedDeliveryMode::Catheter)
+	{
+		out << "sample_index,plc_time_us,phase,event_sequence,cycle_index,axis1_pos_abs_mm,axis1_velocity_mm_s,axis1_acceleration_mm_s2,axis2_pos_deg,axis2_velocity_deg_s,axis2_acceleration_deg_s2,cylinder1_cmd,cylinder2_cmd,fn_1_raw,ft_1_raw,fn1_sensor_N,ft1_sensor_N,fn1_cal_delta_N,fn1_cal_abs_N,ft1_cal_delta_N,ft1_cal_abs_N,torque1_cal_delta_Nmm,torque1_cal_abs_Nmm,fn1_decoupled_delta_N,torque1_decoupled_delta_Nmm,fn1_decoupled_abs_N,torque1_decoupled_abs_Nmm,axis2_angle_deg\n";
+		for (const auto& s : samples)
+		{
+			const forcecal::Result cal = forcecal::calculate(s.fn1, s.ft1, s.fn2, s.ft2, stream_status_.zero.value, stream_status_.zero.valid);
+			out << s.sample_index << ',' << s.plc_time_us << ',' << static_cast<unsigned>(s.phase) << ',' << s.event_sequence << ',' << s.cycle_index << ','
+				<< s.axis1_pos << ',' << s.axis1_vel << ',' << s.axis1_acc << ',' << s.axis2_pos << ',' << s.axis2_vel << ',' << s.axis2_acc << ','
+				<< s.cylinder1 << ',' << s.cylinder2 << ',' << s.fn1 << ',' << s.ft1;
+			if (cal.valid)
+				out << ',' << cal.side1.sensor_force_n << ',' << cal.side1.sensor_tangential_n << ',' << cal.side1.force_cal_delta_n << ',' << cal.side1.force_cal_abs_n
+					<< ',' << cal.side1.ft_cal_delta_n << ',' << cal.side1.ft_cal_abs_n << ',' << cal.side1.torque_cal_delta_nmm << ',' << cal.side1.torque_cal_abs_nmm
+					<< ',' << cal.side1.force_decoupled_delta_n << ',' << cal.side1.torque_decoupled_delta_nmm << ',' << cal.side1.force_decoupled_abs_n << ',' << cal.side1.torque_decoupled_abs_nmm;
+			else out << ",,,,,,,,,,,,";
+			out << ',' << s.axis2_pos << '\n';
+		}
+	}
+	else
+	{
+		out << "sample_index,plc_time_us,phase,event_sequence,cycle_index,axis5_pos_abs_mm,axis5_velocity_mm_s,axis5_acceleration_mm_s2,axis6_pos_abs_mm,axis6_velocity_mm_s,axis6_acceleration_mm_s2,axis7_pos_deg,axis7_velocity_deg_s,axis7_acceleration_deg_s2,cylinder3_cmd,cylinder4_cmd,fn_2_raw,ft_2_raw,fn2_sensor_N,ft2_sensor_N,fn2_cal_delta_N,fn2_cal_abs_N,ft2_cal_delta_N,ft2_cal_abs_N,torque2_cal_delta_Nmm,torque2_cal_abs_Nmm,fn2_decoupled_delta_N,torque2_decoupled_delta_Nmm,fn2_decoupled_abs_N,torque2_decoupled_abs_Nmm,axis7_angle_deg\n";
+		for (const auto& s : samples)
+		{
+			const forcecal::Result cal = forcecal::calculate(s.fn1, s.ft1, s.fn2, s.ft2, stream_status_.zero.value, stream_status_.zero.valid);
+			out << s.sample_index << ',' << s.plc_time_us << ',' << static_cast<unsigned>(s.phase) << ',' << s.event_sequence << ',' << s.cycle_index << ','
+				<< s.axis5_pos << ',' << s.axis5_vel << ',' << s.axis5_acc << ',' << s.axis6_pos << ',' << s.axis6_vel << ',' << s.axis6_acc << ','
+				<< s.axis7_pos << ',' << s.axis7_vel << ',' << s.axis7_acc << ',' << s.cylinder3 << ',' << s.cylinder4 << ',' << s.fn2 << ',' << s.ft2;
+			if (cal.valid)
+				out << ',' << cal.side2.sensor_force_n << ',' << cal.side2.sensor_tangential_n << ',' << cal.side2.force_cal_delta_n << ',' << cal.side2.force_cal_abs_n
+					<< ',' << cal.side2.ft_cal_delta_n << ',' << cal.side2.ft_cal_abs_n << ',' << cal.side2.torque_cal_delta_nmm << ',' << cal.side2.torque_cal_abs_nmm
+					<< ',' << cal.side2.force_decoupled_delta_n << ',' << cal.side2.torque_decoupled_delta_nmm << ',' << cal.side2.force_decoupled_abs_n << ',' << cal.side2.torque_decoupled_abs_nmm;
+			else out << ",,,,,,,,,,,,";
+			out << ',' << s.axis7_pos << '\n';
+		}
+	}
+	return true;
+}
+
+bool ProgrammedDeliveryController::write_events_csv(const std::string& directory,
+	const std::vector<ProgrammedDeliverySample>& samples, std::string& error) const
+{
+	std::ofstream out(std::filesystem::path(directory) / "events.csv", std::ios::binary);
+	if (!out) { error = "无法创建events.csv"; return false; }
+	const bool external = config_.mode == ProgrammedDeliveryMode::ExternalValidation;
+	out << (external ? "event_sequence,plc_time_us,cycle_index,phase,event_name\n"
+		: "event_sequence,plc_time_us,cycle_index,phase,phase_name\n");
+	std::uint32_t previous = static_cast<std::uint32_t>(-1);
+	unsigned previous_phase = 255, previous_sync = 0;
+	for (const auto& s : samples)
+	{
+		if (s.event_sequence == previous) continue;
+		previous = s.event_sequence;
+		const auto event = [&](const char* name) {
+			out << s.event_sequence << ',' << s.plc_time_us << ',' << s.cycle_index << ',' << unsigned(s.phase) << ',' << name << '\n';
+		};
+		if (!external || s.phase != previous_phase)
+			event(programmed_delivery_phase_name(static_cast<ProgrammedDeliveryPhase>(s.phase)));
+		if (external && s.sync_state != previous_sync) event(externalvalidation::sync_name(s.sync_state));
+		previous_phase = s.phase;
+		previous_sync = s.sync_state;
+	}
+	return true;
+}
+
+bool ProgrammedDeliveryController::save_samples(const std::string& directory, std::string& error)
+{
+	std::lock_guard<std::mutex> lock(mutex_);
+	if (recorder_.active())
+	{
+		poll_stream_locked();
+		ProgrammedDeliveryLiveFrame latest{};
+		if (ads_.is_open() && ads_.read_live(latest)) live_ = latest;
+		if (live_.phase != ProgrammedDeliveryPhase::Completed && live_.phase != ProgrammedDeliveryPhase::Aborted && live_.phase != ProgrammedDeliveryPhase::Error)
+		{
+			error = "实验正在进行，数据已经实时保存";
+			return false;
+		}
+		return recorder_.finalize(live_.phase == ProgrammedDeliveryPhase::Completed ? "Completed" : live_.phase == ProgrammedDeliveryPhase::Aborted ? "Aborted" : "Error", last_error_, stream_status_.zero, error);
+	}
+	if (directory.empty() && !recorder_.directory().empty()) return true;
+	if (live_.phase != ProgrammedDeliveryPhase::Completed)
+	{
+		error = "程序递送实验尚未完成";
+		return false;
+	}
+	std::uint32_t count = 0;
+	bool overflow = false;
+	if (!ads_.read_sample_count(count, overflow) || overflow)
+	{
+		error = overflow ? "PLC程序递送采样缓冲区溢出" : "读取PLC采样数量失败：" + ads_.last_error();
+		return false;
+	}
+	std::vector<ProgrammedDeliverySample> samples;
+	if (!ads_.read_all_samples(config_.mode, count, samples))
+	{
+		error = "读取PLC程序递送采样失败：" + ads_.last_error();
+		return false;
+	}
+	std::filesystem::create_directories(directory);
+	return write_metadata(directory, error) && write_samples_csv(directory, samples, error) && write_events_csv(directory, samples, error);
+}
+
+ProgrammedDeliveryConfig ProgrammedDeliveryController::config() const
+{
+	std::lock_guard<std::mutex> lock(mutex_);
+	return config_;
+}
+
+ProgrammedDeliveryLiveFrame ProgrammedDeliveryController::live() const
+{
+	std::lock_guard<std::mutex> lock(mutex_);
+	return live_;
+}
+
+std::string ProgrammedDeliveryController::last_error() const
+{
+	std::lock_guard<std::mutex> lock(mutex_);
+	return last_error_;
+}

@@ -16,13 +16,25 @@ DualClampController::DualClampController()
 bool DualClampController::open_ads()
 {
 	std::lock_guard<std::mutex> lock(mutex_);
-	if (ads_.is_open()) return true;
 	if (!ads_.open())
 	{
-		last_error_ = "ADS连接失败：" + ads_.last_error();
+		live_.valid = false;
+		last_error_ = "ADS连接/握手失败：" + ads_.last_error();
 		return false;
 	}
 	if (stream_ads_.is_open()) stream_ads_.invalidate_zero();
+	legacy_available_ = ads_.read_live(live_);
+	last_error_.clear();
+	return true;
+}
+
+bool DualClampController::request_self_check()
+{
+	std::lock_guard<std::mutex> lock(mutex_);
+	if (!ads_.is_open() || !ads_.request_self_check()) {
+		last_error_ = "自检启动失败：" + ads_.last_error();
+		return false;
+	}
 	last_error_.clear();
 	return true;
 }
@@ -39,6 +51,7 @@ void DualClampController::close_ads()
 		started_ = false;
 	}
 	ads_.close();
+	live_.valid = false;
 	if (stream_ads_.is_open()) stream_ads_.invalidate_zero();
 	stream_ads_.close();
 	stream_status_.zero = {};
@@ -48,6 +61,12 @@ bool DualClampController::is_ads_open() const
 {
 	std::lock_guard<std::mutex> lock(mutex_);
 	return ads_.is_open();
+}
+
+bool DualClampController::has_legacy_interface() const
+{
+	std::lock_guard<std::mutex> lock(mutex_);
+	return legacy_available_ && ads_.is_open();
 }
 
 bool DualClampController::prepare(const DualClampConfig& config)
@@ -77,6 +96,11 @@ bool DualClampController::prepare(const DualClampConfig& config)
 		|| config.return_jerk_mm_s3 <= 0.0)
 	{
 		last_error_ = "回程距离和运动参数必须为非负/正数";
+		return false;
+	}
+	if (!ads_.is_open() || !live_.valid)
+	{
+		last_error_ = "旧双机构接口缺失或实时状态不可用，拒绝准备定位";
 		return false;
 	}
 	if (!live_.selfcheck_done || !live_.leftlimit_valid)
@@ -117,6 +141,11 @@ bool DualClampController::prepare(const DualClampConfig& config)
 bool DualClampController::start(const DualClampConfig& config)
 {
 	std::lock_guard<std::mutex> lock(mutex_);
+	if (!ads_.is_open() || !live_.valid)
+	{
+		last_error_ = "旧双机构接口缺失或实时状态不可用，拒绝启动";
+		return false;
+	}
 	if (config.moving_axis != 1 && config.moving_axis != 6)
 	{
 		last_error_ = "运动端必须是轴1或轴6";
@@ -175,6 +204,11 @@ void DualClampController::abort(const std::string& reason)
 void DualClampController::tick(double dt_s)
 {
 	std::lock_guard<std::mutex> lock(mutex_);
+	if (!ads_.is_open() || !legacy_available_)
+	{
+		live_.valid = false;
+		return;
+	}
 	if (ads_.is_open())
 	{
 		DualClampLiveFrame live{};
@@ -183,9 +217,11 @@ void DualClampController::tick(double dt_s)
 			live_ = live;
 			live_.host_qpc = 0;
 		}
-		else if (started_ || selfcheck_requested_)
+		else
 		{
+			live_.valid = false;
 			last_error_ = "ADS读取实时数据失败：" + ads_.last_error();
+			if (!started_) return;
 			phase_ = DualClampPhase::Error;
 			ads_.request_abort();
 			if (recorder_.active())
@@ -199,7 +235,6 @@ void DualClampController::tick(double dt_s)
 	}
 	poll_stream_locked();
 	phase_ = static_cast<DualClampPhase>(live_.plc_phase);
-	if (live_.selfcheck_done) selfcheck_requested_ = false;
 	if (live_.selfcheck_error || live_.status_error_id != 0)
 	{
 		last_error_ = "PLC错误ID：" + std::to_string(live_.status_error_id);
@@ -390,7 +425,7 @@ bool DualClampController::request_zero()
 	{
 		std::lock_guard<std::mutex> lock(mutex_);
 		poll_stream_locked();
-		if (!live_.selfcheck_done || !live_.setup_done || started_)
+		if (!ads_.is_open() || !live_.valid || !live_.selfcheck_done || !live_.setup_done || started_)
 		{
 			last_error_ = "取零点要求自检和准备定位完成，且实验未开始";
 			return false;

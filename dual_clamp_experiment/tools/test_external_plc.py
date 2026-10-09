@@ -16,7 +16,7 @@ class ST:
     """仅解析本状态机所用的ST语句；遇到未支持语法立即失败。"""
     def __init__(self, text):
         text = re.sub(r"//[^\n]*", "", text)
-        self.tokens = re.findall(r"T#\d+(?:MS|S)|16#[0-9A-F]+|\d+\.\d+|\d+|[A-Za-z_]\w*|:=|<>|<=|>=|[^\s]", text)
+        self.tokens = re.findall(r"T#\d+(?:MS|S)|16#[0-9A-F]+|\d+\.\d+(?:[Ee][+-]?\d+)?|\d+|[A-Za-z_]\w*|:=|<>|<=|>=|[^\s]", text)
         self.i = self.case = 0
 
     def take(self):

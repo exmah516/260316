@@ -10,18 +10,16 @@ namespace externalvalidation {
 inline const char* sync_name(unsigned state)
 {
     switch (state) {
-    case 1: return "GearInStart";
-    case 2: return "InGear";
-    case 3: return "GearOutStart";
-    case 4: return "GearOutDone";
+    case 1: return "AwaitHandleBaseline";
+    case 2: return "HandleFollowing";
+    case 4: return "ReferenceHold";
     default: return "IndependentHold";
     }
 }
 
 inline double total_forward(const ProgrammedDeliveryConfig& c)
 {
-    return c.cycle_count * (c.axis1_prepare_from_left_mm - c.axis1_trigger_from_left_mm)
-        + c.final_forward_distance_mm;
+    return c.cycle_count * (c.axis1_prepare_from_left_mm - c.axis1_trigger_from_left_mm);
 }
 
 struct Comparison {
@@ -53,6 +51,7 @@ inline void write_header(std::ostream& out)
 {
     out << "sample_index,plc_time_us,phase,event_sequence,cycle_index,sync_state,"
         "axis1_pos_mm,axis1_vel_mm_s,axis1_acc_mm_s2,axis2_pos_deg,axis2_vel_deg_s,axis2_acc_deg_s2,"
+        "axis5_pos_mm,axis5_vel_mm_s,axis5_acc_mm_s2,"
         "axis6_pos_mm,axis6_vel_mm_s,axis6_acc_mm_s2,axis7_pos_deg,axis7_vel_deg_s,axis7_acc_deg_s2,"
         "cylinder1_cmd,cylinder2_cmd,cylinder3_cmd,cylinder4_cmd,"
         "fn1_raw,ft1_raw,fn2_raw,ft2_raw,fn1_zeroed,ft1_zeroed,fn2_zeroed,ft2_zeroed";
@@ -85,6 +84,7 @@ inline void write_sample(std::ostream& out, const ProgrammedDeliverySample& s,
         << ',' << s.cycle_index << ',' << unsigned(s.sync_state)
         << ',' << s.axis1_pos << ',' << s.axis1_vel << ',' << s.axis1_acc
         << ',' << s.axis2_pos << ',' << s.axis2_vel << ',' << s.axis2_acc
+        << ',' << s.axis5_pos << ',' << s.axis5_vel << ',' << s.axis5_acc
         << ',' << s.axis6_pos << ',' << s.axis6_vel << ',' << s.axis6_acc
         << ',' << s.axis7_pos << ',' << s.axis7_vel << ',' << s.axis7_acc
         << ',' << s.cylinder1 << ',' << s.cylinder2 << ',' << s.cylinder3 << ',' << s.cylinder4
@@ -105,15 +105,18 @@ inline void write_metadata(std::ostream& out, const ProgrammedDeliveryConfig& c)
     out << "  \"external_reference\": {\"axis\":6,\"assumed_accurate\":true,\"accuracy_verified\":false,"
         "\"definition\":\"zeroed_installed_decoupled_delta\",\"force_unit\":\"N\",\"torque_unit\":\"Nmm\","
         "\"model_compensated\":false,\"sign_changed\":false,\"filtered\":false},\n"
-        << "  \"external_motion\": {\"master\":1,\"slave\":6,\"gear_ratio\":1,\"axis5_moved\":false,"
-        "\"axis7_rotated\":false,\"cylinder3_word\":400,\"cylinder4_clamped_throughout\":true},\n"
+        << "  \"external_motion\": {\"control\":\"handle\",\"serial\":582,\"linear_mm_per_unit\":-750,"
+        "\"rotation_deg_per_rad\":-57.29577951308232,\"master\":1,\"slave\":6,\"follow_ratio\":1,"
+        "\"axis5_moved\":true,\"axis7_copies_axis2\":true,\"cylinder3_word\":400,"
+        "\"cylinder4_clamped_during_test\":true,\"reference_holds_during_return\":true},\n"
+        << "  \"time_basis\": \"PLC task sample index times configured cycle period, microseconds\",\n"
         << "  \"axis1_prepare_from_left_mm\": " << c.axis1_prepare_from_left_mm << ",\n"
         << "  \"axis1_trigger_from_left_mm\": " << c.axis1_trigger_from_left_mm << ",\n"
         << "  \"axis6_prepare_from_left_mm\": " << c.axis6_prepare_from_left_mm << ",\n"
         << "  \"axis6_total_forward_mm\": " << total_forward(c) << ",\n"
         << "  \"axis6_expected_end_from_left_mm\": " << c.axis6_prepare_from_left_mm - total_forward(c) << ",\n"
         << "  \"cycle_count\": " << c.cycle_count << ",\n"
-        << "  \"final_forward_distance_mm\": " << c.final_forward_distance_mm << ",\n"
+        << "  \"final_forward_distance_mm\": 0,\n"
         << "  \"release_lead_ms\": " << c.release_lead_ms << ",\n"
         << "  \"release_wait_ms\": " << c.release_wait_ms << ",\n"
         << "  \"reclamp_lead_ms\": " << c.reclamp_lead_ms << ",\n"

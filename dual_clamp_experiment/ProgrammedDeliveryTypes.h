@@ -50,6 +50,9 @@ struct ProgrammedDeliveryConfig
 	double axis7_angle_deg = 0.0;
 	std::uint16_t cycle_count = 1;
 	double final_forward_distance_mm = 10.0;
+	bool forward_pause_enabled = false;
+	double forward_pause_distance_mm = 10.0;
+	std::uint32_t forward_pause_duration_ms = 3000;
 	bool cylinder1_coupling_enabled = true;
 	bool cylinder3_coupling_enabled = true;
 	// 运动端电缸的释放值和夹紧值：导管使用电缸2，导丝使用电缸4。
@@ -133,6 +136,7 @@ struct ProgrammedDeliverySample
 	bool model_valid = false;
 	double model_compute_us = 0.0;
 	bool model_gate = false;
+	double feedback_force_N = 0.0;
 	clampillustration::Result illustration;
 	double model_acceleration = 0.0, model_inertia = 0.0, model_viscous = 0.0;
 	clampdynamics::Result dynamics;

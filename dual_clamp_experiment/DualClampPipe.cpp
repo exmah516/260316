@@ -16,6 +16,19 @@ namespace
 {
 	constexpr wchar_t kPipeName[] = L"\\\\.\\pipe\\DualClampExperiment";
 
+	bool requires_motion_session(const std::string& command)
+	{
+		return command.rfind("PROGRAM_PREPARE", 0) == 0 || command == "PROGRAM_START" ||
+			command == "PROGRAM_ZERO_FORCE" || command.rfind("PREPARE", 0) == 0 ||
+			command.rfind("START", 0) == 0 || command == "ZERO_FORCE";
+	}
+
+	bool motion_session_ready(const DualClampController& controller)
+	{
+		const auto state = controller.self_check();
+		return state.valid && state.done && state.status == 4 && state.gen_state == 6 && !state.host_timeout;
+	}
+
 	std::string read_line(HANDLE pipe)
 	{
 		std::string line;
@@ -97,6 +110,9 @@ namespace
 		config.cylinder3_coupling_enabled = true;
 		config.release_lead_ms = 50;
 		config.reclamp_lead_ms = 50;
+		config.forward_pause_enabled = false;
+		config.forward_pause_distance_mm = 10.0;
+		config.forward_pause_duration_ms = 3000;
 		const std::size_t separator = command.find('|');
 		if (separator == std::string::npos) return true;
 		std::istringstream fields(command.substr(separator + 1));
@@ -152,6 +168,26 @@ namespace
 			const bool enabled = text == "1";
 			if (key == "cylinder1_coupling") config.cylinder1_coupling_enabled = enabled;
 			else config.cylinder3_coupling_enabled = enabled;
+			continue;
+		}
+		if (key == "forward_pause_enabled")
+		{
+			if (text != "0" && text != "1") { error = key + "必须是0或1"; return false; }
+			config.forward_pause_enabled = text == "1";
+			continue;
+		}
+		if (key == "forward_pause_distance_mm" || key == "forward_pause_duration_ms")
+		{
+			double value = 0.0;
+			try {
+				std::size_t used = 0;
+				value = std::stod(text, &used);
+				if (used != text.size() || !std::isfinite(value) || value <= 0.0 ||
+					(key == "forward_pause_duration_ms" && (value > 60000.0 || std::floor(value) != value)))
+					throw std::invalid_argument("range");
+			} catch (const std::exception&) { error = "前进暂停参数无效：" + key; return false; }
+			if (key == "forward_pause_distance_mm") config.forward_pause_distance_mm = value;
+			else config.forward_pause_duration_ms = static_cast<std::uint32_t>(value);
 			continue;
 		}
 		if (key == "cylinder2_open" || key == "cylinder2_close" || key == "cylinder4_open" || key == "cylinder4_close")
@@ -265,9 +301,20 @@ DualClampPipeServer::DualClampPipeServer() = default;
 
 std::string DualClampPipeServer::handle_command(DualClampController& controller, const std::string& command)
 {
+	if (command == "GET_SELF_CHECK")
+	{
+		const auto state = controller.self_check();
+		return "SELF_CHECK_STATE|" + std::to_string(state.valid) + "|" + std::to_string(state.status) +
+			"|" + std::to_string(state.done) + "|" + std::to_string(state.start_pending) +
+			"|" + std::to_string(state.host_timeout) + "|" + sanitize_for_pipe(state.error) + "|" + std::to_string(state.gen_state);
+	}
+	if (requires_motion_session(command) && !motion_session_ready(controller))
+		return "ERROR|自检/主机运动会话未就绪，拒绝运动命令";
 	if (command == "GET")
 	{
 		const DualClampLiveFrame live = controller.live();
+		if (!controller.has_legacy_interface()) return "ERROR|旧双机构接口不可用（缺少dual_clamp接口），自检请读取独立状态";
+		if (!live.valid) return "ERROR|旧双机构实时状态读取失败：" + sanitize_for_pipe(controller.last_error());
 		const bool ads_open = controller.is_ads_open();
 		const ForceZeroState zero = controller.zero_state();
 		const forcecal::Result force = forcecal::calculate(live.fn_1_raw, live.ft_1_raw, live.fn_2_raw, live.ft_2_raw, zero.value, zero.valid);
@@ -309,6 +356,8 @@ std::string DualClampPipeServer::handle_command(DualClampController& controller,
 		return out.str();
 	}
 	if (command == "ZERO_STATUS") return handle_command(controller, "GET");
+	if (command == "SELF_CHECK")
+		return controller.request_self_check() ? "OK|SELF_CHECK|PLC已消费并启动自检" : "ERROR|" + sanitize_for_pipe(controller.last_error());
 	if (command.rfind("RECORD_NAME|", 0) == 0)
 	{
 		const std::string prefix = "RECORD_NAME|name=";
@@ -368,7 +417,7 @@ std::string DualClampPipeServer::handle_command(DualClampController& controller,
 std::string DualClampPipeServer::handle_program_command(ProgrammedDeliveryController& controller, const std::string& command)
 {
 	if (command == "PROGRAM_VERSION")
-		return "PROGRAM_VERSION|20260927.2|external_sync_and_state_guard_legacy_ui_compat";
+		return "PROGRAM_VERSION|20261009.1|host_ads_timeout_100ms";
 	if (command.rfind("PROGRAM_CURVES|", 0) == 0 || command.rfind("PROGRAM_EXTERNAL_CURVES|", 0) == 0)
 	{
 		std::uint64_t after = 0, generation = 0;
@@ -387,6 +436,7 @@ std::string DualClampPipeServer::handle_program_command(ProgrammedDeliveryContro
 	if (command == "GET_PROGRAM")
 	{
 		const ProgrammedDeliveryLiveFrame live = controller.live();
+		if (!live.valid) return "ERROR|程序递送实时状态未知：" + sanitize_for_pipe(controller.last_error());
 		const bool ads_open = controller.is_ads_open();
 		const ForceZeroState zero = controller.zero_state();
 		const forcecal::Result force = forcecal::calculate(live.fn1, live.ft1, live.fn2, live.ft2, zero.value, zero.valid);
@@ -618,10 +668,8 @@ int DualClampPipeServer::run(DualClampController& controller, ProgrammedDelivery
 	{
 		while (running.load())
 		{
-			controller.tick(0.01);
-			const DualClampLiveFrame legacy_live = controller.live();
-			program_controller.set_shared_selfcheck_state(legacy_live.selfcheck_done, legacy_live.selfcheck_busy);
-			program_controller.tick();
+			if (program_controller.config().mode == ProgrammedDeliveryMode::Legacy) controller.tick(0.01);
+			else program_controller.tick();
 			std::this_thread::sleep_for(std::chrono::milliseconds(10));
 		}
 	});
@@ -646,10 +694,10 @@ int DualClampPipeServer::run(DualClampController& controller, ProgrammedDelivery
 				if (command == "CONNECT_ADS" || command == "CONNECT")
 				{
 					const bool legacy_connected = controller.open_ads();
-					const bool program_connected = program_controller.open_ads();
-					if (legacy_connected && program_connected) write_line(pipe, "OK|CONNECT_ADS");
-					else write_line(pipe, "ERROR|ADS连接失败：" + sanitize_for_pipe(
-						legacy_connected ? program_controller.last_error() : controller.last_error()));
+					const bool program_connected = legacy_connected && program_controller.open_ads();
+					if (legacy_connected) write_line(pipe, "OK|CONNECT_ADS|" +
+						(program_connected ? std::string() : sanitize_for_pipe(program_controller.last_error())));
+					else write_line(pipe, "ERROR|ADS连接失败：" + sanitize_for_pipe(controller.last_error()));
 					continue;
 				}
 				if (command == "DISCONNECT_ADS")
@@ -660,6 +708,17 @@ int DualClampPipeServer::run(DualClampController& controller, ProgrammedDelivery
 					continue;
 				}
 				const bool is_program = command.rfind("PROGRAM_", 0) == 0 || command == "GET_PROGRAM";
+				if (requires_motion_session(command) && !motion_session_ready(controller))
+				{
+					write_line(pipe, "ERROR|自检/主机运动会话未就绪，拒绝运动命令");
+					continue;
+				}
+				if (is_program && command != "PROGRAM_VERSION" && command != "GET_PROGRAM" &&
+					command != "PROGRAM_ABORT" && !controller.is_ads_open())
+				{
+					write_line(pipe, "ERROR|主机会话未就绪，请先连接ADS");
+					continue;
+				}
 				if (command.rfind("PROGRAM_MODE", 0) == 0)
 				{
 					// 实验模式切换会使两个控制器各自保存的力感零点同时失效。
@@ -688,14 +747,12 @@ int DualClampPipeServer::run(DualClampController& controller, ProgrammedDelivery
 	{
 		while (running.load())
 		{
-			controller.tick(0.01);
-			const DualClampLiveFrame legacy_live = controller.live();
-			program_controller.set_shared_selfcheck_state(legacy_live.selfcheck_done, legacy_live.selfcheck_busy);
-			// 旧双机构模式不需要轮询程序递送整帧；否则在线PLC缺少新增程序符号时，
-			// 后端会在旧模式下持续产生隐藏的ADS错误。
-			if (program_controller.config().mode != ProgrammedDeliveryMode::Legacy)
-				program_controller.tick();
-			standalone_controller.tick();
+			if (program_controller.config().mode == ProgrammedDeliveryMode::Legacy)
+			{
+				controller.tick(0.01);
+				if (controller.has_legacy_interface()) standalone_controller.tick();
+			}
+			else program_controller.tick();
 			std::this_thread::sleep_for(std::chrono::milliseconds(10));
 		}
 	});
@@ -722,12 +779,13 @@ int DualClampPipeServer::run(DualClampController& controller, ProgrammedDelivery
 				if (command == "CONNECT_ADS" || command == "CONNECT")
 				{
 					const bool legacy_connected = controller.open_ads();
-					const bool program_connected = program_controller.open_ads();
-					const bool standalone_connected = standalone_controller.open_ads();
-					if (legacy_connected && program_connected && standalone_connected) write_line(pipe, "OK|CONNECT_ADS");
+					const bool program_connected = legacy_connected && program_controller.open_ads();
+					if (legacy_connected && controller.has_legacy_interface()) standalone_controller.open_ads();
+					if (legacy_connected) write_line(pipe, "OK|CONNECT_ADS|" +
+						(program_connected ? std::string() : sanitize_for_pipe(program_controller.last_error())));
 					else
 					{
-						const std::string error = !legacy_connected ? controller.last_error() : !program_connected ? program_controller.last_error() : standalone_controller.last_error();
+						const std::string error = controller.last_error();
 						write_line(pipe, "ERROR|ADS连接失败：" + sanitize_for_pipe(error));
 					}
 					continue;
@@ -738,6 +796,23 @@ int DualClampPipeServer::run(DualClampController& controller, ProgrammedDelivery
 					program_controller.close_ads();
 					standalone_controller.close_ads();
 					write_line(pipe, "OK|DISCONNECT_ADS");
+					continue;
+				}
+				if (requires_motion_session(command) && !motion_session_ready(controller))
+				{
+					write_line(pipe, "ERROR|自检/主机运动会话未就绪，拒绝运动命令");
+					continue;
+				}
+				if ((command.rfind("PROGRAM_", 0) == 0 && command != "PROGRAM_VERSION" && command != "PROGRAM_ABORT") &&
+					!controller.is_ads_open())
+				{
+					write_line(pipe, "ERROR|主机会话未就绪，请先连接ADS");
+					continue;
+				}
+				if ((command.rfind("MANUAL_CYLINDER_", 0) == 0 || command.rfind("STANDALONE_", 0) == 0 || command == "GET_STANDALONE_RECORD") &&
+					!controller.has_legacy_interface())
+				{
+					write_line(pipe, "ERROR|当前PLC无旧双机构/独立记录接口，该功能不可用");
 					continue;
 				}
 				if (command.rfind("PROGRAM_MODE", 0) == 0)

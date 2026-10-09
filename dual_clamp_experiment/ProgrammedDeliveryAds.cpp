@@ -1,5 +1,6 @@
 #include "ProgrammedDeliveryAds.h"
 #include "CylinderCommand.h"
+#include "AdsArrayRead.h"
 
 #include <algorithm>
 #include <array>
@@ -15,11 +16,7 @@ namespace
 	bool read_chunk(CADSComm& comm, const char* symbol, std::uint32_t offset,
 		std::uint32_t count, std::size_t element_size, void* output)
 	{
-		return comm.ADSReadSymbolOffset(
-			symbol,
-			static_cast<unsigned long>(offset * element_size),
-			static_cast<unsigned long>(count * element_size),
-			output);
+		return read_ads_array(comm, symbol, offset, count, static_cast<unsigned long>(element_size), output);
 	}
 }
 
@@ -62,6 +59,11 @@ bool ProgrammedDeliveryAds::is_open() const
 	return comm_.IsCommOpen();
 }
 
+bool ProgrammedDeliveryAds::set_timeout(unsigned long timeout_ms)
+{
+	return comm_.SetTimeout(timeout_ms);
+}
+
 std::string ProgrammedDeliveryAds::last_error() const
 {
 	return comm_.GetLastErrorCopy();
@@ -96,9 +98,11 @@ bool ProgrammedDeliveryAds::read_mode_phase(ProgrammedDeliveryMode& mode,
 
 bool ProgrammedDeliveryAds::read_live(ProgrammedDeliveryLiveFrame& frame)
 {
+	frame.valid = false;
 	std::uint8_t mode = 0, phase = 0;
 	std::uint16_t cycle_index = 0, cycle_total = 0;
-	bool setup_busy = false, setup_done = false, selfcheck_done = false, selfcheck_busy = false;
+	bool setup_busy = false, setup_done = false, selfcheck_done = false;
+	std::int32_t selfcheck_busy = 0;
 	bool leftlimit_valid = false;
 	std::uint32_t status_error_id = 0;
 	std::uint8_t wait_action = 0, error_source = 0, error_axis = 0, error_phase = 0;
@@ -114,7 +118,7 @@ bool ProgrammedDeliveryAds::read_live(ProgrammedDeliveryLiveFrame& frame)
 
 	const char* symbols[] = {
 		"G.program_test_mode", "G.program_test_phase", "G.program_test_cycle_index", "G.program_test_cycle_total",
-		"G.program_test_setup_busy", "G.program_test_setup_done", "G.dual_clamp_selfcheck_done", "G.dual_clamp_selfcheck_busy", "G.program_test_status_error_id",
+		"G.program_test_setup_busy", "G.program_test_setup_done", "G.self_check_done", "G.selfcheck_status", "G.program_test_status_error_id",
 		"G.program_test_wait_action", "G.program_test_error_source", "G.program_test_error_axis", "G.program_test_error_phase", "G.program_test_error_target_abs",
 		"G.leftlimit[1]", "G.leftlimit[5]", "G.leftlimit[6]",
 		"G.program_test_target_axis1_abs", "G.program_test_target_axis5_abs", "G.program_test_target_axis6_abs",
@@ -127,7 +131,7 @@ bool ProgrammedDeliveryAds::read_live(ProgrammedDeliveryLiveFrame& frame)
 		"G.axis[7].NcToPlc.ActPos", "G.axis[7].NcToPlc.ActVelo", "G.axis[7].NcToPlc.ActAcc",
 		"G.fn_1_value", "G.ft_1_value", "G.fn_2_value", "G.ft_2_value",
 		"G.cylinder1_value", "G.cylinder2_value", "G.cylinder3_value", "G.cylinder4_value",
-		"G.dual_clamp_leftlimit_valid"
+		"G.self_check_done"
 	};
 	const unsigned long lengths[] = {
 		sizeof(mode), sizeof(phase), sizeof(cycle_index), sizeof(cycle_total),
@@ -162,7 +166,7 @@ bool ProgrammedDeliveryAds::read_live(ProgrammedDeliveryLiveFrame& frame)
 	frame.setup_busy = setup_busy;
 	frame.setup_done = setup_done;
 	frame.selfcheck_done = selfcheck_done;
-	frame.selfcheck_busy = selfcheck_busy;
+	frame.selfcheck_busy = selfcheck_busy == 2;
 	frame.leftlimit_valid = leftlimit_valid;
 	frame.status_error_id = status_error_id;
 	frame.wait_action = wait_action;
@@ -198,6 +202,41 @@ bool ProgrammedDeliveryAds::read_live(ProgrammedDeliveryLiveFrame& frame)
 	return true;
 }
 
+bool ProgrammedDeliveryAds::read_refer(std::array<double, 7>& refer)
+{
+	return comm_.ADSRead("G.refer", static_cast<unsigned long>(sizeof(double) * refer.size()), refer.data());
+}
+
+bool ProgrammedDeliveryAds::read_handle_baseline(std::array<double, 7>& actual, std::array<double, 7>& init_pos)
+{
+	const char* symbols[] = { "G.init_pos", "G.axis[1].NcToPlc.ActPos",
+		"G.axis[2].NcToPlc.ActPos", "G.axis[3].NcToPlc.ActPos", "G.axis[4].NcToPlc.ActPos",
+		"G.axis[5].NcToPlc.ActPos", "G.axis[6].NcToPlc.ActPos", "G.axis[7].NcToPlc.ActPos" };
+	const unsigned long lengths[] = { 7 * sizeof(double), sizeof(double), sizeof(double), sizeof(double),
+		sizeof(double), sizeof(double), sizeof(double), sizeof(double) };
+	void* outputs[] = { init_pos.data(), &actual[0], &actual[1], &actual[2], &actual[3],
+		&actual[4], &actual[5], &actual[6] };
+	return comm_.ADSReadSum(symbols, lengths, outputs, 8);
+}
+
+bool ProgrammedDeliveryAds::read_handle_axis_positions(double& axis1, double& axis6)
+{
+	const char* symbols[] = { "G.axis[1].NcToPlc.ActPos", "G.axis[6].NcToPlc.ActPos" };
+	const unsigned long lengths[] = { sizeof(axis1), sizeof(axis6) };
+	void* outputs[] = { &axis1, &axis6 };
+	return comm_.ADSReadSum(symbols, lengths, outputs, 2);
+}
+
+bool ProgrammedDeliveryAds::write_refer(const std::array<double, 7>& refer, std::uint16_t cycle)
+{
+	const char* symbols[] = { "G.refer", "G.program_test_handle_cycle" };
+	const unsigned long lengths[] = {
+		static_cast<unsigned long>(sizeof(double) * refer.size()), sizeof(cycle)
+	};
+	const void* inputs[] = { refer.data(), &cycle };
+	return comm_.ADSWriteSum(symbols, lengths, inputs, 2);
+}
+
 bool ProgrammedDeliveryAds::write_config(const ProgrammedDeliveryConfig& config, bool setup_request)
 {
 	const std::uint8_t mode = static_cast<std::uint8_t>(config.mode);
@@ -219,7 +258,8 @@ bool ProgrammedDeliveryAds::write_config(const ProgrammedDeliveryConfig& config,
 		"G.program_test_release_lead_ms", "G.program_test_reclamp_lead_ms",
 		"G.program_test_forward_velocity", "G.program_test_forward_acceleration", "G.program_test_forward_deceleration",
 		"G.program_test_forward_jerk", "G.program_test_return_velocity", "G.program_test_return_acceleration",
-		"G.program_test_return_deceleration", "G.program_test_return_jerk", "G.program_test_setup_req"
+		"G.program_test_return_deceleration", "G.program_test_return_jerk",
+		"G.program_test_forward_pause_enabled", "G.program_test_forward_pause_distance_mm", "G.program_test_forward_pause_duration_ms"
 	};
 	const unsigned long lengths[] = {
 		sizeof(mode), sizeof(config.axis1_prepare_from_left_mm), sizeof(config.axis1_trigger_from_left_mm),
@@ -227,7 +267,7 @@ bool ProgrammedDeliveryAds::write_config(const ProgrammedDeliveryConfig& config,
 		sizeof(config.cycle_count), sizeof(config.final_forward_distance_mm), sizeof(cylinder1_coupling), sizeof(cylinder3_coupling), sizeof(cylinder2_open), sizeof(cylinder2_close), sizeof(cylinder4_open), sizeof(cylinder4_close), sizeof(config.release_wait_ms), sizeof(config.reclamp_wait_ms), sizeof(config.release_lead_ms), sizeof(config.reclamp_lead_ms), sizeof(config.forward_velocity_mm_s),
 		sizeof(config.forward_acceleration_mm_s2), sizeof(config.forward_deceleration_mm_s2), sizeof(config.forward_jerk_mm_s3),
 		sizeof(config.return_velocity_mm_s), sizeof(config.return_acceleration_mm_s2), sizeof(config.return_deceleration_mm_s2),
-		sizeof(config.return_jerk_mm_s3), sizeof(setup)
+		sizeof(config.return_jerk_mm_s3), sizeof(config.forward_pause_enabled), sizeof(config.forward_pause_distance_mm), sizeof(config.forward_pause_duration_ms)
 	};
 	const void* inputs[] = {
 		&mode, &config.axis1_prepare_from_left_mm, &config.axis1_trigger_from_left_mm,
@@ -235,10 +275,12 @@ bool ProgrammedDeliveryAds::write_config(const ProgrammedDeliveryConfig& config,
 		&config.cycle_count, &config.final_forward_distance_mm, &cylinder1_coupling, &cylinder3_coupling, &cylinder2_open, &cylinder2_close, &cylinder4_open, &cylinder4_close, &config.release_wait_ms, &config.reclamp_wait_ms, &config.release_lead_ms, &config.reclamp_lead_ms, &config.forward_velocity_mm_s,
 		&config.forward_acceleration_mm_s2, &config.forward_deceleration_mm_s2, &config.forward_jerk_mm_s3,
 		&config.return_velocity_mm_s, &config.return_acceleration_mm_s2, &config.return_deceleration_mm_s2,
-		&config.return_jerk_mm_s3, &setup
+		&config.return_jerk_mm_s3, &config.forward_pause_enabled, &config.forward_pause_distance_mm, &config.forward_pause_duration_ms
 	};
 	static_assert(std::size(symbols) == std::size(lengths) && std::size(symbols) == std::size(inputs));
-	return comm_.ADSWriteSum(symbols, lengths, inputs, static_cast<unsigned long>(std::size(symbols)));
+	// 任一配置符号缺失或写入失败时，绝不触发准备运动。
+	if (!comm_.ADSWriteSum(symbols, lengths, inputs, static_cast<unsigned long>(std::size(symbols)))) return false;
+	return comm_.ADSWrite("G.program_test_setup_req", sizeof(setup), const_cast<bool*>(&setup));
 }
 
 bool ProgrammedDeliveryAds::request_start()

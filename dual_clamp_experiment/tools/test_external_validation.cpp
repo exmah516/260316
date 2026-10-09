@@ -1,4 +1,5 @@
 #include "../ExternalValidation.h"
+#include "../ExternalHandleMotion.h"
 #include "../ExperimentStreamRecorder.h"
 #include "../ExperimentStreamAds.h"
 #include <algorithm>
@@ -6,6 +7,7 @@
 #include <fstream>
 #include <iostream>
 #include <map>
+#include <limits>
 #include <stdexcept>
 #include <vector>
 
@@ -21,11 +23,82 @@ std::vector<std::string> fields(const std::string& line)
     if (!line.empty() && line.back() == ',') values.emplace_back();
     return values;
 }
+
+void test_handle_mapping()
+{
+    const std::array<double, 2> anchor{1., 2.};
+    const std::array<double, 7> actual{123., 17., 83., 84., 85., 1151., 17.};
+    const std::array<double, 7> initial{30., 9., 0., 0., 0., 30., 13.};
+    std::array<double, 7> refer{};
+    check(externalhandle::map(anchor, anchor, actual, initial, 123., 103., refer), "Initial handle mapping");
+    for (std::size_t axis = 0; axis < refer.size(); ++axis)
+        require_close(refer[axis] + initial[axis], actual[axis]);
+    check(externalhandle::map({1.01, 2.5}, anchor, actual, initial, 123., 103., refer), "Combined motion");
+    require_close(refer[0] + initial[0], 115.5);
+    require_close(refer[5] + initial[5], 1143.5);
+    require_close(refer[1] + initial[1], 17. - 90. / 3.14159265358979323846);
+    require_close(refer[6] + initial[6], refer[1] + initial[1]);
+    require_close(refer[4] + initial[4], 85.);
+    check(externalhandle::map({0.5, 2.}, anchor, actual, initial, 123., 103., refer), "Reverse input");
+    require_close(refer[0] + initial[0], 123.);
+    require_close(refer[5] + initial[5], 1151.);
+    check(externalhandle::map({2., 2.}, anchor, actual, initial, 123., 103., refer), "Forward limit");
+    require_close(refer[0] + initial[0], 103.);
+    require_close(refer[4] + initial[4], 85.);
+    require_close(refer[5] + initial[5], 1131.);
+    const std::array<double, 7> next_actual{123., -21., 83., 84., 85., 1131., -21.};
+    const std::array<double, 2> next_anchor{2., -1.};
+    check(externalhandle::map(next_anchor, next_anchor, next_actual, initial, 123., 103., refer), "Rebase");
+    for (std::size_t axis = 0; axis < refer.size(); ++axis)
+        require_close(refer[axis] + initial[axis], next_actual[axis]);
+    check(!externalhandle::map(anchor, anchor, actual, initial, 103., 123., refer), "Invalid bounds accepted");
+    check(!externalhandle::map({std::numeric_limits<double>::quiet_NaN(), 2.}, anchor,
+        actual, initial, 123., 103., refer), "Non-finite input accepted");
+}
+
+void test_handle_boundary_absorption()
+{
+    std::array<double, 2> anchor{1.0, 2.0};
+    std::array<double, 7> axis_anchor{123.0, 17.0, 83.0, 84.0, 85.0, 1151.0, 17.0};
+    const std::array<double, 7> initial{30.0, 9.0, 0.0, 0.0, 0.0, 30.0, 13.0};
+    std::array<double, 7> refer{};
+    check(externalhandle::absorb_axis1_boundary_overtravel(
+        {2.0, 2.0}, anchor, axis_anchor, 103.0, 1131.0, 123.0, 103.0),
+        "Boundary overtravel must be absorbed");
+    check(anchor[0] == 2.0 && axis_anchor[0] == 103.0 && axis_anchor[5] == 1131.0,
+        "Boundary baseline must follow actual position");
+    check(externalhandle::map({2.0, 2.0}, anchor, axis_anchor, initial, 123.0, 103.0, refer),
+        "Boundary remap");
+    require_close(refer[0] + initial[0], 103.0);
+    require_close(refer[5] + initial[5], 1131.0);
+    check(externalhandle::map({1.99, 2.0}, anchor, axis_anchor, initial, 123.0, 103.0, refer),
+        "Reverse after boundary");
+    check(refer[0] + initial[0] > 103.0 && refer[0] + initial[0] < 111.0,
+        "Reverse must resume continuously from boundary");
+
+    anchor = {1.0, 2.0};
+    axis_anchor = {103.0, 17.0, 83.0, 84.0, 85.0, 1131.0, 17.0};
+    check(externalhandle::absorb_axis1_boundary_overtravel(
+        {0.0, 2.0}, anchor, axis_anchor, 123.0, 1151.0, 123.0, 103.0),
+        "Upper boundary overtravel must be absorbed");
+    check(externalhandle::map({0.0, 2.0}, anchor, axis_anchor, initial, 123.0, 103.0, refer),
+        "Upper boundary remap");
+    require_close(refer[0] + initial[0], 123.0);
+    check(externalhandle::map({0.01, 2.0}, anchor, axis_anchor, initial, 123.0, 103.0, refer),
+        "Reverse after upper boundary");
+    check(refer[0] + initial[0] < 123.0 && refer[0] + initial[0] > 115.0,
+        "Upper reverse must resume continuously");
+    check(!externalhandle::absorb_axis1_boundary_overtravel(
+        {0.0, 2.0}, anchor, axis_anchor, std::numeric_limits<double>::quiet_NaN(), 1151.0,
+        123.0, 103.0), "Invalid actual feedback must not rebase");
+}
 }
 
 int main(int argc, char** argv)
 {
     try {
+        test_handle_mapping();
+        test_handle_boundary_absorption();
         check(argc == 3, "Expected PLC trace and output directory");
         const std::filesystem::path output = std::filesystem::u8path(argv[2]);
         std::filesystem::create_directories(output);
@@ -41,7 +114,7 @@ int main(int argc, char** argv)
         config.cycle_count = 3;
         config.cylinder1_coupling_enabled = true;
         config.cylinder3_coupling_enabled = false;
-        require_close(externalvalidation::total_forward(config), 70.);
+        require_close(externalvalidation::total_forward(config), 60.);
         check(std::string(programmed_delivery_mode_name(config.mode)) == "external_validation", "Mode name");
         check(is_catheter_motion(config.mode) && !is_catheter_motion(ProgrammedDeliveryMode::Guidewire), "Axis family");
         ForceZeroState zero;
@@ -59,15 +132,16 @@ int main(int argc, char** argv)
             s.sync_state = static_cast<std::uint8_t>(number("sync_state"));
             s.cycle_index = static_cast<std::uint16_t>(number("cycle_index"));
             s.event_sequence = static_cast<std::uint32_t>(number("event_sequence"));
-            s.axis1_pos = number("axis1_pos"); s.axis1_vel = number("axis1_vel");
-            s.axis6_pos = number("axis6_pos"); s.axis6_vel = number("axis6_vel");
-            s.axis2_pos = 0; s.axis7_pos = 37.;
+            s.axis1_pos = number("axis1_pos"); s.axis1_vel = number("axis1_vel"); s.axis1_acc = number("axis1_acc");
+            s.axis2_pos = number("axis2_pos"); s.axis2_vel = number("axis2_vel"); s.axis2_acc = number("axis2_acc");
+            s.axis5_pos = number("axis5_pos"); s.axis5_vel = number("axis5_vel"); s.axis5_acc = number("axis5_acc");
+            s.axis6_pos = number("axis6_pos"); s.axis6_vel = number("axis6_vel"); s.axis6_acc = number("axis6_acc");
+            s.axis7_pos = number("axis7_pos"); s.axis7_vel = number("axis7_vel"); s.axis7_acc = number("axis7_acc");
             s.cylinder1 = static_cast<std::uint16_t>(number("cylinder1"));
             s.cylinder2 = static_cast<std::uint16_t>(number("cylinder2"));
             s.cylinder3 = static_cast<std::uint16_t>(number("cylinder3"));
             s.cylinder4 = static_cast<std::uint16_t>(number("cylinder4"));
             const double t = s.plc_time_us * 1e-6;
-            s.axis1_acc = s.phase == 6 ? 500. : 0.;
             s.fn1 = static_cast<short>(200 + 30 * std::sin(t * 12) + (s.phase == 6 ? 180 : 0));
             s.ft1 = static_cast<short>(-60 + 12 * std::cos(t * 9));
             s.fn2 = static_cast<short>(500 + 25 * std::sin(t * 10) + (s.phase == 6 ? 28 : 0));
@@ -119,8 +193,15 @@ int main(int argc, char** argv)
         auto invalid = fields(empty.str().substr(0, empty.str().size() - 1));
         std::istringstream header_stream(manual.str());
         std::getline(header_stream, line);
-        check(invalid.size() == fields(line).size(), "Invalid row/header width");
-        check(invalid[26].empty() && invalid[30].empty() && invalid[56] == "0" && invalid[57] == "0", "Invalid physical columns");
+        const auto sample_header = fields(line);
+        check(invalid.size() == sample_header.size(), "Invalid row/header width");
+        const auto column = [&](const std::string& name) {
+            const auto found = std::find(sample_header.begin(), sample_header.end(), name);
+            check(found != sample_header.end(), "Missing physical column");
+            return static_cast<std::size_t>(found - sample_header.begin());
+        };
+        check(invalid[column("fn1_cal_delta_N")].empty() && invalid[column("fn2_cal_delta_N")].empty()
+            && invalid[column("force_valid")] == "0" && invalid[column("model_valid")] == "0", "Invalid physical columns");
         auto s = samples.front();
         s.model_valid = false;
         auto cal = forcecal::calculate(s.fn1, s.ft1, s.fn2, s.ft2, zero.value, true);
@@ -170,7 +251,7 @@ int main(int argc, char** argv)
         std::ifstream dual_file(std::filesystem::u8path(legacy.directory()) / "samples_1khz.csv");
         std::getline(dual_file, line);
         check(line.find("sync_state") == std::string::npos, "Legacy schema changed");
-        std::cout << "PASS: external calibration, recording, manual parity, invalid data, curve cursor\n"
+        std::cout << "PASS: handle mapping, external calibration, recording, manual parity, invalid data, curve cursor\n"
             << directory.u8string() << '\n';
     } catch (const std::exception& ex) {
         std::cerr << ex.what() << '\n';

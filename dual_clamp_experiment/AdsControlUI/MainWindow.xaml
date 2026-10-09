@@ -56,8 +56,8 @@
         <Border Grid.Row="1" Background="#FFFFFF" BorderBrush="{StaticResource BorderBrushColor}" BorderThickness="1" CornerRadius="8" Padding="14,10" Margin="0,0,0,12">
             <WrapPanel VerticalAlignment="Center">
                 <TextBlock Text="实验模式" FontWeight="SemiBold" VerticalAlignment="Center" Margin="0,0,6,0" Foreground="{StaticResource Ink}"/>
-                <ComboBox x:Name="ExperimentModeBox" Width="190" SelectedIndex="0" SelectionChanged="ExperimentMode_Changed" Margin="0,0,14,0">
-                    <ComboBoxItem Content="旧双机构对照模式" Tag="legacy"/>
+                <ComboBox x:Name="ExperimentModeBox" Width="190" SelectedIndex="1" SelectionChanged="ExperimentMode_Changed" Margin="0,0,14,0">
+                    <ComboBoxItem Content="旧双机构对照模式" Tag="legacy" Visibility="Collapsed" IsEnabled="False"/>
                     <ComboBoxItem Content="导管程序递送测试" Tag="catheter"/>
                     <ComboBoxItem Content="导丝程序递送测试" Tag="guidewire"/>
                     <ComboBoxItem Content="外源验证模式" Tag="external_validation"/>
@@ -83,6 +83,7 @@
                 <!-- 操作按钮组 -->
                 <Button Content="连接/重连" Click="Connect_Click" Padding="14,6" Margin="0,0,6,0"/>
                 <Button Content="连接ADS" Click="ConnectAds_Click" Padding="12,6" Margin="0,0,6,0"/>
+                <Button Content="启动自检" Click="SelfCheck_Click" Padding="12,6" Margin="0,0,6,0"/>
                 <Button x:Name="PrepareButton" Content="准备定位" Click="Prepare_Click" Style="{StaticResource TintBtnStyle}" Padding="14,6" Margin="0,0,6,0"/>
                 <Button x:Name="StartButton" Content="开始测试" Click="Start_Click" Style="{StaticResource AccentBtnStyle}" Padding="18,6" Margin="0,0,6,0"/>
                 <Button x:Name="ZeroButton" Content="力感取零点" Click="Zero_Click" Padding="12,6" Margin="0,0,6,0"/>
@@ -429,8 +430,19 @@
                                     <TextBlock Grid.Row="20" Text="重新夹紧后等待 (ms)" VerticalAlignment="Center" Foreground="#475569" FontSize="12.5" Margin="0,3"/>
                                     <TextBox x:Name="ProgramReclampWait" Grid.Row="20" Grid.Column="1" Text="150" Margin="0,3" Height="28" ToolTip="配合电缸恢复后，进入下一阶段前的稳定等待"/>
                                 </Grid>
+                                <StackPanel x:Name="ProgramForwardPausePanel" Visibility="Collapsed" Margin="0,10,0,0">
+                                    <CheckBox x:Name="ProgramForwardPauseEnabled" Content="启用前进暂停" IsChecked="False" Margin="0,0,0,6"/>
+                                    <Grid IsEnabled="{Binding IsChecked, ElementName=ProgramForwardPauseEnabled}">
+                                        <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="100"/></Grid.ColumnDefinitions>
+                                        <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+                                        <TextBlock Text="前进距离 (mm)" VerticalAlignment="Center" Foreground="#475569" FontSize="12.5"/>
+                                        <TextBox x:Name="ProgramForwardPauseDistance" Grid.Column="1" Text="10" Height="28" Margin="0,3" ToolTip="从每段前进的起点计算；每段最多暂停一次"/>
+                                        <TextBlock Grid.Row="1" Text="停留时间 (s)" VerticalAlignment="Center" Foreground="#475569" FontSize="12.5"/>
+                                        <TextBox x:Name="ProgramForwardPauseSeconds" Grid.Row="1" Grid.Column="1" Text="3" Height="28" Margin="0,3" ToolTip="0.001～60秒，最多三位小数；停稳后计时并自动继续"/>
+                                    </Grid>
+                                </StackPanel>
                                 <Border Background="#F0FDF4" BorderBrush="#BBF7D0" BorderThickness="1" CornerRadius="6" Padding="10,8" Margin="0,10,0,0">
-                                    <TextBlock Text="PLC上电后自动自检；界面只等待自检完成，不发送自检请求。未勾选配合时，对应电缸1或电缸3保持正常输送值400。" TextWrapping="Wrap" Foreground="#166534" FontSize="12" LineHeight="16"/>
+                                    <TextBlock Text="启动自检会移动机构至限位，请先确认机构可安全运动；点击后直接发送自检请求。未勾选配合时，对应电缸1或电缸3保持正常输送值400。" TextWrapping="Wrap" Foreground="#166534" FontSize="12" LineHeight="16"/>
                                 </Border>
                             </StackPanel>
                         </StackPanel>

@@ -5,6 +5,7 @@
 #include "ADSComm1.h"
 
 #include <string>
+#include <array>
 #include <vector>
 
 class ProgrammedDeliveryAds
@@ -16,12 +17,17 @@ public:
 	bool open();
 	void close();
 	bool is_open() const;
+	bool set_timeout(unsigned long timeout_ms);
 	std::string last_error() const;
 
 	bool select_mode(ProgrammedDeliveryMode mode);
 	bool read_mode_phase(ProgrammedDeliveryMode& mode, ProgrammedDeliveryPhase& phase,
 		std::uint32_t& status_error_id);
 	bool read_live(ProgrammedDeliveryLiveFrame& frame);
+	bool read_refer(std::array<double, 7>& refer);
+	bool read_handle_baseline(std::array<double, 7>& actual, std::array<double, 7>& init_pos);
+	bool read_handle_axis_positions(double& axis1, double& axis6);
+	bool write_refer(const std::array<double, 7>& refer, std::uint16_t cycle);
 	bool write_config(const ProgrammedDeliveryConfig& config, bool setup_request);
 	bool request_start();
 	bool request_abort();

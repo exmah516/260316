@@ -3,6 +3,9 @@
 #include <windows.h>
 #include <iostream>
 #include <filesystem>
+#include <array>
+#include <cmath>
+#include <limits>
 #include <vector>
 
 namespace handle582
@@ -28,7 +31,8 @@ public:
 
 		if (!load_dll())
 		{
-			std::cout << "[手柄582] 未找到或无法加载 FLCatheter.dll，手柄力反馈未激活。" << std::endl;
+			std::cout << "[手柄582] FLCatheter.dll或必需接口不可用。" << std::endl;
+			close();
 			return false;
 		}
 
@@ -36,22 +40,15 @@ public:
 		if (device_id_ < 0)
 		{
 			std::cout << "[手柄582] 打开设备失败（SN: " << serial_ << "），请确认USB连接或驱动正常。" << std::endl;
+			close();
 			return false;
 		}
 
-		int sn_actual = fn_getSerialNumber_ ? fn_getSerialNumber_(device_id_) : (int)serial_;
-		std::cout << "[手柄582] 成功连接设备！实际 SN: " << sn_actual << "（请求: " << serial_ << "），启动力反馈伺服循环。" << std::endl;
-
-		if (fn_startServoLoop_)
-		{
-			fn_startServoLoop_(sync_callback, nullptr);
-			servo_loop_started_ = true;
-		}
-
-		if (fn_enableForces_)
-		{
-			fn_enableForces_(true, device_id_);
-		}
+		if (fn_getSerialNumber_(device_id_) != static_cast<int>(serial_)) { close(); return false; }
+		fn_enableForces_(false, device_id_);
+		fn_startServoLoop_(sync_callback, this);
+		servo_loop_started_ = true;
+		if (!fn_isServoLoopRunning_()) { close(); return false; }
 
 		connected_ = true;
 		last_sent_force_ = 0.0;
@@ -88,11 +85,11 @@ public:
 	{
 		if (!connected_ && dll_handle_ == nullptr) return;
 
-		if (device_id_ >= 0)
+		const bool device_open = device_id_ >= 0;
+		if (device_open)
 		{
 			reset();
 			if (fn_enableForces_) fn_enableForces_(false, device_id_);
-			device_id_ = -1;
 		}
 
 		if (servo_loop_started_ && fn_stopServoLoop_)
@@ -101,7 +98,7 @@ public:
 			servo_loop_started_ = false;
 		}
 
-		if (fn_closeDevice_)
+		if (device_open && fn_closeDevice_)
 		{
 			fn_closeDevice_();
 		}
@@ -113,16 +110,28 @@ public:
 		}
 
 		connected_ = false;
+		device_id_ = -1;
 	}
 
 	bool is_connected() const { return connected_; }
+	bool poll_joints(std::array<double, 2>& joints)
+	{
+		if (!connected_ || device_id_ < 0 || !fn_isServoLoopRunning_() ||
+			fn_getSerialNumber_(device_id_) != static_cast<int>(serial_)) return false;
+		double values[2] = { std::numeric_limits<double>::quiet_NaN(), std::numeric_limits<double>::quiet_NaN() };
+		fn_getJoints_(values, device_id_);
+		if (!std::isfinite(values[0]) || !std::isfinite(values[1])) return false;
+		joints = { values[0], values[1] };
+		return true;
+	}
 	double last_sent_force() const { return last_sent_force_; }
 	DWORD serial() const { return serial_; }
 
 private:
-	static int __stdcall sync_callback(void* /*param*/)
+	static int __stdcall sync_callback(void* param)
 	{
-		return 0;
+		const auto* self = static_cast<Handle582Feedback*>(param);
+		return self->fn_deviceStatus_(self->device_id_);
 	}
 
 	bool load_dll()
@@ -165,8 +174,12 @@ private:
 		fn_sendForce_ = reinterpret_cast<FnSendForce>(GetProcAddress(dll_handle_, "sendForce"));
 		fn_getSerialNumber_ = reinterpret_cast<FnGetSerialNumber>(GetProcAddress(dll_handle_, "getSerialNumber"));
 		fn_deviceStatus_ = reinterpret_cast<FnDeviceStatus>(GetProcAddress(dll_handle_, "deviceStatus"));
+		fn_getJoints_ = reinterpret_cast<FnGetJoints>(GetProcAddress(dll_handle_, "getJoints"));
+		fn_isServoLoopRunning_ = reinterpret_cast<FnIsServoLoopRunning>(GetProcAddress(dll_handle_, "isServoLoopRunning"));
 
-		return fn_openDevice_ && fn_sendForce_;
+		return fn_openDevice_ && fn_closeDevice_ && fn_getJoints_ && fn_getSerialNumber_ &&
+			fn_startServoLoop_ && fn_stopServoLoop_ && fn_isServoLoopRunning_ &&
+			fn_enableForces_ && fn_deviceStatus_;
 	}
 
 	using FnOpenDevice = int(*)(DWORD sn);
@@ -177,6 +190,8 @@ private:
 	using FnSendForce = void(*)(double force[], double torque, int id);
 	using FnGetSerialNumber = int(*)(int id);
 	using FnDeviceStatus = int(*)(int id);
+	using FnGetJoints = void(*)(double joints[], int id);
+	using FnIsServoLoopRunning = bool(*)();
 
 	DWORD serial_ = 582;
 	HMODULE dll_handle_ = nullptr;
@@ -193,6 +208,8 @@ private:
 	FnSendForce fn_sendForce_ = nullptr;
 	FnGetSerialNumber fn_getSerialNumber_ = nullptr;
 	FnDeviceStatus fn_deviceStatus_ = nullptr;
+	FnGetJoints fn_getJoints_ = nullptr;
+	FnIsServoLoopRunning fn_isServoLoopRunning_ = nullptr;
 };
 
 } // namespace handle582

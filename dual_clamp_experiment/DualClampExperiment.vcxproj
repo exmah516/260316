@@ -71,6 +71,8 @@
     <ClInclude Include="StandaloneRecordTypes.h" />
     <ClInclude Include="DualClampPipe.h" />
     <ClInclude Include="Handle582Feedback.h" />
+    <ClInclude Include="ExternalHandleMotion.h" />
+    <ClInclude Include="AdsArrayRead.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <Target Name="CopyRuntimeDependencies" AfterTargets="Build">

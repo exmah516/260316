@@ -71,6 +71,8 @@ namespace DualClampExperimentUI
             {
                 _appliedValidation = false;
                 ProgramPanelTitle.Text = "外源验证参数";
+                ProgramFinalDistance.IsEnabled = false;
+                ProgramFinalDistance.ToolTip = "外源手柄模式不执行最终前向段";
                 ProgramCylinder1Coupling.IsChecked = true;
                 ForceTitle.Text = "轴向力对比 (N)";
                 TorqueTitle.Text = "扭矩对比 (N·mm)";
@@ -88,11 +90,10 @@ namespace DualClampExperimentUI
             if (!_loaded || !IsExternalMode) return;
             try
             {
-                double total = D(Number(ProgramCycleCount)) * (D(Number(ProgramAxis1PreparePos)) - D(Number(ProgramAxis1TriggerPos)))
-                    + D(Number(ProgramFinalDistance));
+                double total = D(Number(ProgramCycleCount)) * (D(Number(ProgramAxis1PreparePos)) - D(Number(ProgramAxis1TriggerPos)));
                 double end = D(Number(ExternalAxis6PreparePos)) - total;
                 ExternalTravelText.Text = string.Format(CultureInfo.InvariantCulture,
-                    "轴6累计前进：{0:F3} mm\n预计终点距左限位：{1:F3} mm", total, end);
+                    "手柄 SN582 · 轴7同步轴2\n轴6净递送：{0:F3} mm\n预计终点距左限位：{1:F3} mm（无最终前向段）", total, end);
             }
             catch { ExternalTravelText.Text = "轴6预计行程：参数未完整"; }
         }
@@ -100,10 +101,9 @@ namespace DualClampExperimentUI
         private static string ExternalSyncName(int state)
         {
             switch (state) {
-                case 1: return "等待主从耦合";
-                case 2: return "1:1已耦合";
-                case 3: return "等待主从解除";
-                case 4: return "已解除耦合";
+                case 1: return "等待手柄重新基准";
+                case 2: return "手柄递送 · 轴6双向跟随";
+                case 4: return "自动回退阶段 · 轴6保持";
                 default: return "轴6独立保持";
             }
         }
@@ -114,7 +114,8 @@ namespace DualClampExperimentUI
             ExternalParameters.IsEnabled = editable;
             ProgramCylinder1Coupling.IsEnabled = false;
             ProgramAxis1PreparePos.IsEnabled = ProgramAxis1TriggerPos.IsEnabled =
-                ProgramCycleCount.IsEnabled = ProgramFinalDistance.IsEnabled = editable;
+                ProgramCycleCount.IsEnabled = editable;
+            ProgramFinalDistance.IsEnabled = false;
             LiveMotionText.Text = string.Format(CultureInfo.InvariantCulture,
                 "轴1：{0:F3} mm / {1:F3} mm/s / {2:F3} mm/s²\n轴6：{3:F3} mm / {4:F3} mm/s / {5:F3} mm/s²\n轴2/轴7：{6:F3}° / {7:F3}°\n电缸1/2/3/4：{8} / {9} / {10} / {11}",
                 D(p[8]), D(p[9]), D(p[10]), D(p[17]), D(p[18]), D(p[19]), D(p[11]), D(p[20]), p[27], p[28], p[29], p[30]);

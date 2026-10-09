@@ -9,18 +9,21 @@
 #include "Handle582Feedback.h"
 
 #include <mutex>
+#include <future>
+#include <atomic>
 #include <string>
+#include <thread>
 #include <vector>
 
 class ProgrammedDeliveryController
 {
 public:
 	ProgrammedDeliveryController();
+	~ProgrammedDeliveryController();
 
 	bool open_ads();
 	void close_ads();
 	bool is_ads_open() const;
-	void set_shared_selfcheck_state(bool done, bool busy);
 	bool select_mode(ProgrammedDeliveryMode mode);
 	bool prepare(const ProgrammedDeliveryConfig& config);
 	bool start();
@@ -41,6 +44,7 @@ public:
 	std::string external_curve_response(std::uint64_t after, std::uint64_t generation) const;
 
 private:
+	bool open_ads_locked();
 	bool validate_config(const ProgrammedDeliveryConfig& config, std::string& error) const;
 	bool write_metadata(const std::string& directory, std::string& error) const;
 	bool write_samples_csv(const std::string& directory, const std::vector<ProgrammedDeliverySample>& samples, std::string& error) const;
@@ -48,20 +52,38 @@ private:
 
 	mutable std::mutex mutex_;
 	ProgrammedDeliveryAds ads_;
+	ProgrammedDeliveryAds handle_ads_;
 	ProgrammedDeliveryConfig config_{};
 	ProgrammedDeliveryLiveFrame live_{};
 	std::string last_error_;
 	bool started_ = false;
 	ExperimentStreamAds stream_ads_;
+	struct PendingStreamBlock
+	{
+		bool ok = false;
+		int slot = -1;
+		std::uint32_t sequence = 0;
+		std::vector<ExperimentStreamSample> samples;
+		std::string error;
+	};
+	std::future<PendingStreamBlock> stream_block_future_;
+	bool stream_block_pending_ = false;
 	ExperimentStreamRecorder recorder_;
 	ExperimentStreamStatus stream_status_{};
 	std::uint32_t expected_block_sequence_ = 0;
 	std::uint32_t expected_sample_index_ = 0;
 	bool zero_file_written_ = false;
-	bool shared_selfcheck_done_ = false;
-	bool shared_selfcheck_busy_ = false;
-	bool shared_selfcheck_valid_ = false;
+	handle582::Handle582Feedback handle_582_{582};
+	bool handle_anchor_valid_ = false;
+	std::array<double, 2> handle_anchor_{};
+	std::array<double, 7> handle_reference_{};
+	std::array<double, 7> handle_axis_anchor_{};
+	std::array<double, 7> handle_init_pos_{};
+	std::uint16_t handle_cycle_ = 0;
+	bool handle_phase_active_ = false;
 	void poll_stream_locked();
+	void handle_loop();
+	void stop_handle_loop();
 	void reset_model_locked(const char* reason = "restart");
 	clampdynamics::Predictor predictor_;
 	clampdynamics::OperationGate illustration_gate_;
@@ -76,4 +98,13 @@ private:
 	forcepulse::Guard pulse_guard_;
 	double pulse_compute_us_ = 0.0;
 	ProgrammedDeliveryLiveFrame position_reference_{};
+	std::thread handle_thread_;
+	std::atomic<bool> handle_running_{false};
+	std::atomic<bool> handle_fault_{false};
+	std::atomic<bool> external_forward_phase_{false};
+	std::atomic<std::uint16_t> external_cycle_{0};
+	std::atomic<double> external_prepare_abs_{0.0};
+	std::atomic<double> external_trigger_abs_{0.0};
+	std::atomic<double> external_axis1_abs_{0.0};
+	std::atomic<double> external_axis6_abs_{0.0};
 };

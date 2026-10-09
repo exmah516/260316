@@ -33,8 +33,11 @@ public:
 	std::uint32_t event_sequence() const;
 
 	bool open_ads();
+	bool request_self_check();
+	SelfCheckState self_check() const { return ads_.self_check(); }
 	void close_ads();
 	bool is_ads_open() const;
+	bool has_legacy_interface() const;
 
 	DualClampAds& ads() { return ads_; }
 
@@ -52,7 +55,7 @@ private:
 	std::string abort_reason_;
 	std::uint32_t event_sequence_ = 0;
 	bool started_ = false;
-	bool selfcheck_requested_ = false;
+	bool legacy_available_ = false;
 	ExperimentStreamAds stream_ads_;
 	ExperimentStreamRecorder recorder_;
 	ExperimentStreamStatus stream_status_{};

@@ -40,6 +40,15 @@ VAR
     forward_done : BOOL;
     final_done : BOOL;
     motion_allowed : BOOL;
+    pause_enabled : BOOL := FALSE;
+    pause_distance : LREAL := 10.0;
+    pause_duration_ms : UDINT := 3000;
+    pause_pending : BOOL := FALSE;
+    pause_wait_active : BOOL := FALSE;
+    pause_at_end : BOOL := FALSE;
+    pause_timer : TON;
+    forward_target_abs : LREAL;
+    final_target_abs : LREAL;
 END_VAR]]></Declaration>
     <Implementation>
       <ST><![CDATA[// 新模式完全使用 MC_MoveAbsolute，不读取手柄参考值。
@@ -223,6 +232,40 @@ IF ((state = 10) OR (state = 11) OR (state = 12)) AND G.program_test_setup_req T
     END_FOR
 END_IF
 
+// 暂停只在导管前进段内生效；到位后撤销执行信号，确保续行有新的上升沿。
+IF (state <> 4) AND (state <> 9) THEN
+    pause_pending := FALSE;
+    pause_wait_active := FALSE;
+END_IF
+pause_timer(IN := pause_wait_active, PT := UDINT_TO_TIME(pause_duration_ms));
+IF pause_pending AND (((state = 4) AND forward_done) OR ((state = 9) AND final_done)) THEN
+    pause_pending := FALSE;
+    pause_wait_active := TRUE;
+    G.program_test_wait_action := 3;
+    forward_exec := FALSE;
+    final_exec := FALSE;
+    forward_done := FALSE;
+    final_done := FALSE;
+ELSIF pause_wait_active AND pause_timer.Q THEN
+    pause_wait_active := FALSE;
+    G.program_test_wait_action := 0;
+    IF state = 4 THEN
+        IF pause_at_end THEN
+            forward_done := TRUE;
+        ELSE
+            forward_target_abs := G.program_test_trigger_target_abs;
+            forward_exec := TRUE;
+        END_IF
+    ELSIF state = 9 THEN
+        IF pause_at_end THEN
+            final_done := TRUE;
+        ELSE
+            final_target_abs := G.program_test_final_target_abs;
+            final_exec := TRUE;
+        END_IF
+    END_IF
+END_IF
+
 CASE state OF
 0: // Idle
     G.program_test_enable := FALSE;
@@ -270,6 +313,15 @@ CASE state OF
                 G.program_test_axis6_prepare_from_left_mm - G.program_test_axis6_trigger_from_left_mm)) THEN
             G.program_test_status_error_id := 16#7204;
             state := 12;
+        ELSIF G.program_test_forward_pause_enabled AND
+              ((active_mode <> 1) OR
+               NOT ((G.program_test_forward_pause_distance_mm > 0.0) AND
+                    (G.program_test_forward_pause_distance_mm < 1.7976931348623157E308) AND
+                    (G.program_test_forward_pause_distance_mm <=
+                     G.program_test_axis1_prepare_from_left_mm - G.program_test_axis1_trigger_from_left_mm)) OR
+               (G.program_test_forward_pause_duration_ms < 1) OR (G.program_test_forward_pause_duration_ms > 60000)) THEN
+            G.program_test_status_error_id := 16#7208;
+            state := 12;
         ELSIF (G.program_test_forward_velocity <= 0.0) OR (G.program_test_forward_acceleration <= 0.0) OR
               (G.program_test_forward_deceleration <= 0.0) OR (G.program_test_forward_jerk <= 0.0) OR
               (G.program_test_return_velocity <= 0.0) OR (G.program_test_return_acceleration <= 0.0) OR
@@ -282,6 +334,10 @@ CASE state OF
             state := 12;
         ELSE
             G.program_test_setup_busy := TRUE;
+            // 准备时锁存暂停参数，运行期间不受后续ADS改写影响。
+            pause_enabled := (active_mode = 1) AND G.program_test_forward_pause_enabled;
+            pause_distance := G.program_test_forward_pause_distance_mm;
+            pause_duration_ms := G.program_test_forward_pause_duration_ms;
             G.program_test_setup_done := FALSE;
             G.program_test_cycle_index := 0;
             G.program_test_cycle_total := G.program_test_cycle_count;
@@ -411,6 +467,10 @@ CASE state OF
     G.program_test_phase := 3;
     G.program_test_sample_arm := TRUE;
     IF baseline_timer.Q THEN
+        forward_target_abs := G.program_test_trigger_target_abs;
+        pause_pending := pause_enabled;
+        pause_at_end := pause_distance >= G.program_test_axis1_prepare_from_left_mm - G.program_test_axis1_trigger_from_left_mm;
+        IF pause_pending THEN forward_target_abs := G.program_test_return_target_abs - pause_distance; END_IF
         forward_exec := TRUE;
         state := 4;
     END_IF
@@ -457,7 +517,7 @@ CASE state OF
         G.program_test_error_source := 2;
         G.program_test_error_axis := INT_TO_USINT(moving_axis);
         G.program_test_error_phase := G.program_test_phase;
-        G.program_test_error_target_abs := G.program_test_trigger_target_abs;
+        G.program_test_error_target_abs := forward_target_abs;
         forward_exec := FALSE;
         state := 12;
     END_IF
@@ -557,9 +617,17 @@ CASE state OF
     G.program_test_sample_arm := TRUE;
     IF G.program_test_cycle_index < G.program_test_cycle_total THEN
         G.program_test_cycle_index := G.program_test_cycle_index + 1;
+        forward_target_abs := G.program_test_trigger_target_abs;
+        pause_pending := pause_enabled;
+        pause_at_end := pause_distance >= G.program_test_axis1_prepare_from_left_mm - G.program_test_axis1_trigger_from_left_mm;
+        IF pause_pending THEN forward_target_abs := G.program_test_return_target_abs - pause_distance; END_IF
         forward_exec := TRUE;
         state := 4;
     ELSIF G.program_test_final_forward_distance_mm > 0.0 THEN
+        final_target_abs := G.program_test_final_target_abs;
+        pause_pending := pause_enabled AND (pause_distance <= G.program_test_final_forward_distance_mm);
+        pause_at_end := pause_distance >= G.program_test_final_forward_distance_mm;
+        IF pause_pending THEN final_target_abs := G.program_test_return_target_abs - pause_distance; END_IF
         final_exec := TRUE;
         state := 9;
     ELSE
@@ -581,7 +649,7 @@ CASE state OF
         G.program_test_error_source := 4;
         G.program_test_error_axis := INT_TO_USINT(moving_axis);
         G.program_test_error_phase := G.program_test_phase;
-        G.program_test_error_target_abs := G.program_test_final_target_abs;
+        G.program_test_error_target_abs := final_target_abs;
         final_exec := FALSE;
         state := 12;
     END_IF
@@ -682,7 +750,15 @@ FOR i := 1 TO 7 DO
         Jerk := G.program_test_return_jerk, Execute := stop_exec[i]);
 END_FOR
 
-fb_forward_move(Axis := G.axis[moving_axis], Position := G.program_test_trigger_target_abs,
+// 中止、错误和离开前进段时，立即清除停留计时，禁止延迟恢复。
+IF (state <> 4) AND (state <> 9) THEN
+    pause_pending := FALSE;
+    pause_wait_active := FALSE;
+    IF G.program_test_wait_action = 3 THEN G.program_test_wait_action := 0; END_IF
+    pause_timer(IN := FALSE, PT := UDINT_TO_TIME(pause_duration_ms));
+END_IF
+
+fb_forward_move(Axis := G.axis[moving_axis], Position := forward_target_abs,
     Velocity := G.program_test_forward_velocity,
     Acceleration := G.program_test_forward_acceleration,
     Deceleration := G.program_test_forward_deceleration,
@@ -694,7 +770,7 @@ fb_return_move(Axis := G.axis[moving_axis], Position := G.program_test_return_ta
     Deceleration := G.program_test_return_deceleration,
     Jerk := G.program_test_return_jerk,
     Execute := return_exec);
-fb_final_move(Axis := G.axis[moving_axis], Position := G.program_test_final_target_abs,
+fb_final_move(Axis := G.axis[moving_axis], Position := final_target_abs,
     Velocity := G.program_test_forward_velocity,
     Acceleration := G.program_test_forward_acceleration,
     Deceleration := G.program_test_forward_deceleration,

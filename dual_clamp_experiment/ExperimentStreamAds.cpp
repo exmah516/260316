@@ -1,4 +1,5 @@
 #include "ExperimentStreamAds.h"
+#include "AdsArrayRead.h"
 
 #include <algorithm>
 #include <array>
@@ -15,8 +16,7 @@ namespace
 	{
 		values.resize(count);
 		if (count == 0) return true;
-		return comm.ADSReadSymbolOffset(symbol.c_str(), 0,
-			static_cast<unsigned long>(sizeof(T) * count), values.data());
+		return read_ads_array(comm, symbol.c_str(), 0, count, sizeof(T), values.data());
 	}
 
 	std::string block_symbol(int slot, const char* field)

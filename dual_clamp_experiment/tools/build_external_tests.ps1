@@ -13,11 +13,8 @@ $output = Join-Path $root 'x64\Debug_external'
 $objects = Join-Path $root 'obj\ExternalTests'
 $verification = Join-Path $output 'verification'
 New-Item -ItemType Directory -Force -Path $output, $objects, $verification | Out-Null
-$adsHeader = Get-ChildItem -LiteralPath (Split-Path $root -Parent) -Recurse -Filter 'ADSComm1.h' -File |
-    Where-Object { $_.FullName -notlike '*\.git-rewrite\*' } |
-    Select-Object -First 1
-if ($null -eq $adsHeader) { throw '找不到 ADSComm1.h' }
-$adsInclude = $adsHeader.DirectoryName
+$adsInclude = Join-Path (Split-Path $root -Parent) 'Vessel intervention Robot\260316\64位ADS - 相对路径 - 传数组 - 加上手柄\ADS\Include'
+if (-not (Test-Path -LiteralPath (Join-Path $adsInclude 'ADSComm1.h'))) { throw '找不到生产工程使用的 ADSComm1.h' }
 $adsIncludeForBuild = Join-Path $env:TEMP ("dual_clamp_ads_include_" + [Guid]::NewGuid().ToString("N"))
 New-Item -ItemType Junction -Path $adsIncludeForBuild -Target $adsInclude | Out-Null
 $flags = @('/nologo', '/std:c++17', '/EHsc', '/utf-8', '/O2', '/MD', '/DWIN32_LEAN_AND_MEAN', '/DNOMINMAX',
@@ -40,7 +37,15 @@ function Invoke-ExternalCompiler([string[]]$sources, [string]$outputExe) {
 }
 
 # 验证入口不链接ADS实现或生产main，不启动设备。
-& python "$PSScriptRoot\test_external_plc.py" --output $verification
+& python "$PSScriptRoot\test_ads_contract.py" "$verification\plc_symbols.txt"
+if ($LASTEXITCODE -ne 0) { throw 'PLC ADS接口核对失败' }
+Invoke-ExternalCompiler @("$PSScriptRoot\test_selfcheck_status.cpp", "$root\ProgrammedDeliveryAds.cpp") "$output\test_selfcheck_status.exe"
+& "$output\test_selfcheck_status.exe" "$verification\plc_symbols.txt"
+if ($LASTEXITCODE -ne 0) { throw '自检状态读取验证失败' }
+Invoke-ExternalCompiler @("$PSScriptRoot\test_host_selfcheck.cpp", "$root\DualClampAds.cpp") "$output\test_host_selfcheck.exe"
+& "$output\test_host_selfcheck.exe"
+if ($LASTEXITCODE -ne 0) { throw '主机会话与自检请求验证失败' }
+& python "$PSScriptRoot\test_handle_delivery.py" --output $verification
 if ($LASTEXITCODE -ne 0) { throw 'PLC离线状态机验证失败' }
 foreach ($name in @('test_external_validation', 'test_clamp_recording')) {
     Invoke-ExternalCompiler @("$PSScriptRoot\$name.cpp", "$root\ExperimentStreamRecorder.cpp",

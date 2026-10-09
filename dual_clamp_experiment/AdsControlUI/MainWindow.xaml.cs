@@ -17,7 +17,7 @@ namespace DualClampExperimentUI
 {
     public partial class MainWindow : Window
     {
-        private const string ExpectedBackendVersion = "PROGRAM_VERSION|20260927.2|";
+        private const string ExpectedBackendVersion = "PROGRAM_VERSION|20261009.1|";
         private NamedPipeClientStream? _pipe;
         private StreamWriter? _writer;
         private StreamReader? _reader;
@@ -31,6 +31,10 @@ namespace DualClampExperimentUI
         private bool _loaded;
         private bool _selfcheckDone;
         private bool _selfcheckBusy;
+        private bool _selfcheckValid;
+        private bool _motionSessionReady;
+        private DateTime _selfcheckUpdated;
+        private string _selfcheckRequestMessage = string.Empty;
         private bool _leftLimitValid;
         private bool _setupBusy;
         private bool _setupDone;
@@ -113,6 +117,9 @@ namespace DualClampExperimentUI
 
         private void DisconnectPipe()
         {
+            SetSelfCheckUnknown();
+            SetPipeStatus(false, "UI管道: 未连接");
+            SetAdsStatus(false, "ADS: 未连接");
             ResetCurveView();
             try
             {
@@ -136,10 +143,13 @@ namespace DualClampExperimentUI
                 _writer = new StreamWriter(pipe, new UTF8Encoding(false), 4096, true) { AutoFlush = true };
                 _reader = new StreamReader(pipe, new UTF8Encoding(false), false, 4096, true);
                 SetPipeStatus(true, "UI管道: 已连接");
-                await SendCommandInternalAsync("CONNECT_ADS");
                 string backendVersion = await SendCommandInternalAsync("PROGRAM_VERSION");
                 if (!backendVersion.StartsWith(ExpectedBackendVersion, StringComparison.Ordinal))
                     throw new InvalidOperationException("后端版本不匹配，请关闭旧 DualClampExperiment.exe 后重新启动当前构建");
+                await SendCommandInternalAsync("CONNECT_ADS");
+                await SendCommandInternalAsync("GET_SELF_CHECK");
+                if (CurrentMode != "legacy")
+                    await SendCommandInternalAsync("PROGRAM_MODE|mode=" + CurrentMode);
                 await SendCommandInternalAsync(CurrentMode == "legacy" ? "GET" : "GET_PROGRAM");
                 if (CurrentMode == "legacy") await SendCommandInternalAsync("GET_STANDALONE_RECORD");
             }
@@ -194,6 +204,7 @@ namespace DualClampExperimentUI
             LegacyPanel.Visibility = legacy ? Visibility.Visible : Visibility.Collapsed;
             ProgramPanel.Visibility = legacy ? Visibility.Collapsed : Visibility.Visible;
             bool guidewire = CurrentMode == "guidewire";
+            ProgramForwardPausePanel.Visibility = CurrentMode == "catheter" ? Visibility.Visible : Visibility.Collapsed;
             ProgramPanelTitle.Text = guidewire ? "导丝程序递送参数" : "导管程序递送参数";
             Visibility catheterVisibility = guidewire ? Visibility.Collapsed : Visibility.Visible;
             Visibility guidewireVisibility = guidewire ? Visibility.Visible : Visibility.Collapsed;
@@ -268,6 +279,20 @@ namespace DualClampExperimentUI
                     Int(ProgramReleaseWait), Int(ProgramReclampWait), Number(ProgramForwardVelocity), Number(ProgramForwardAcceleration),
                     Number(ProgramForwardDeceleration), Number(ProgramForwardJerk), Number(ProgramReturnVelocity), Number(ProgramReturnAcceleration),
                     Number(ProgramReturnDeceleration), Number(ProgramReturnJerk), Int(ProgramReleaseLead), Int(ProgramReclampLead), RecordSuffix());
+                bool pauseEnabled = mode == "catheter" && ProgramForwardPauseEnabled.IsChecked == true;
+                commandText += "|forward_pause_enabled=" + (pauseEnabled ? "1" : "0");
+                if (pauseEnabled)
+                {
+                    decimal milliseconds = decimal.Parse(Number(ProgramForwardPauseSeconds), CultureInfo.InvariantCulture) * 1000m;
+                    double distance = double.Parse(Number(ProgramForwardPauseDistance), CultureInfo.InvariantCulture);
+                    double travel = double.Parse(Number(ProgramAxis1PreparePos), CultureInfo.InvariantCulture)
+                        - double.Parse(Number(ProgramAxis1TriggerPos), CultureInfo.InvariantCulture);
+                    if (milliseconds < 1m || milliseconds > 60000m || decimal.Truncate(milliseconds) != milliseconds
+                        || double.IsNaN(distance) || double.IsInfinity(distance) || distance <= 0 || distance > travel)
+                        throw new InvalidOperationException("暂停距离须大于0且不超过周期行程；停留时间须为0.001～60秒，精度为毫秒");
+                    commandText += "|forward_pause_distance_mm=" + Number(ProgramForwardPauseDistance)
+                        + "|forward_pause_duration_ms=" + milliseconds.ToString("0", CultureInfo.InvariantCulture);
+                }
                 commandText += "|model_sign=" + (DynamicsSign.SelectedIndex == 1 ? "-1" : "1")
                     + "|model_validation=" + (DynamicsValidation.IsChecked == true ? "1" : "0")
                     + "|model_conditions_confirmed=" + (DynamicsConditions.IsChecked == true ? "1" : "0")
@@ -279,10 +304,12 @@ namespace DualClampExperimentUI
 
         private async Task PollAsync()
         {
+            if (_selfcheckValid && DateTime.UtcNow - _selfcheckUpdated > TimeSpan.FromMilliseconds(500)) SetSelfCheckUnknown();
             if (_isPolling || _pipe == null || !_pipe.IsConnected) return;
             _isPolling = true;
             try
             {
+                await SendAsync("GET_SELF_CHECK");
                 await SendAsync(CurrentMode == "legacy" ? "GET" : "GET_PROGRAM");
                 if (CurrentMode == "legacy") await SendAsync("GET_STANDALONE_RECORD");
                 else await SendAsync((IsExternalMode ? "PROGRAM_EXTERNAL_CURVES|" : "PROGRAM_CURVES|") + _curveCursor.ToString(CultureInfo.InvariantCulture)
@@ -291,9 +318,24 @@ namespace DualClampExperimentUI
             finally { _isPolling = false; }
         }
 
+        private async void SelfCheck_Click(object sender, RoutedEventArgs e)
+        {
+            var button = sender as Button;
+            if (button != null) button.IsEnabled = false;
+            try
+            {
+                SelfCheckText.Text = "PLC自检: 请求已发送，等待PLC消费确认";
+                string response = await SendAsync("SELF_CHECK");
+                _selfcheckRequestMessage = response.StartsWith("OK|SELF_CHECK|", StringComparison.Ordinal)
+                    ? string.Empty : response.StartsWith("ERROR|", StringComparison.Ordinal) ? response.Substring(6) : "启动结果未知，管道未返回确认";
+                await SendAsync("GET_SELF_CHECK");
+            }
+            finally { if (button != null) button.IsEnabled = true; }
+        }
+
         private async void Start_Click(object sender, RoutedEventArgs e)
         {
-            if (!_setupDone) { ErrorText.Text = "请等待PLC自动自检完成并完成准备定位"; return; }
+            if (!_selfcheckValid || !_selfcheckDone || !_setupDone) { ErrorText.Text = "请显式启动自检，等待完成后执行准备定位"; return; }
             if (CurrentMode != "legacy" && _appliedValidation &&
                 MessageBox.Show("请确认本次全程无器械、夹爪保持张开、机构仅轴向运动。\n"
                     + "模型选项不会改变电缸或运动指令；不满足条件请取消。",
@@ -444,13 +486,29 @@ namespace DualClampExperimentUI
 
         private async Task<string> SendCommandInternalAsync(string command)
         {
-            if (_pipe == null || !_pipe.IsConnected || _writer == null || _reader == null) return string.Empty;
+            if (_pipe == null || !_pipe.IsConnected || _writer == null || _reader == null)
+            {
+                SetSelfCheckUnknown();
+                ErrorText.Text = "UI管道未连接，命令未发送";
+                return string.Empty;
+            }
             try
             {
                 await _writer.WriteLineAsync(command);
-                string response = await _reader.ReadLineAsync() ?? string.Empty;
+                var responseTask = _reader.ReadLineAsync();
+                if (await Task.WhenAny(responseTask, Task.Delay(5000)) != responseTask)
+                    throw new TimeoutException("后端响应超时，命令执行结果未知");
+                string response = await responseTask ?? string.Empty;
                 if (string.IsNullOrEmpty(response)) { DisconnectPipe(); return string.Empty; }
                 ParseState(response);
+                if (response.StartsWith("ERROR|", StringComparison.Ordinal) &&
+                    (command == "GET" || command == "GET_PROGRAM" || command == "CONNECT_ADS"))
+                {
+                    _setupDone = false;
+                    PrepareButton.IsEnabled = StartButton.IsEnabled = ZeroButton.IsEnabled = false;
+                    PhaseText.Text = "实时状态未知/接口不可用";
+                }
+                if (response.StartsWith("ERROR|", StringComparison.Ordinal) && command == "GET_SELF_CHECK") SetSelfCheckUnknown();
                 return response;
             }
             catch (Exception ex) { DisconnectPipe(); ErrorText.Text = "管道通讯中断：" + ex.Message; return string.Empty; }
@@ -458,13 +516,61 @@ namespace DualClampExperimentUI
 
         private void ParseState(string response)
         {
-            if (response.StartsWith("STATE|", StringComparison.Ordinal)) ParseLegacyState(response);
+            if (response.StartsWith("SELF_CHECK_STATE|", StringComparison.Ordinal)) ParseSelfCheckState(response);
+            else if (response.StartsWith("STATE|", StringComparison.Ordinal)) ParseLegacyState(response);
             else if (response.StartsWith("PROGRAM_STATE|", StringComparison.Ordinal)) ParseProgramState(response);
             else if (response.StartsWith("PROGRAM_CURVES|", StringComparison.Ordinal)) ParseCurveResponse(response);
             else if (response.StartsWith("PROGRAM_EXTERNAL_CURVES|", StringComparison.Ordinal)) ParseExternalResponse(response);
             else if (response.StartsWith("STANDALONE_STATE|", StringComparison.Ordinal)) ParseStandaloneState(response);
-            else if (response.StartsWith("OK|CONNECT_ADS", StringComparison.Ordinal)) SetAdsStatus(true, "ADS: 正常 (Port 851)");
+            else if (response.StartsWith("OK|CONNECT_ADS", StringComparison.Ordinal))
+            {
+                SetAdsStatus(true, "ADS: 主机会话已连接 (Port 851)");
+                string[] fields = response.Split('|');
+                if (fields.Length > 2 && fields[2].Length > 0) ErrorText.Text = fields[2];
+            }
+            else if (response == "OK|DISCONNECT_ADS") { SetSelfCheckUnknown(); SetAdsStatus(false, "ADS: 未连接"); }
             else if (response.StartsWith("ERROR|", StringComparison.Ordinal)) ErrorText.Text = response.Substring(6);
+        }
+
+        private void SetSelfCheckUnknown()
+        {
+            _selfcheckValid = _selfcheckDone = _selfcheckBusy = false;
+            _motionSessionReady = false;
+            SelfCheckText.Text = "PLC自检: 状态未知";
+            PrepareButton.IsEnabled = StartButton.IsEnabled = ZeroButton.IsEnabled = false;
+        }
+
+        private void ParseSelfCheckState(string response)
+        {
+            string[] fields = response.Split('|');
+            if (fields.Length != 8 || fields[1] != "1" || !int.TryParse(fields[2], out int status) || status < 0 || status > 4 ||
+                (fields[3] != "0" && fields[3] != "1") || (fields[4] != "0" && fields[4] != "1") || (fields[5] != "0" && fields[5] != "1"))
+            {
+                SetSelfCheckUnknown();
+                SetAdsStatus(false, "ADS: 自检状态不可用");
+                if (fields.Length == 8 && fields[6].Length > 0)
+                {
+                    ErrorText.Text = fields[6];
+                    SelfCheckText.Text += "：" + fields[6];
+                }
+                return;
+            }
+            _selfcheckUpdated = DateTime.UtcNow;
+            _selfcheckValid = true;
+            _selfcheckDone = fields[3] == "1" && status == 4;
+            _selfcheckBusy = status == 2;
+            _motionSessionReady = _selfcheckDone && fields[5] == "0" && fields[7] == "6";
+            string state = status == 0 ? "未就绪" : status == 1 ? "等待显式启动" : status == 2 ? "执行中" : status == 3 ? "PLC拒绝启动" : _selfcheckDone ? "已完成" : "状态不一致";
+            SelfCheckText.Text = "PLC自检: " + state + (fields[4] == "1" ? "（请求待消费）" : string.Empty);
+            if (status == 2 || _selfcheckDone) _selfcheckRequestMessage = string.Empty;
+            if (_selfcheckRequestMessage.Length > 0) SelfCheckText.Text += "；" + _selfcheckRequestMessage;
+            SetAdsStatus(true, fields[5] == "1" ? "ADS: 已连接；运动会话待恢复" : "ADS: 主机会话正常 (Port 851)");
+            if (_motionSessionReady)
+            {
+                PrepareButton.IsEnabled = true;
+            }
+            else
+                PrepareButton.IsEnabled = StartButton.IsEnabled = ZeroButton.IsEnabled = false;
         }
 
         private void ParseLegacyState(string response)
@@ -473,10 +579,9 @@ namespace DualClampExperimentUI
             if (p.Length < 27) return;
             double a1 = D(p[2]), a6 = D(p[3]), v1 = D(p[4]), v6 = D(p[5]), acc1 = D(p[6]), acc6 = D(p[7]);
             LiveMotionText.Text = string.Format(CultureInfo.InvariantCulture, "轴1：{0:F3} mm / {1:F3} mm/s / {2:F3} mm/s²\n轴6：{3:F3} mm / {4:F3} mm/s / {5:F3} mm/s²\n轴2/轴7角度：{6:F3}° / {7:F3}°", a1, v1, acc1, a6, v6, acc6, D(p[8]), D(p[9]));
-            bool ads = p[14] == "1"; _selfcheckDone = p[15] == "1"; _selfcheckBusy = p[16] == "1"; _leftLimitValid = p[17] == "1"; _setupBusy = p[20] == "1"; _setupDone = p[21] == "1";
+            bool ads = p[14] == "1" && _motionSessionReady; _leftLimitValid = p[17] == "1"; _setupBusy = p[20] == "1"; _setupDone = p[21] == "1";
             PhaseText.Text = _selfcheckBusy ? "SelfCheck (正在执行自检)" : LegacyPhase(int.Parse(p[1], CultureInfo.InvariantCulture));
-            SelfCheckText.Text = _selfcheckBusy ? "PLC自检: 执行中" : _selfcheckDone ? "PLC自检: 已完成" : "PLC自检: 未完成";
-            CycleText.Text = "旧模式"; SetAdsStatus(ads, ads ? "ADS: 正常 (Port 851)" : "ADS: 未连接");
+            CycleText.Text = "旧模式";
             int legacyZeroBusy = 27, legacyZeroDone = 28, legacyError = 26;
             ZeroStatusText.Text = p.Length > legacyZeroDone && p[legacyZeroBusy] == "1" ? "力感零点：采集中" : p.Length > legacyZeroDone && p[legacyZeroDone] == "1" ? "力感零点：已完成" : "力感零点：未完成";
             string legacyDirectory = p.Length > 36 ? p[36] : string.Empty;
@@ -507,16 +612,8 @@ namespace DualClampExperimentUI
         {
             string[] p = response.Split('|');
             if (p.Length < 42) return;
-            int phase = int.Parse(p[2], CultureInfo.InvariantCulture); _setupBusy = p[5] == "1"; _setupDone = p[6] == "1"; _selfcheckDone = p[7] == "1";
-            bool ads = p[40] == "1";
-            _selfcheckBusy = p.Length > 64 && p[64] == "1";
-            SelfCheckText.Text = !ads
-                ? "PLC自检: 状态未知"
-                : _selfcheckBusy
-                    ? "PLC自检: 执行中"
-                    : _selfcheckDone
-                        ? "PLC自检: 已完成"
-                        : "PLC自检: 未完成";
+            int phase = int.Parse(p[2], CultureInfo.InvariantCulture); _setupBusy = p[5] == "1"; _setupDone = p[6] == "1";
+            bool ads = p[40] == "1" && _motionSessionReady;
             bool guidewire = CurrentMode == "guidewire";
             if (guidewire)
             {
@@ -535,17 +632,19 @@ namespace DualClampExperimentUI
             if (!string.IsNullOrWhiteSpace(programDirectory)) RecordStatusText.Text += "\n目录：" + programDirectory;
             ZeroValuesText.Text = p.Length > 47 ? string.Format(CultureInfo.InvariantCulture, "零点值（原始计数 count）\nfn1：{0:F3}  ft1：{1:F3}\nfn2：{2:F3}  ft2：{3:F3}", D(p[44]), D(p[45]), D(p[46]), D(p[47])) : "";
             int waitAction = p.Length > 53 ? int.Parse(p[53], CultureInfo.InvariantCulture) : 0;
-            PhaseText.Text = waitAction == 1 ? "等待电缸释放" : waitAction == 2 ? "等待重新夹紧" : ProgramPhase(phase);
+            PhaseText.Text = waitAction == 1 ? "等待电缸释放" : waitAction == 2 ? "等待重新夹紧" : waitAction == 3 ? "前进定点停留" : ProgramPhase(phase);
             string plcError = p[programError];
             if (!string.IsNullOrWhiteSpace(plcError))
                 ErrorText.Text = plcError;
             else if (p.Length > 39 && uint.TryParse(p[39], NumberStyles.Integer, CultureInfo.InvariantCulture, out uint statusError) && statusError != 0)
-                ErrorText.Text = statusError == 0x7101
+                ErrorText.Text = statusError == 0x7305
+                    ? "PLC暂未满足程序递送条件：轴正在重新上电、存在轴错误或主机通信未恢复"
+                    : statusError == 0x7101
                     ? "PLC拒绝进入程序递送：旧双机构尚未处于待机，请先停止旧模式并等待终态"
                     : statusError == 0x7102
                         ? "PLC拒绝切换模式：程序递送仍在运行或准备中，请先中止并等待终态"
                         : "PLC状态错误ID：" + statusError.ToString(CultureInfo.InvariantCulture);
-            if (p.Length > 58 && int.Parse(p[39], CultureInfo.InvariantCulture) != 0 && p[54] != "0")
+            if (p.Length > 58 && int.Parse(p[39], CultureInfo.InvariantCulture) != 0 && p[39] != "29445" && p[54] != "0")
             {
                 string source = p[54] == "1" ? "准备定位" : p[54] == "2" ? "前向至触发位置" : p[54] == "3" ? "回退" : p[54] == "4" ? "最终前向" : p[54] == "5" ? "主从耦合" : p[54] == "6" ? "主从解除" : "未知动作";
                 ErrorText.Text = p[55] == "1" || p[55] == "5" || p[55] == "6"
@@ -579,9 +678,9 @@ namespace DualClampExperimentUI
                     TorqueValueText.Text = "未取零";
                 }
             }
-            SetAdsStatus(ads, ads ? "ADS: 正常 (Port 851)" : "ADS: 未连接");
             PrepareButton.IsEnabled = ads && _selfcheckDone && !_selfcheckBusy && !_setupBusy; StartButton.IsEnabled = ads && _setupDone && phase == 2 && p.Length > programZeroDone && p[programZeroDone] == "1" && !_selfcheckBusy && !_setupBusy; ZeroButton.IsEnabled = ads && _selfcheckDone && _setupDone && !_selfcheckBusy && !_setupBusy && phase == 2;
             bool programCouplingEditable = ads && !_setupBusy && (phase == 0 || phase >= 10);
+            ProgramForwardPausePanel.IsEnabled = programCouplingEditable;
             DynamicsOptions.IsEnabled = programCouplingEditable;
             ProgramCylinder1Coupling.IsEnabled = programCouplingEditable;
             ProgramCylinder3Coupling.IsEnabled = programCouplingEditable;
@@ -601,11 +700,10 @@ namespace DualClampExperimentUI
             string[] p = response.Split('|');
             if (p.Length < 23) return;
             bool ads = p[1] == "1";
-            _standaloneSelfcheckDone = p[2] == "1";
+            _standaloneSelfcheckDone = _selfcheckValid && _selfcheckDone;
             int legacyPhase = int.Parse(p[3], CultureInfo.InvariantCulture);
             _standaloneLegacyBusy = legacyPhase >= 3 && legacyPhase <= 9 || legacyPhase == 14;
             _standaloneRecording = p[9] == "1";
-            SelfCheckText.Text = _standaloneSelfcheckDone ? "PLC自检: 已完成" : "PLC自检: 执行中或未完成";
             Cylinder1Current.Text = p[4]; Cylinder2Current.Text = p[5]; Cylinder3Current.Text = p[6]; Cylinder4Current.Text = p[7];
             ManualCylinderHint.Text = _standaloneSelfcheckDone
                 ? (_standaloneLegacyBusy ? "实验运动或夹爪切换中，电缸手动按钮暂时禁用。" : "电缸手动控制可用；独立记录可单独开始。")

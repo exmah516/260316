@@ -204,6 +204,9 @@ VAR_GLOBAL
 	program_test_axis7_angle_deg : LREAL := 0.0;
 	program_test_cycle_count		: UINT := 1;
 	program_test_final_forward_distance_mm : LREAL := 10.0;
+	program_test_forward_pause_enabled : BOOL := FALSE;
+	program_test_forward_pause_distance_mm : LREAL := 10.0;
+	program_test_forward_pause_duration_ms : UDINT := 3000;
 	program_test_cylinder1_coupling_enable : BOOL := TRUE;
 	program_test_cylinder3_coupling_enable : BOOL := TRUE;
 	// 程序递送模式的运动端电缸开闭量。开值用于释放，闭值用于夹紧。
@@ -232,7 +235,7 @@ VAR_GLOBAL
 	program_test_setup_busy		: BOOL := FALSE;
 	program_test_setup_done		: BOOL := FALSE;
 	program_test_status_error_id : UDINT := 0;
-	// 等待状态：0=无，1=等待释放，2=等待重新夹紧。
+	// 等待状态：0=无，1=等待释放，2=等待重新夹紧，3=前进定点停留。
 	program_test_wait_action : USINT := 0;
 	program_test_sync_state : USINT := 0; // 0独立保持，1等待耦合，2已耦合，3等待解除，4已解除
 	// 运动错误上下文：来源1=准备，2=前向，3=回退，4=最终前向，5=耦合，6=解除。

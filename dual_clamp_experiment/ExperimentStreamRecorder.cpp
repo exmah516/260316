@@ -264,7 +264,8 @@ bool ExperimentStreamRecorder::begin(const std::string& mode, const std::string&
 				"model_gate,velocity_mm_s,acceleration_mm_s2,inertia_N,viscous_N,"
 				"model_version,mass_kg,axial_sign,sign_verified,validation_mode,conditions_confirmed,"
 				"feedback_acceleration_mm_s2,used_acceleration_m_s2,sensor_prediction_N,display_prediction_N,"
-				"installation_axial_gain,acceleration_processing,model_status,reset_reason,physics_verified\n";
+				"installation_axial_gain,acceleration_processing,model_status,reset_reason,physics_verified,"
+				"motion_N,low_frequency_N,transient_N,wavelet_strength,event_type,event_relative_s,feedback_force_N\n";
 		}
 		if (!samples_ || !events_ || !zero_file_)
 		{
@@ -489,7 +490,9 @@ bool ExperimentStreamRecorder::write_program_header(ProgrammedDeliveryMode mode,
 	samples_ << ",record_axis1_nc_mm,record_axis2_nc_deg,record_axis6_nc_mm,record_axis7_nc_deg,"
 		"axis1_from_left_mm,axis6_from_left_mm,position_reference_valid,"
 		"fn_despiked_N,ft_despiked_N,pulse_valid,pulse_replaced,pulse_source_index,pulse_age_us,"
-		"pulse_status,pulse_locked,pulse_compute_us\n";
+		"pulse_status,pulse_locked,pulse_compute_us,"
+		"model_motion_N,model_low_frequency_N,model_transient_N,model_wavelet_strength,"
+		"model_event_type,model_event_relative_s,model_final_compensation_N,feedback_force_N\n";
 	if (!samples_) { error = "写入程序模式CSV表头失败"; return false; }
 	return true;
 }
@@ -688,8 +691,12 @@ bool ExperimentStreamRecorder::append_program(const std::vector<ProgrammedDelive
 			<< ',' << (mode == ProgrammedDeliveryMode::Guidewire ? s.axis6_acc : s.axis1_acc)
 			<< ',' << s.dynamics.acceleration_m_s2 << ',' << s.dynamics.sensor_prediction_N
 			<< ',' << s.dynamics.display_prediction_N << ',' << dynamics_config_.installation_gain
-			<< ",direct_feedback_no_added_filter," << s.dynamics.status
-			<< ',' << s.dynamics.reset_reason << ",0\n";
+			<< ",causal_event_compensation," << s.dynamics.status
+			<< ',' << s.dynamics.reset_reason << ",0"
+			<< ',' << s.dynamics.motion_N << ',' << s.dynamics.low_frequency_N
+			<< ',' << s.dynamics.transient_N << ',' << s.dynamics.wavelet_strength
+			<< ',' << s.dynamics.event_type << ',' << s.dynamics.event_relative_s
+			<< ',' << s.feedback_force_N << '\n';
 		if (last_event_sequence_ == static_cast<std::uint32_t>(-1) && s.phase == 3)
 		{
 			if (!write_event("BaselineStart", s.plc_time_us, s.cycle_index, s.phase, s.event_sequence, error)) return false;
@@ -746,7 +753,11 @@ bool ExperimentStreamRecorder::append_program(const std::vector<ProgrammedDelive
 		else rows << ',';
 		rows << ',' << s.pulse.valid << ',' << s.pulse.replaced << ',' << s.pulse.source_index
 			<< ',' << s.pulse.age_us << ',' << unsigned(s.pulse.status) << ',' << s.pulse.locked
-			<< ',' << s.pulse_compute_us << '\n';
+			<< ',' << s.pulse_compute_us
+			<< ',' << s.dynamics.motion_N << ',' << s.dynamics.low_frequency_N
+			<< ',' << s.dynamics.transient_N << ',' << s.dynamics.wavelet_strength
+			<< ',' << s.dynamics.event_type << ',' << s.dynamics.event_relative_s
+			<< ',' << s.dynamics.fn_N << ',' << s.feedback_force_N << '\n';
 		pulse_replaced_count_ += s.pulse.replaced ? 1 : 0;
 		pulse_compute_max_us_ = std::max(pulse_compute_max_us_,s.pulse_compute_us);
 		++sample_count_;
@@ -935,7 +946,7 @@ bool ExperimentStreamRecorder::write_json(const std::string& status, const std::
 	if (program_mode_)
 	{
 		if (mode_ == ProgrammedDeliveryMode::ExternalValidation) {
-			out << "  \"record_schema\": \"external-validation-v1\",\n";
+			out << "  \"record_schema\": \"external-validation-v2\",\n";
 			externalvalidation::write_metadata(out, program_config_);
 		} else {
 		out << "  \"record_schema\": \"program-pulse-position-v1\",\n"
@@ -976,6 +987,9 @@ bool ExperimentStreamRecorder::write_json(const std::string& status, const std::
 			<< "  \"return_deceleration_mm_s2\": " << program_config_.return_deceleration_mm_s2 << ",\n"
 			<< "  \"return_jerk_mm_s3\": " << program_config_.return_jerk_mm_s3 << ",\n"
 			<< "  \"release_wait_ms\": " << program_config_.release_wait_ms << ",\n"
+			<< "  \"forward_pause_enabled\": " << (program_config_.forward_pause_enabled ? "true" : "false") << ",\n"
+			<< "  \"forward_pause_distance_mm\": " << program_config_.forward_pause_distance_mm << ",\n"
+			<< "  \"forward_pause_duration_ms\": " << program_config_.forward_pause_duration_ms << ",\n"
 			<< "  \"reclamp_wait_ms\": " << program_config_.reclamp_wait_ms << ",\n"
 			<< "  \"release_lead_ms\": " << program_config_.release_lead_ms << ",\n"
 			<< "  \"reclamp_lead_ms\": " << program_config_.reclamp_lead_ms << ",\n";

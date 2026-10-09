@@ -1,0 +1,688 @@
+host_session_changed := G.host_session_id <> host_last_session_id;
+host_heartbeat_changed := host_session_changed OR
+	(G.host_heartbeat_sequence <> host_last_heartbeat_sequence);
+
+IF host_session_changed THEN
+	// 非零会话发生变化表示新的上位机接管，必须重新完成恢复握手。
+	IF host_last_session_id <> 0 THEN
+		host_timeout_latched := TRUE;
+	END_IF
+	host_last_session_id := G.host_session_id;
+END_IF
+
+IF host_heartbeat_changed THEN
+	host_last_heartbeat_sequence := G.host_heartbeat_sequence;
+END_IF
+
+host_heartbeat_seen := G.host_session_id <> 0;
+// 心跳变化的扫描周期将 TON 复位；序号连续 2s 不变化才判定通信超时。
+host_watchdog_timer(
+	IN:=host_heartbeat_seen AND NOT host_heartbeat_changed,
+	PT:=T#2S
+);
+IF (NOT host_heartbeat_seen) OR host_watchdog_timer.Q THEN
+	host_timeout_latched := TRUE;
+END_IF
+IF G.host_comm_timeout THEN
+	host_timeout_latched := TRUE;
+END_IF
+G.host_comm_timeout := host_timeout_latched;
+
+IF G.handle_reinit_req THEN
+	init_done := FALSE;
+	G.handle_reinit_done := FALSE;
+	G.handle_reinit_req := FALSE;
+
+	FOR i:=1 TO 7 DO
+		ext_setpoint_enabled[i] := FALSE;
+		spg_enable_exec[i] := FALSE;
+		spg_disable_exec[i] := FALSE;
+		return_state[i] := 0;
+		return_exec[i] := FALSE;
+		return_finish_error[i] := FALSE;
+		return_error_id_pending[i] := 0;
+		traj_pos[i] := 0.0;
+		traj_vel[i] := 0.0;
+		traj_acc[i] := 0.0;
+		host_hold_abs[i] := 0.0;
+		G.return_cmd[i].Req := FALSE;
+		G.return_cmd[i].Busy := FALSE;
+		G.return_cmd[i].Done := FALSE;
+		G.return_cmd[i].Error := FALSE;
+		G.return_cmd[i].ErrorId := 0;
+	END_FOR
+	host_hold_captured := FALSE;
+	host_timeout_prev := FALSE;
+
+	axis4_manual_state := 0;
+	axis4_request_dir_now := 0;
+	axis4_requested_dir := 0;
+	axis4_pending_dir := 0;
+	axis4_move_exec := FALSE;
+	axis4_stop_exec := FALSE;
+	axis4_finish_error := FALSE;
+	axis4_error_id_pending := 0;
+	G.axis4_fwd_req := FALSE;
+	G.axis4_rev_req := FALSE;
+	G.axis4_manual_busy := FALSE;
+	G.axis4_manual_done := FALSE;
+	G.axis4_manual_error := FALSE;
+	G.axis4_manual_error_id := 0;
+END_IF
+
+IF NOT init_done THEN
+	all_enabled := TRUE;
+	FOR i:=1 TO 7 DO
+		G.SetPointGenEnable[i](Axis:=G.axis[i], Execute:=TRUE);
+		IF NOT G.SetPointGenEnable[i].Done THEN
+			all_enabled := FALSE;
+		END_IF
+	END_FOR
+
+	IF all_enabled THEN
+		FOR j:=1 TO 7 DO
+			G.Act_pos[j] := G.axis[j].NcToPlc.ActPos - G.init_pos[j];
+			G.act_pos_from_left[j] := G.axis[j].NcToPlc.ActPos - G.leftlimit[j];
+			G.ref_slow[j] := G.Act_pos[j];
+			G.act_h[j] := G.Act_pos[j];
+			G.act_hf[j] := G.Act_pos[j];
+			G.refer[j] := G.Act_pos[j];
+			G.refer_from_left[j] := G.act_pos_from_left[j];
+			ext_setpoint_enabled[j] := TRUE;
+
+			FOR k:=1 TO 30 DO
+				act_hh[j][k] := G.Act_pos[j];
+			END_FOR
+			act_h_prev[j] := G.Act_pos[j];
+			traj_pos[j] := G.Act_pos[j];
+			traj_vel[j] := 0.0;
+			traj_acc[j] := 0.0;
+			IF slimit_enable[j] THEN
+				right_slimit[j] := G.leftlimit[j] + rslimit_distance[j];
+			END_IF
+			G.return_cmd[j].Busy := FALSE;
+			G.return_cmd[j].Done := FALSE;
+			G.return_cmd[j].Error := FALSE;
+			G.return_cmd[j].ErrorId := 0;
+		END_FOR
+
+		G.axis4_manual_busy := FALSE;
+		G.axis4_manual_done := FALSE;
+		G.axis4_manual_error := FALSE;
+		G.axis4_manual_error_id := 0;
+
+		init_done := TRUE;
+		// 通信超时未解除时不提前确认恢复；正式握手后会再次进入本初始化流程。
+		G.handle_reinit_done := NOT G.host_comm_timeout;
+	END_IF
+	RETURN;
+END_IF
+
+all_powered := TRUE;
+FOR i:=1 TO 7 DO
+	IF NOT G.power_output[i].Done THEN
+		all_powered := FALSE;
+		EXIT;
+	END_IF
+END_FOR
+
+has_axis_error := FALSE;
+FOR i:=1 TO 7 DO
+	IF G.axis[i].Status.Error OR G.power_output[i].Error OR G.reset_output[i].Error THEN
+		has_axis_error := TRUE;
+		EXIT;
+	END_IF
+END_FOR
+
+IF (NOT all_powered) OR has_axis_error THEN
+	G.estop_hold_req := TRUE;
+	FOR j:=1 TO 7 DO
+		G.Act_pos[j] := G.axis[j].NcToPlc.ActPos - G.init_pos[j];
+		G.act_pos_from_left[j] := G.axis[j].NcToPlc.ActPos - G.leftlimit[j];
+		G.refer[j] := G.Act_pos[j];
+		G.ref_slow[j] := G.Act_pos[j];
+		G.act_h[j] := G.Act_pos[j];
+		G.act_hf[j] := G.Act_pos[j];
+		G.refer_from_left[j] := G.act_pos_from_left[j];
+		FOR k:=1 TO 30 DO
+			act_hh[j][k] := G.Act_pos[j];
+		END_FOR
+		act_h_prev[j] := G.Act_pos[j];
+		traj_pos[j] := G.Act_pos[j];
+		traj_vel[j] := 0.0;
+		traj_acc[j] := 0.0;
+	END_FOR
+
+	G.gen_state := _err;
+	RETURN;
+END_IF
+
+IF G.host_comm_timeout THEN
+	G.handle_reinit_done := FALSE;
+
+	IF (NOT host_timeout_prev) OR (NOT host_hold_captured) THEN
+		// 仅在进入超时保持时采样一次。之后始终维持同一绝对位置，
+		// 避免 Actual -> Set Position 的逐周期回灌导致低频来回摆动。
+		FOR i:=1 TO 7 DO
+			host_hold_abs[i] := G.axis[i].NcToPlc.ActPos;
+		END_FOR
+		host_hold_captured := TRUE;
+	END_IF
+
+	IF NOT host_timeout_prev THEN
+		// 仅捕获超时发生时已经在运行的独立运动，禁止恢复后自动续跑。
+		FOR i:=1 TO 7 DO
+			host_return_stop_active[i] := return_enable[i] AND
+				((return_state[i] <> 0) OR G.return_cmd[i].Busy OR fb_return_move_abs[i].Busy);
+			host_return_stop_exec[i] := FALSE;
+		END_FOR
+		host_axis4_stop_active := (axis4_manual_state <> 0) OR fb_axis4_move_velocity.Busy;
+	END_IF
+
+	// 超时期间持续清除运动请求，避免上位机重连时把旧请求重新送入状态机。
+	G.axis1_fast_return := FALSE;
+	G.axis6_fast_retract := FALSE;
+	G.axis4_fwd_req := FALSE;
+	G.axis4_rev_req := FALSE;
+	G.startup_smoothing_bypass := FALSE;
+	axis4_move_exec := FALSE;
+	host_all_stopped := TRUE;
+
+	FOR i:=1 TO 7 DO
+		spg_enable_exec[i] := FALSE;
+		spg_disable_exec[i] := FALSE;
+		return_exec[i] := FALSE;
+		G.return_cmd[i].Req := FALSE;
+		G.return_cmd[i].Done := FALSE;
+
+		// 实际位置仍实时刷新用于诊断；外部参考始终保持超时边沿的锁存位置。
+		G.Act_pos[i] := G.axis[i].NcToPlc.ActPos - G.init_pos[i];
+		G.act_pos_from_left[i] := G.axis[i].NcToPlc.ActPos - G.leftlimit[i];
+		G.refer[i] := host_hold_abs[i] - G.init_pos[i];
+		G.ref_slow[i] := G.refer[i];
+		G.act_h[i] := G.refer[i];
+		G.act_hf[i] := G.refer[i];
+		G.refer_from_left[i] := host_hold_abs[i] - G.leftlimit[i];
+		FOR k:=1 TO 30 DO
+			act_hh[i][k] := G.refer[i];
+		END_FOR
+		act_h_prev[i] := G.refer[i];
+		traj_pos[i] := G.refer[i];
+		traj_vel[i] := 0.0;
+		traj_acc[i] := 0.0;
+
+		IF host_return_stop_active[i] THEN
+			IF fb_host_return_stop[i].Done THEN
+				host_return_stop_exec[i] := FALSE;
+				host_return_stop_active[i] := FALSE;
+			ELSIF fb_host_return_stop[i].Error THEN
+				// 拉低一个扫描周期清除错误，下一周期继续尝试受控停止。
+				host_return_stop_exec[i] := FALSE;
+				host_all_stopped := FALSE;
+			ELSE
+				host_return_stop_exec[i] := TRUE;
+				host_all_stopped := FALSE;
+			END_IF
+		ELSE
+			host_return_stop_exec[i] := FALSE;
+		END_IF
+		G.return_cmd[i].Busy := host_return_stop_active[i];
+
+		IF ext_setpoint_enabled[i] THEN
+			MC_ExtSetPointGenFeed(
+				Position:=host_hold_abs[i],
+				Velocity:=0.0,
+				Acceleration:=0.0,
+				Direction:=1,
+				Axis:=G.axis[i]);
+		END_IF
+
+		// 所有运动功能块在看门狗分支中仍保持每扫描调用。
+		G.SetPointGenEnable[i](Axis:=G.axis[i], Execute:=FALSE);
+		G.SetPointGenDisable[i](Axis:=G.axis[i], Execute:=FALSE);
+		fb_return_move_abs[i](
+			Axis:=G.axis[i],
+			Position:=return_target_abs[i],
+			Velocity:=return_velocity[i],
+			Acceleration:=return_acc[i],
+			Deceleration:=return_dec[i],
+			Jerk:=return_jerk[i],
+			Execute:=FALSE
+		);
+		fb_host_return_stop[i](
+			Axis:=G.axis[i],
+			Execute:=host_return_stop_exec[i],
+			Deceleration:=4000.0,
+			Jerk:=10000.0
+		);
+	END_FOR
+
+	IF host_axis4_stop_active THEN
+		IF fb_axis4_stop.Done THEN
+			axis4_stop_exec := FALSE;
+			host_axis4_stop_active := FALSE;
+		ELSIF fb_axis4_stop.Error THEN
+			// 拉低一个扫描周期清除错误，下一周期继续尝试受控停止。
+			axis4_stop_exec := FALSE;
+			host_all_stopped := FALSE;
+		ELSE
+			axis4_stop_exec := TRUE;
+			host_all_stopped := FALSE;
+		END_IF
+	ELSE
+		axis4_stop_exec := FALSE;
+	END_IF
+	G.axis4_manual_busy := host_axis4_stop_active;
+	G.axis4_manual_done := FALSE;
+
+	fb_axis4_move_velocity(
+		Axis:=G.axis[4],
+		Execute:=FALSE,
+		Velocity:=axis4_manual_velocity,
+		Acceleration:=axis4_manual_acc,
+		Deceleration:=axis4_manual_dec,
+		Jerk:=axis4_manual_jerk,
+		Direction:=axis4_manual_direction
+	);
+	fb_axis4_stop(
+		Axis:=G.axis[4],
+		Execute:=axis4_stop_exec,
+		Deceleration:=axis4_manual_dec,
+		Jerk:=axis4_manual_jerk
+	);
+
+	// 清请求并解除超时即为 PLC 对恢复请求的确认；随后复用既有重初始化流程。
+	IF G.host_recover_req AND host_heartbeat_seen AND
+		(NOT host_watchdog_timer.Q) AND host_all_stopped THEN
+		host_timeout_latched := FALSE;
+		G.host_comm_timeout := FALSE;
+		G.host_recover_req := FALSE;
+		G.handle_reinit_req := TRUE;
+	END_IF
+
+	host_timeout_prev := G.host_comm_timeout;
+	RETURN;
+END_IF
+
+host_timeout_prev := FALSE;
+host_hold_captured := FALSE;
+// 非超时状态收到的恢复请求没有业务含义，清除以免成为下一次超时的陈旧握手。
+G.host_recover_req := FALSE;
+
+G.estop_hold_req := FALSE;
+
+IF G.cylinder5_press_req THEN
+	G.cylinder5_value := 500;
+ELSE
+	G.cylinder5_value := 2000;
+END_IF
+
+FOR i:=1 TO 7 DO
+	spg_enable_exec[i] := FALSE;
+	spg_disable_exec[i] := FALSE;
+	return_exec[i] := FALSE;
+END_FOR
+axis4_move_exec := FALSE;
+axis4_stop_exec := FALSE;
+
+FOR j:=1 TO 7 DO
+	G.Act_pos[j] := G.axis[j].NcToPlc.ActPos - G.init_pos[j];
+	G.act_pos_from_left[j] := G.axis[j].NcToPlc.ActPos - G.leftlimit[j];
+	G.refer_from_left[j] := (G.refer[j] + G.init_pos[j]) - G.leftlimit[j];
+
+	v_step := G.v_limit[j];
+	// 回退接管旁路：回退 Busy 期间跳过斜坡/均值，避免回退末端重新进入慢链路
+	return_handoff_bypass := ((j = 1) AND (G.axis1_fast_return OR G.return_cmd[1].Busy))
+		OR ((j = 6) AND (G.axis6_fast_retract OR G.return_cmd[6].Busy));
+	IF return_handoff_bypass THEN
+		avg_window := 1;
+		ramp_counter[j] := 0;
+	ELSE
+		ramp_counter[j] := MIN(ramp_counter[j] + 1, avg_window_size);
+		avg_window := MAX(1, ramp_counter[j]);
+	END_IF
+
+	FOR k:=2 TO 20 DO
+		act_hh[j][22-k] := act_hh[j][21-k];
+	END_FOR
+
+	IF slimit_enable[j] THEN
+		IF (G.axis[j].NcToPlc.ActPos >= right_slimit[j]) AND (G.refer[j] > G.ref_slow[j]) THEN
+			G.refer[j] := G.ref_slow[j];
+		END_IF
+	END_IF
+
+	IF return_handoff_bypass THEN
+		G.ref_slow[j] := G.refer[j];
+	ELSIF (G.refer[j] - G.ref_slow[j]) > v_step THEN
+		G.ref_slow[j] := G.ref_slow[j] + v_step;
+	ELSIF (G.refer[j] - G.ref_slow[j]) < -v_step THEN
+		G.ref_slow[j] := G.ref_slow[j] - v_step;
+	ELSE
+		G.ref_slow[j] := G.refer[j];
+	END_IF
+
+	IF return_handoff_bypass THEN
+		FOR i:=1 TO 20 DO
+			act_hh[j][i] := G.ref_slow[j];
+		END_FOR
+		G.act_h[j] := G.ref_slow[j];
+	ELSE
+		act_hh[j][1] := G.ref_slow[j];
+		G.act_h[j] := 0;
+		FOR i:=1 TO avg_window DO
+			G.act_h[j] := G.act_h[j] + act_hh[j][i] / TO_LREAL(avg_window);
+		END_FOR
+	END_IF
+
+	IF traj_enable[j] AND NOT return_handoff_bypass AND NOT G.startup_smoothing_bypass THEN
+		acc_raw := traj_wn * traj_wn * (G.refer[j] - traj_pos[j]) - 2.0 * traj_wn * traj_vel[j];
+		IF acc_raw > traj_amax[j] THEN
+			acc_raw := traj_amax[j];
+		ELSIF acc_raw < -traj_amax[j] THEN
+			acc_raw := -traj_amax[j];
+		END_IF
+		traj_acc[j] := acc_raw;
+		traj_vel[j] := traj_vel[j] + 0.001 * traj_acc[j];
+		IF traj_vel[j] > traj_vmax[j] THEN
+			traj_vel[j] := traj_vmax[j];
+		ELSIF traj_vel[j] < -traj_vmax[j] THEN
+			traj_vel[j] := -traj_vmax[j];
+		END_IF
+		traj_pos[j] := traj_pos[j] + 0.001 * traj_vel[j];
+		IF ABS(G.refer[j] - traj_pos[j]) < 0.001 AND ABS(traj_vel[j]) < 0.01 THEN
+			traj_pos[j] := G.refer[j];
+			traj_vel[j] := 0.0;
+			traj_acc[j] := 0.0;
+		END_IF
+	ELSE
+		traj_pos[j] := G.act_h[j];
+		traj_vel[j] := 0.0;
+		traj_acc[j] := 0.0;
+	END_IF
+END_FOR
+
+FOR i:=1 TO 7 DO
+	IF NOT return_enable[i] THEN
+		CONTINUE;
+	END_IF
+
+	IF return_state[i] = 0 THEN
+		G.return_cmd[i].Busy := FALSE;
+		IF NOT G.return_cmd[i].Req THEN
+			G.return_cmd[i].Done := FALSE;
+			G.return_cmd[i].Error := FALSE;
+			G.return_cmd[i].ErrorId := 0;
+			return_finish_error[i] := FALSE;
+			return_error_id_pending[i] := 0;
+		ELSIF (NOT G.return_cmd[i].Done) AND (NOT G.return_cmd[i].Error) THEN
+			// Req 由上位机在完整写入参数后最后置位；此处只锁存一次，
+			// 本次 MC_MoveAbsolute 后续不再直接读取可被 ADS 改写的命令参数。
+			return_target_abs[i] := G.return_cmd[i].TargetAbs;
+			return_velocity[i] := G.return_cmd[i].Velocity;
+			return_acc[i] := G.return_cmd[i].Acc;
+			return_dec[i] := G.return_cmd[i].Dec;
+			return_jerk[i] := G.return_cmd[i].Jerk;
+			return_state[i] := 10;
+		END_IF
+	END_IF
+
+	CASE return_state[i] OF
+	10:
+		G.return_cmd[i].Busy := TRUE;
+		spg_disable_exec[i] := TRUE;
+		IF G.SetPointGenDisable[i].Done OR NOT G.SetPointGenDisable[i].Enabled THEN
+			ext_setpoint_enabled[i] := FALSE;
+			return_state[i] := 20;
+		END_IF
+
+	20:
+		G.return_cmd[i].Busy := TRUE;
+		return_exec[i] := TRUE;
+		G.refer_from_left[i] := return_target_abs[i] - G.leftlimit[i];
+
+		IF fb_return_move_abs[i].Done OR
+		   ((NOT fb_return_move_abs[i].Busy) AND (ABS(G.axis[i].NcToPlc.ActPos - return_target_abs[i]) <= 0.05)) THEN
+			return_finish_error[i] := FALSE;
+			return_error_id_pending[i] := 0;
+			return_state[i] := 30;
+		ELSIF fb_return_move_abs[i].Error OR fb_return_move_abs[i].CommandAborted THEN
+			return_finish_error[i] := TRUE;
+			return_error_id_pending[i] := fb_return_move_abs[i].ErrorID;
+			return_state[i] := 30;
+		END_IF
+
+	30:
+		G.return_cmd[i].Busy := TRUE;
+		IF ABS(G.axis[i].NcToPlc.ActVelo) <= 0.5 THEN
+			G.Act_pos[i] := G.axis[i].NcToPlc.ActPos - G.init_pos[i];
+			G.act_pos_from_left[i] := G.axis[i].NcToPlc.ActPos - G.leftlimit[i];
+			G.refer[i] := G.Act_pos[i];
+			G.ref_slow[i] := G.Act_pos[i];
+			G.act_h[i] := G.Act_pos[i];
+			G.act_hf[i] := G.Act_pos[i];
+			G.refer_from_left[i] := G.act_pos_from_left[i];
+			FOR k:=1 TO 30 DO
+				act_hh[i][k] := G.Act_pos[i];
+			END_FOR
+			act_h_prev[i] := G.Act_pos[i];
+			traj_pos[i] := G.Act_pos[i];
+			traj_vel[i] := 0.0;
+			traj_acc[i] := 0.0;
+			// 先留出一个完整 PLC 扫描周期预送当前设定值，再重新使能外部设定值发生器。
+			return_state[i] := 31;
+		END_IF
+
+	31:
+		G.return_cmd[i].Busy := TRUE;
+		spg_enable_exec[i] := TRUE;
+		IF G.SetPointGenEnable[i].Done THEN
+			ext_setpoint_enabled[i] := TRUE;
+			G.return_cmd[i].Busy := FALSE;
+			IF return_finish_error[i] THEN
+				G.return_cmd[i].Done := FALSE;
+				G.return_cmd[i].Error := TRUE;
+				G.return_cmd[i].ErrorId := return_error_id_pending[i];
+			ELSE
+				G.return_cmd[i].Done := TRUE;
+				G.return_cmd[i].Error := FALSE;
+				G.return_cmd[i].ErrorId := 0;
+			END_IF
+			return_finish_error[i] := FALSE;
+			return_error_id_pending[i] := 0;
+			return_state[i] := 0;
+		END_IF
+	END_CASE
+END_FOR
+
+axis4_request_dir_now := 0;
+IF G.axis4_fwd_req AND NOT G.axis4_rev_req THEN
+	axis4_request_dir_now := 1;
+ELSIF G.axis4_rev_req AND NOT G.axis4_fwd_req THEN
+	axis4_request_dir_now := -1;
+END_IF
+
+IF axis4_manual_state = 0 THEN
+	G.axis4_manual_busy := FALSE;
+	IF axis4_request_dir_now = 0 THEN
+		G.axis4_manual_done := FALSE;
+		G.axis4_manual_error := FALSE;
+		G.axis4_manual_error_id := 0;
+	ELSIF NOT G.axis4_manual_error THEN
+		G.axis4_manual_done := FALSE;
+		G.axis4_manual_error := FALSE;
+		G.axis4_manual_error_id := 0;
+		axis4_requested_dir := axis4_request_dir_now;
+		axis4_pending_dir := 0;
+		axis4_finish_error := FALSE;
+		axis4_error_id_pending := 0;
+		axis4_manual_state := 10;
+	END_IF
+END_IF
+
+CASE axis4_manual_state OF
+10:
+	G.axis4_manual_busy := TRUE;
+	spg_disable_exec[4] := TRUE;
+	IF G.SetPointGenDisable[4].Done OR NOT G.SetPointGenDisable[4].Enabled THEN
+		ext_setpoint_enabled[4] := FALSE;
+		axis4_manual_state := 20;
+	END_IF
+
+20:
+	G.axis4_manual_busy := TRUE;
+	axis4_pending_dir := axis4_request_dir_now;
+	IF axis4_requested_dir >= 0 THEN
+		axis4_manual_direction := MC_Direction.MC_Positive_Direction;
+	ELSE
+		axis4_manual_direction := MC_Direction.MC_Negative_Direction;
+	END_IF
+
+	IF axis4_pending_dir = 0 THEN
+		axis4_manual_state := 30;
+	ELSIF axis4_pending_dir <> axis4_requested_dir THEN
+		axis4_manual_state := 30;
+	ELSE
+		axis4_move_exec := TRUE;
+	END_IF
+
+	IF fb_axis4_move_velocity.Error THEN
+		axis4_finish_error := TRUE;
+		axis4_error_id_pending := fb_axis4_move_velocity.ErrorID;
+		G.axis4_manual_error_id := fb_axis4_move_velocity.ErrorID;
+		axis4_pending_dir := 0;
+		axis4_manual_state := 40;
+	ELSIF fb_axis4_move_velocity.CommandAborted THEN
+		// 被 MC_Stop 中止属于正常方向切换，进入停稳流程，不锁存为错误。
+		axis4_pending_dir := axis4_request_dir_now;
+		axis4_manual_state := 30;
+	END_IF
+
+30:
+	G.axis4_manual_busy := TRUE;
+	axis4_pending_dir := axis4_request_dir_now;
+	axis4_stop_exec := TRUE;
+
+	IF fb_axis4_stop.Error THEN
+		axis4_finish_error := TRUE;
+		axis4_error_id_pending := fb_axis4_stop.ErrorID;
+		axis4_pending_dir := 0;
+		axis4_manual_state := 39;
+	ELSIF fb_axis4_stop.Done OR (ABS(G.axis[4].NcToPlc.ActVelo) <= 0.05) THEN
+		// 无论是否还有请求，先经过状态39释放 MC_Stop 一个完整扫描周期。
+		axis4_manual_state := 39;
+	END_IF
+
+39:
+	G.axis4_manual_busy := TRUE;
+	// MC_Stop 需要一个 Execute=FALSE 的完整周期，
+	// 再重新触发 MoveVelocity 或 SetPointGenEnable。
+	axis4_pending_dir := axis4_request_dir_now;
+	IF axis4_pending_dir <> 0 THEN
+		axis4_requested_dir := axis4_pending_dir;
+		axis4_manual_state := 20;
+	ELSE
+		axis4_requested_dir := 0;
+		axis4_manual_state := 40;
+	END_IF
+
+40:
+	G.axis4_manual_busy := TRUE;
+	G.Act_pos[4] := G.axis[4].NcToPlc.ActPos - G.init_pos[4];
+	G.act_pos_from_left[4] := G.axis[4].NcToPlc.ActPos - G.leftlimit[4];
+	G.refer[4] := G.Act_pos[4];
+	G.ref_slow[4] := G.Act_pos[4];
+	G.act_h[4] := G.Act_pos[4];
+	G.act_hf[4] := G.Act_pos[4];
+	G.refer_from_left[4] := G.act_pos_from_left[4];
+	FOR k:=1 TO 30 DO
+		act_hh[4][k] := G.Act_pos[4];
+	END_FOR
+	act_h_prev[4] := G.Act_pos[4];
+	traj_pos[4] := G.Act_pos[4];
+	traj_vel[4] := 0.0;
+	traj_acc[4] := 0.0;
+	spg_enable_exec[4] := TRUE;
+	IF G.SetPointGenEnable[4].Done THEN
+		ext_setpoint_enabled[4] := TRUE;
+		G.axis4_manual_busy := FALSE;
+		IF axis4_finish_error THEN
+			G.axis4_manual_done := FALSE;
+			G.axis4_manual_error := TRUE;
+			G.axis4_manual_error_id := axis4_error_id_pending;
+		ELSE
+			G.axis4_manual_done := TRUE;
+			G.axis4_manual_error := FALSE;
+			G.axis4_manual_error_id := 0;
+		END_IF
+		axis4_finish_error := FALSE;
+		axis4_error_id_pending := 0;
+		axis4_manual_state := 0;
+	END_IF
+END_CASE
+
+FOR i:=1 TO 7 DO
+	IF G.power_output[i].Error THEN
+		G.axis_Reset[i].Execute := TRUE;
+	END_IF
+END_FOR
+
+FOR i:=1 TO 7 DO
+	// 计划回退结束后，状态 31 的预送周期和 SetPointGenEnable 过渡周期都必须喂入当前设定值。
+	// 否则 NC 重新接管时会短暂使用禁用前遗留的左窗口设定值，造成约一个窗口宽度的反向尖峰。
+	IF ext_setpoint_enabled[i] OR (return_state[i] = 31) OR spg_enable_exec[i] THEN
+		IF traj_enable[i] AND NOT G.startup_smoothing_bypass THEN
+			pos_abs := traj_pos[i] + G.init_pos[i];
+			MC_ExtSetPointGenFeed(
+				Position     := pos_abs,
+				Velocity     := traj_vel[i],
+				Acceleration := traj_acc[i],
+				Direction    := 1,
+				Axis         := G.axis[i]);
+		ELSE
+			pos_abs := G.act_h[i] + G.init_pos[i];
+			legacy_vel := (G.act_h[i] - act_h_prev[i]) / 0.001;
+			MC_ExtSetPointGenFeed(
+				Position     := pos_abs,
+				Velocity     := legacy_vel,
+				Acceleration := 0,
+				Direction    := 1,
+				Axis         := G.axis[i]);
+		END_IF
+		G.act_hf[i] := G.act_h[i];
+	ELSE
+		G.act_hf[i] := G.axis[i].NcToPlc.ActPos - G.init_pos[i];
+	END_IF
+	act_h_prev[i] := G.act_h[i];
+END_FOR
+
+FOR i:=1 TO 7 DO
+	G.SetPointGenEnable[i](Axis:=G.axis[i], Execute:=spg_enable_exec[i]);
+	G.SetPointGenDisable[i](Axis:=G.axis[i], Execute:=spg_disable_exec[i]);
+	fb_return_move_abs[i](
+		Axis:=G.axis[i],
+		Position:=return_target_abs[i],
+		Velocity:=return_velocity[i],
+		Acceleration:=return_acc[i],
+		Deceleration:=return_dec[i],
+		Jerk:=return_jerk[i],
+		Execute:=return_exec[i]
+	);
+END_FOR
+
+fb_axis4_move_velocity(
+	Axis:=G.axis[4],
+	Execute:=axis4_move_exec,
+	Velocity:=axis4_manual_velocity,
+	Acceleration:=axis4_manual_acc,
+	Deceleration:=axis4_manual_dec,
+	Jerk:=axis4_manual_jerk,
+	Direction:=axis4_manual_direction
+);
+fb_axis4_stop(
+	Axis:=G.axis[4],
+	Execute:=axis4_stop_exec,
+	Deceleration:=axis4_manual_dec,
+	Jerk:=axis4_manual_jerk
+);
+
