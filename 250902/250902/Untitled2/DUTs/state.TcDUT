@@ -13,9 +13,7 @@
 	_self_check,    //上电自检
 	_clear_err,
 	_err,
-	_reset,
-	_dual_clamp,
-	_program_test
+	_reset
 )INT;
 
 END_TYPE]]></Declaration>

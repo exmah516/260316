@@ -37,37 +37,16 @@
     <Compile Include="POUs\ArmManual.TcPOU">
       <SubType>Code</SubType>
     </Compile>
-    <Compile Include="POUs\Axis2Sync.TcPOU">
-      <SubType>Code</SubType>
-    </Compile>
     <Compile Include="POUs\handle.TcPOU">
       <SubType>Code</SubType>
     </Compile>
-    <Compile Include="POUs\InjectorManual.TcPOU">
-      <SubType>Code</SubType>
-    </Compile>
     <Compile Include="POUs\clear_err.TcPOU">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="POUs\DualClampExperiment.TcPOU">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="POUs\ExperimentRecorder.TcPOU">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="POUs\ExternalValidationSync.TcPOU">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="POUs\ProgrammedDeliveryExperiment.TcPOU">
       <SubType>Code</SubType>
     </Compile>
     <Compile Include="POUs\init.TcPOU">
       <SubType>Code</SubType>
     </Compile>
     <Compile Include="POUs\MAIN.TcPOU">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="POUs\ManualCylinderControl.TcPOU">
       <SubType>Code</SubType>
     </Compile>
     <Compile Include="POUs\reset.TcPOU">

@@ -32,9 +32,9 @@ ELSE
     // 手动控制释放后恢复标准空闲输出；实验运动期间不覆盖实验状态机输出。
     IF previous_manual_enable AND NOT G.manual_cylinder_enable AND NOT experiment_busy THEN
         G.cylinder1_value := 1000;
-        G.cylinder2_value := 5;
+        G.cylinder2_value := 0;
         G.cylinder3_value := 1000;
-        G.cylinder4_value := 5;
+        G.cylinder4_value := 0;
     END_IF
     IF G.manual_cylinder_enable AND NOT G.self_check_done THEN
         G.manual_cylinder_error_id := 16#7102;

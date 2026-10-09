@@ -1,4 +1,4 @@
-<?xml version="1.0" encoding="utf-8"?>
+﻿<?xml version="1.0" encoding="utf-8"?>
 <TcPlcObject Version="1.1.0.1" ProductVersion="3.1.4024.15">
   <GVL Name="G" Id="{ccabbda2-7ae2-40eb-8293-a1b7a36c29fa}">
     <Declaration><![CDATA[{attribute 'qualified_only'}
@@ -91,15 +91,10 @@ VAR_GLOBAL
 	arm_cmd_dir		: ARRAY[1..5] OF SINT := [0,0,0,0,0];	// -1=反向，0=停止，1=正向
 	arm_cmd_conflict	: ARRAY[1..5] OF BOOL := [FALSE,FALSE,FALSE,FALSE,FALSE];	// 正反向同时请求
 
-	// ========== Axis15 同步接口 ==========
-	// 独立链接到 NC Axis 15，与业务轴2（NC Axis 7）同步旋转。
-	axis2_sync_axis	: AXIS_REF;
-
-	// ========== 注射器轴控制接口 ==========
+	// ========== 注射器轴预留接口 ==========
 	// inject_axis[1] -> NC Axis 13 / Drive 16，inject_axis[2] -> NC Axis 14 / Drive 17。
+	// 本轮仅建立 AXIS_REF 与 PLC-NC 链接，不调用 MC_Power 或任何运动功能块。
 	inject_axis		: ARRAY[1..2] OF AXIS_REF;
-	inject_push_req	: ARRAY[1..2] OF BOOL := [FALSE,FALSE];
-	inject_pull_req	: ARRAY[1..2] OF BOOL := [FALSE,FALSE];
 
 	// ========== 电缸控制变量 ==========
 	cylinder1_value		AT %Q* : WORD;		// 电缸1控制值 (安装在夹持机构上)
@@ -107,16 +102,8 @@ VAR_GLOBAL
 	cylinder3_value		AT %Q* : WORD;		// 电缸3控制值 (安装在轴5机构上)
 	cylinder4_value		AT %Q* : WORD;		// 电缸4控制值 (安装在轴6机构上)
 	cylinder5_value		AT %Q* : WORD;		// 电缸5控制值 (安装在轴3机构上控制y阀)
-	cylinder5_cmd		: WORD := 2000;		// 历史兼容缓存，当前正式控制不写此变量
-	cylinder5_press_req	: BOOL := FALSE;	// Y阀请求（TRUE=打开，输出0；FALSE=关闭，输出2000）
-
-	// 旧双机构模式下的独立数据记录与手动电缸控制接口。
-	// 独立记录不控制轴；手动电缸控制由PLC在自检完成后接管输出。
-	standalone_record_enable	: BOOL := FALSE;
-	standalone_record_event_seq	: UDINT := 0;
-	manual_cylinder_enable		: BOOL := FALSE;
-	manual_cylinder_cmd			: ARRAY[1..4] OF WORD := [1000,0,400,0];
-	manual_cylinder_error_id		: UDINT := 0;
+	cylinder5_cmd		: WORD := 2000;		// 电缸5命令缓存（上位机写此变量，由 handle 周期下发到输出）
+	cylinder5_press_req	: BOOL := FALSE;	// 电缸5按键请求（TRUE=按下b6，输出0；FALSE=松开b6，输出2000）
 	
 	
 	ft_1_value			AT %I* : INT;
@@ -124,262 +111,110 @@ VAR_GLOBAL
 	fn_2_value			AT %I* : INT;
 	ft_2_value			AT %I* : INT;
 
-	// 双机构夹持扰动实验接口。位置参数统一采用“距左限位距离”，
-	// 绝对NC目标由PLC使用 G.leftlimit[] 计算。
-	dual_clamp_enable			: BOOL := FALSE;
-	dual_clamp_phase			: UINT := 0;
-	dual_clamp_event_sequence	: UDINT := 0;
-	dual_clamp_selfcheck_req		: BOOL := FALSE;
-	dual_clamp_selfcheck_busy	: BOOL := FALSE;
-	dual_clamp_selfcheck_done	: BOOL := FALSE;
-	dual_clamp_selfcheck_error	: BOOL := FALSE;
-	dual_clamp_selfcheck_error_id : UDINT := 0;
-	dual_clamp_leftlimit_valid	: BOOL := FALSE;
-	dual_clamp_leftlimit_axis1_abs : LREAL := 0.0;
-	dual_clamp_leftlimit_axis6_abs : LREAL := 0.0;
-	dual_clamp_setup_req			: BOOL := FALSE;
-	dual_clamp_setup_busy		: BOOL := FALSE;
-	dual_clamp_setup_done		: BOOL := FALSE;
-	dual_clamp_start_req			: BOOL := FALSE;
-	dual_clamp_abort_req			: BOOL := FALSE;
-	dual_clamp_status_error_id	: UDINT := 0;
-	dual_clamp_moving_axis		: INT := 1;
-	dual_clamp_axis1_distance_from_left : LREAL := 96.0;
-	dual_clamp_axis6_distance_from_left : LREAL := 580.0;
-	dual_clamp_axis2_angle_abs	: LREAL := 0.0;
-	dual_clamp_axis7_angle_abs	: LREAL := 0.0;
-	dual_clamp_return_retract_distance : LREAL := 10.0;
-	dual_clamp_return_velocity	: LREAL := 20.0;
-	dual_clamp_return_acceleration : LREAL := 100.0;
-	dual_clamp_return_deceleration : LREAL := 100.0;
-	dual_clamp_return_jerk		: LREAL := 1000.0;
-	dual_clamp_recovery_mode		: BOOL := TRUE;
-	dual_clamp_cylinder1_open_word : WORD := 1000;
-	dual_clamp_cylinder2_clamp_word : WORD := 600;
-	dual_clamp_cylinder2_release_word : WORD := 5;
-	dual_clamp_cylinder3_open_word : WORD := 1000;
-	dual_clamp_cylinder4_clamp_word : WORD := 500;
-	dual_clamp_cylinder4_release_word : WORD := 5;
-	dual_clamp_cylinder2_cmd		: WORD := 5;
-	dual_clamp_cylinder4_cmd		: WORD := 5;
-	dual_clamp_setup_target_axis1_abs : LREAL := 0.0;
-	dual_clamp_setup_target_axis6_abs : LREAL := 0.0;
-	dual_clamp_return_target_abs	: LREAL := 0.0;
-	dual_clamp_start_target_axis1_abs : LREAL := 0.0;
-	dual_clamp_start_target_axis6_abs : LREAL := 0.0;
-	dual_clamp_sample_arm		: BOOL := FALSE;
-	dual_clamp_sample_clear		: BOOL := FALSE;
-	dual_clamp_sample_count		: UDINT := 0;
-	dual_clamp_sample_overflow	: BOOL := FALSE;
-	dual_clamp_sample_index		: ARRAY[0..32767] OF UDINT;
-	dual_clamp_sample_time_us	: ARRAY[0..32767] OF ULINT;
-	dual_clamp_sample_phase		: ARRAY[0..32767] OF USINT;
-	dual_clamp_sample_event_sequence : ARRAY[0..32767] OF UDINT;
-	dual_clamp_sample_axis1_pos	: ARRAY[0..32767] OF LREAL;
-	dual_clamp_sample_axis1_vel	: ARRAY[0..32767] OF LREAL;
-	dual_clamp_sample_axis1_acc	: ARRAY[0..32767] OF LREAL;
-	dual_clamp_sample_axis6_pos	: ARRAY[0..32767] OF LREAL;
-	dual_clamp_sample_axis6_vel	: ARRAY[0..32767] OF LREAL;
-	dual_clamp_sample_axis6_acc	: ARRAY[0..32767] OF LREAL;
-	dual_clamp_sample_ft1		: ARRAY[0..32767] OF INT;
-	dual_clamp_sample_fn1		: ARRAY[0..32767] OF INT;
-	dual_clamp_sample_ft2		: ARRAY[0..32767] OF INT;
-	dual_clamp_sample_fn2		: ARRAY[0..32767] OF INT;
-	dual_clamp_sample_cylinder2	: ARRAY[0..32767] OF WORD;
-	dual_clamp_sample_cylinder4	: ARRAY[0..32767] OF WORD;
 
-	// 程序递送测试接口，与旧 dual_clamp_* 接口完全独立。
-	// program_test_mode: 0=旧双机构模式，1=导管，2=导丝，4=外源验证；
-	// 记录来源3保留给独立记录。
-	program_test_mode			: USINT := 0;
-	program_test_setup_req		: BOOL := FALSE;
-	program_test_start_req		: BOOL := FALSE;
-	program_test_abort_req		: BOOL := FALSE;
+	program_interface_version : UDINT := 20261006;
+	selfcheck_status : DINT := 0;
+	selfcheck_start_req : BOOL := FALSE;
+
+	program_test_mode : USINT := 0;
+	program_test_setup_req, program_test_start_req, program_test_abort_req : BOOL := FALSE;
 	program_test_axis1_prepare_from_left_mm : LREAL := 23.0;
 	program_test_axis1_trigger_from_left_mm : LREAL := 3.0;
 	program_test_axis5_from_left_mm : LREAL := 430.0;
 	program_test_axis6_prepare_from_left_mm : LREAL := 451.0;
 	program_test_axis6_trigger_from_left_mm : LREAL := 431.0;
-	program_test_axis2_angle_deg : LREAL := 0.0;
-	program_test_axis7_angle_deg : LREAL := 0.0;
-	program_test_cycle_count		: UINT := 1;
+	program_test_axis2_angle_deg, program_test_axis7_angle_deg : LREAL := 0.0;
+	program_test_cycle_count : UINT := 1;
 	program_test_final_forward_distance_mm : LREAL := 10.0;
-	program_test_forward_pause_enabled : BOOL := FALSE;
-	program_test_forward_pause_distance_mm : LREAL := 10.0;
-	program_test_forward_pause_duration_ms : UDINT := 3000;
-	program_test_cylinder1_coupling_enable : BOOL := TRUE;
-	program_test_cylinder3_coupling_enable : BOOL := TRUE;
-	// 程序递送模式的运动端电缸开闭量。开值用于释放，闭值用于夹紧。
-	program_test_cylinder2_open_word : WORD := 5;
+	program_test_cylinder1_coupling_enable, program_test_cylinder3_coupling_enable : BOOL := TRUE;
+	program_test_cylinder2_open_word : WORD := 0;
 	program_test_cylinder2_close_word : WORD := 600;
-	program_test_cylinder4_open_word : WORD := 5;
+	program_test_cylinder4_open_word : WORD := 0;
 	program_test_cylinder4_close_word : WORD := 500;
-	program_test_release_wait_ms : UDINT := 150;
-	program_test_reclamp_wait_ms : UDINT := 150;
-	program_test_preclamp_wait_ms : UDINT := 150;
-	// 触发回退和回退到位时，配合电缸相对于运动端电缸的错开时间。
-	program_test_release_lead_ms : UDINT := 50;
-	program_test_reclamp_lead_ms : UDINT := 50;
-	program_test_forward_velocity : LREAL := 20.0;
-	program_test_forward_acceleration : LREAL := 100.0;
-	program_test_forward_deceleration : LREAL := 100.0;
-	program_test_forward_jerk	: LREAL := 1000.0;
-	program_test_return_velocity : LREAL := 20.0;
-	program_test_return_acceleration : LREAL := 100.0;
-	program_test_return_deceleration : LREAL := 100.0;
-	program_test_return_jerk	: LREAL := 1000.0;
-
-	program_test_enable			: BOOL := FALSE;
-	program_test_phase			: USINT := 0;
-	program_test_cycle_index	: UINT := 0;
-	program_test_cycle_total	: UINT := 0;
-	program_test_setup_busy		: BOOL := FALSE;
-	program_test_setup_done		: BOOL := FALSE;
+	program_test_release_wait_ms, program_test_reclamp_wait_ms, program_test_preclamp_wait_ms : UDINT := 150;
+	program_test_release_lead_ms, program_test_reclamp_lead_ms : UDINT := 50;
+	program_test_forward_velocity, program_test_forward_acceleration : LREAL := 20.0;
+	program_test_forward_deceleration, program_test_forward_jerk : LREAL := 100.0;
+	program_test_return_velocity, program_test_return_acceleration : LREAL := 20.0;
+	program_test_return_deceleration, program_test_return_jerk : LREAL := 100.0;
+	program_test_enable : BOOL := FALSE;
+	program_test_phase : USINT := 0;
+	program_test_cycle_index, program_test_cycle_total : UINT := 0;
+	program_test_setup_busy, program_test_setup_done : BOOL := FALSE;
 	program_test_status_error_id : UDINT := 0;
-	// 等待状态：0=无，1=等待释放，2=等待重新夹紧，3=前进定点停留。
 	program_test_wait_action : USINT := 0;
-	program_test_sync_state : USINT := 0; // 0独立保持，1等待耦合，2已耦合，3等待解除，4已解除
-	// 运动错误上下文：来源1=准备，2=前向，3=回退，4=最终前向，5=耦合，6=解除。
-	program_test_error_source : USINT := 0;
-	program_test_error_axis : USINT := 0;
-	program_test_error_phase : USINT := 0;
+	program_test_error_source, program_test_error_axis, program_test_error_phase : USINT := 0;
 	program_test_error_target_abs : LREAL := 0.0;
-	program_test_target_axis1_abs : LREAL := 0.0;
-	program_test_target_axis5_abs : LREAL := 0.0;
-	program_test_target_axis6_abs : LREAL := 0.0;
-	program_test_target_axis2_deg : LREAL := 0.0;
-	program_test_target_axis7_deg : LREAL := 0.0;
-	program_test_trigger_target_abs : LREAL := 0.0;
-	program_test_return_target_abs : LREAL := 0.0;
-	program_test_final_target_abs : LREAL := 0.0;
+	program_test_target_axis1_abs, program_test_target_axis5_abs, program_test_target_axis6_abs : LREAL := 0.0;
+	program_test_target_axis2_deg, program_test_target_axis7_deg : LREAL := 0.0;
+	program_test_trigger_target_abs, program_test_return_target_abs, program_test_final_target_abs : LREAL := 0.0;
+	program_test_sync_state : USINT := 0;
+	program_test_handle_cycle : UINT := 0;
 
-	program_test_sample_arm		: BOOL := FALSE;
-	program_test_sample_clear	: BOOL := FALSE;
-	program_test_sample_count	: UDINT := 0;
+	program_test_sample_arm, program_test_sample_clear : BOOL := FALSE;
+	program_test_sample_count : UDINT := 0;
 	program_test_sample_overflow : BOOL := FALSE;
 	program_test_event_sequence : UDINT := 0;
-	program_test_sample_index	: ARRAY[0..32767] OF UDINT;
-	program_test_sample_time_us	: ARRAY[0..32767] OF ULINT;
-	program_test_sample_phase	: ARRAY[0..32767] OF USINT;
+	program_test_sample_index : ARRAY[0..32767] OF UDINT;
+	program_test_sample_time_us : ARRAY[0..32767] OF ULINT;
+	program_test_sample_phase : ARRAY[0..32767] OF USINT;
 	program_test_sample_event_sequence : ARRAY[0..32767] OF UDINT;
 	program_test_sample_cycle_index : ARRAY[0..32767] OF UINT;
 	program_test_sample_sync_state : ARRAY[0..32767] OF USINT;
-	program_test_sample_axis1_pos : ARRAY[0..32767] OF LREAL;
-	program_test_sample_axis1_vel : ARRAY[0..32767] OF LREAL;
-	program_test_sample_axis1_acc : ARRAY[0..32767] OF LREAL;
-	program_test_sample_axis2_pos : ARRAY[0..32767] OF LREAL;
-	program_test_sample_axis2_vel : ARRAY[0..32767] OF LREAL;
-	program_test_sample_axis2_acc : ARRAY[0..32767] OF LREAL;
-	program_test_sample_axis5_pos : ARRAY[0..32767] OF LREAL;
-	program_test_sample_axis5_vel : ARRAY[0..32767] OF LREAL;
-	program_test_sample_axis5_acc : ARRAY[0..32767] OF LREAL;
-	program_test_sample_axis6_pos : ARRAY[0..32767] OF LREAL;
-	program_test_sample_axis6_vel : ARRAY[0..32767] OF LREAL;
-	program_test_sample_axis6_acc : ARRAY[0..32767] OF LREAL;
-	program_test_sample_axis7_pos : ARRAY[0..32767] OF LREAL;
-	program_test_sample_axis7_vel : ARRAY[0..32767] OF LREAL;
-	program_test_sample_axis7_acc : ARRAY[0..32767] OF LREAL;
-	program_test_sample_cylinder1 : ARRAY[0..32767] OF WORD;
-	program_test_sample_cylinder2 : ARRAY[0..32767] OF WORD;
-	program_test_sample_cylinder3 : ARRAY[0..32767] OF WORD;
-	program_test_sample_cylinder4 : ARRAY[0..32767] OF WORD;
-	program_test_sample_fn1		: ARRAY[0..32767] OF INT;
-	program_test_sample_ft1		: ARRAY[0..32767] OF INT;
-	program_test_sample_fn2		: ARRAY[0..32767] OF INT;
-	program_test_sample_ft2		: ARRAY[0..32767] OF INT;
+	program_test_sample_axis1_pos, program_test_sample_axis1_vel, program_test_sample_axis1_acc : ARRAY[0..32767] OF LREAL;
+	program_test_sample_axis2_pos, program_test_sample_axis2_vel, program_test_sample_axis2_acc : ARRAY[0..32767] OF LREAL;
+	program_test_sample_axis5_pos, program_test_sample_axis5_vel, program_test_sample_axis5_acc : ARRAY[0..32767] OF LREAL;
+	program_test_sample_axis6_pos, program_test_sample_axis6_vel, program_test_sample_axis6_acc : ARRAY[0..32767] OF LREAL;
+	program_test_sample_axis7_pos, program_test_sample_axis7_vel, program_test_sample_axis7_acc : ARRAY[0..32767] OF LREAL;
+	program_test_sample_cylinder1, program_test_sample_cylinder2 : ARRAY[0..32767] OF WORD;
+	program_test_sample_cylinder3, program_test_sample_cylinder4 : ARRAY[0..32767] OF WORD;
+	program_test_sample_fn1, program_test_sample_ft1, program_test_sample_fn2, program_test_sample_ft2 : ARRAY[0..32767] OF INT;
 
-	// 长时间实验实时分块记录接口。每个块512点，PLC在两个块之间交替写入。
-	experiment_record_clear		: BOOL := FALSE;
-	experiment_record_enable		: BOOL := FALSE;
-	experiment_record_block_ready	: ARRAY[1..2] OF BOOL := [FALSE,FALSE];
+	// 实时分块记录接口。
+	experiment_record_clear, experiment_record_enable : BOOL := FALSE;
+	experiment_record_block_ready : ARRAY[1..2] OF BOOL := [FALSE,FALSE];
 	experiment_record_block_sequence : ARRAY[1..2] OF UDINT := [0,0];
 	experiment_record_block_count : ARRAY[1..2] OF UINT := [0,0];
 	experiment_record_block_ack_sequence : ARRAY[1..2] OF UDINT := [16#FFFFFFFF,16#FFFFFFFF];
-	experiment_record_overflow	: BOOL := FALSE;
-	experiment_record_total_count : UDINT := 0;
-	experiment_record_error_id	: UDINT := 0;
-	experiment_record_source_mode : USINT := 0; // 0=旧双机构，1=导管，2=导丝，3=独立记录，4=外源验证
+	experiment_record_overflow : BOOL := FALSE;
+	experiment_record_total_count, experiment_record_error_id : UDINT := 0;
+	experiment_record_source_mode : USINT := 0;
+	experiment_record_block0_index, experiment_record_block1_index : ARRAY[0..511] OF UDINT;
+	experiment_record_block0_time_us, experiment_record_block1_time_us : ARRAY[0..511] OF ULINT;
+	experiment_record_block0_phase, experiment_record_block1_phase : ARRAY[0..511] OF USINT;
+	experiment_record_block0_event_sequence, experiment_record_block1_event_sequence : ARRAY[0..511] OF UDINT;
+	experiment_record_block0_cycle_index, experiment_record_block1_cycle_index : ARRAY[0..511] OF UINT;
+	experiment_record_block0_sync_state, experiment_record_block1_sync_state : ARRAY[0..511] OF USINT;
+	experiment_record_block0_axis1_pos, experiment_record_block1_axis1_pos : ARRAY[0..511] OF LREAL;
+	experiment_record_block0_axis1_vel, experiment_record_block1_axis1_vel : ARRAY[0..511] OF LREAL;
+	experiment_record_block0_axis1_acc, experiment_record_block1_axis1_acc : ARRAY[0..511] OF LREAL;
+	experiment_record_block0_axis2_pos, experiment_record_block1_axis2_pos : ARRAY[0..511] OF LREAL;
+	experiment_record_block0_axis2_vel, experiment_record_block1_axis2_vel : ARRAY[0..511] OF LREAL;
+	experiment_record_block0_axis2_acc, experiment_record_block1_axis2_acc : ARRAY[0..511] OF LREAL;
+	experiment_record_block0_axis5_pos, experiment_record_block1_axis5_pos : ARRAY[0..511] OF LREAL;
+	experiment_record_block0_axis5_vel, experiment_record_block1_axis5_vel : ARRAY[0..511] OF LREAL;
+	experiment_record_block0_axis5_acc, experiment_record_block1_axis5_acc : ARRAY[0..511] OF LREAL;
+	experiment_record_block0_axis6_pos, experiment_record_block1_axis6_pos : ARRAY[0..511] OF LREAL;
+	experiment_record_block0_axis6_vel, experiment_record_block1_axis6_vel : ARRAY[0..511] OF LREAL;
+	experiment_record_block0_axis6_acc, experiment_record_block1_axis6_acc : ARRAY[0..511] OF LREAL;
+	experiment_record_block0_axis7_pos, experiment_record_block1_axis7_pos : ARRAY[0..511] OF LREAL;
+	experiment_record_block0_axis7_vel, experiment_record_block1_axis7_vel : ARRAY[0..511] OF LREAL;
+	experiment_record_block0_axis7_acc, experiment_record_block1_axis7_acc : ARRAY[0..511] OF LREAL;
+	experiment_record_block0_cylinder1, experiment_record_block1_cylinder1 : ARRAY[0..511] OF WORD;
+	experiment_record_block0_cylinder2, experiment_record_block1_cylinder2 : ARRAY[0..511] OF WORD;
+	experiment_record_block0_cylinder3, experiment_record_block1_cylinder3 : ARRAY[0..511] OF WORD;
+	experiment_record_block0_cylinder4, experiment_record_block1_cylinder4 : ARRAY[0..511] OF WORD;
+	experiment_record_block0_fn1, experiment_record_block1_fn1 : ARRAY[0..511] OF INT;
+	experiment_record_block0_ft1, experiment_record_block1_ft1 : ARRAY[0..511] OF INT;
+	experiment_record_block0_fn2, experiment_record_block1_fn2 : ARRAY[0..511] OF INT;
+	experiment_record_block0_ft2, experiment_record_block1_ft2 : ARRAY[0..511] OF INT;
 
-	experiment_record_block0_index : ARRAY[0..511] OF UDINT;
-	experiment_record_block0_time_us : ARRAY[0..511] OF ULINT;
-	experiment_record_block0_phase : ARRAY[0..511] OF USINT;
-	experiment_record_block0_event_sequence : ARRAY[0..511] OF UDINT;
-	experiment_record_block0_cycle_index : ARRAY[0..511] OF UINT;
-	experiment_record_block0_sync_state : ARRAY[0..511] OF USINT;
-	experiment_record_block0_axis1_pos : ARRAY[0..511] OF LREAL;
-	experiment_record_block0_axis1_vel : ARRAY[0..511] OF LREAL;
-	experiment_record_block0_axis1_acc : ARRAY[0..511] OF LREAL;
-	experiment_record_block0_axis2_pos : ARRAY[0..511] OF LREAL;
-	experiment_record_block0_axis2_vel : ARRAY[0..511] OF LREAL;
-	experiment_record_block0_axis2_acc : ARRAY[0..511] OF LREAL;
-	experiment_record_block0_axis5_pos : ARRAY[0..511] OF LREAL;
-	experiment_record_block0_axis5_vel : ARRAY[0..511] OF LREAL;
-	experiment_record_block0_axis5_acc : ARRAY[0..511] OF LREAL;
-	experiment_record_block0_axis6_pos : ARRAY[0..511] OF LREAL;
-	experiment_record_block0_axis6_vel : ARRAY[0..511] OF LREAL;
-	experiment_record_block0_axis6_acc : ARRAY[0..511] OF LREAL;
-	experiment_record_block0_axis7_pos : ARRAY[0..511] OF LREAL;
-	experiment_record_block0_axis7_vel : ARRAY[0..511] OF LREAL;
-	experiment_record_block0_axis7_acc : ARRAY[0..511] OF LREAL;
-	experiment_record_block0_cylinder1 : ARRAY[0..511] OF WORD;
-	experiment_record_block0_cylinder2 : ARRAY[0..511] OF WORD;
-	experiment_record_block0_cylinder3 : ARRAY[0..511] OF WORD;
-	experiment_record_block0_cylinder4 : ARRAY[0..511] OF WORD;
-	experiment_record_block0_fn1 : ARRAY[0..511] OF INT;
-	experiment_record_block0_ft1 : ARRAY[0..511] OF INT;
-	experiment_record_block0_fn2 : ARRAY[0..511] OF INT;
-	experiment_record_block0_ft2 : ARRAY[0..511] OF INT;
-
-	experiment_record_block1_index : ARRAY[0..511] OF UDINT;
-	experiment_record_block1_time_us : ARRAY[0..511] OF ULINT;
-	experiment_record_block1_phase : ARRAY[0..511] OF USINT;
-	experiment_record_block1_event_sequence : ARRAY[0..511] OF UDINT;
-	experiment_record_block1_cycle_index : ARRAY[0..511] OF UINT;
-	experiment_record_block1_sync_state : ARRAY[0..511] OF USINT;
-	experiment_record_block1_axis1_pos : ARRAY[0..511] OF LREAL;
-	experiment_record_block1_axis1_vel : ARRAY[0..511] OF LREAL;
-	experiment_record_block1_axis1_acc : ARRAY[0..511] OF LREAL;
-	experiment_record_block1_axis2_pos : ARRAY[0..511] OF LREAL;
-	experiment_record_block1_axis2_vel : ARRAY[0..511] OF LREAL;
-	experiment_record_block1_axis2_acc : ARRAY[0..511] OF LREAL;
-	experiment_record_block1_axis5_pos : ARRAY[0..511] OF LREAL;
-	experiment_record_block1_axis5_vel : ARRAY[0..511] OF LREAL;
-	experiment_record_block1_axis5_acc : ARRAY[0..511] OF LREAL;
-	experiment_record_block1_axis6_pos : ARRAY[0..511] OF LREAL;
-	experiment_record_block1_axis6_vel : ARRAY[0..511] OF LREAL;
-	experiment_record_block1_axis6_acc : ARRAY[0..511] OF LREAL;
-	experiment_record_block1_axis7_pos : ARRAY[0..511] OF LREAL;
-	experiment_record_block1_axis7_vel : ARRAY[0..511] OF LREAL;
-	experiment_record_block1_axis7_acc : ARRAY[0..511] OF LREAL;
-	experiment_record_block1_cylinder1 : ARRAY[0..511] OF WORD;
-	experiment_record_block1_cylinder2 : ARRAY[0..511] OF WORD;
-	experiment_record_block1_cylinder3 : ARRAY[0..511] OF WORD;
-	experiment_record_block1_cylinder4 : ARRAY[0..511] OF WORD;
-	experiment_record_block1_fn1 : ARRAY[0..511] OF INT;
-	experiment_record_block1_ft1 : ARRAY[0..511] OF INT;
-	experiment_record_block1_fn2 : ARRAY[0..511] OF INT;
-	experiment_record_block1_ft2 : ARRAY[0..511] OF INT;
-
-	// 四路力感手动取零。PLC以1 ms任务周期采集1000点并计算均值、标准差。
-	experiment_zero_req : BOOL := FALSE;
-	experiment_zero_busy : BOOL := FALSE;
-	experiment_zero_done : BOOL := FALSE;
+	experiment_zero_req, experiment_zero_busy, experiment_zero_done : BOOL := FALSE;
 	experiment_zero_error_id : UDINT := 0;
 	experiment_zero_sample_count : UINT := 0;
-	experiment_zero_fn1 : LREAL := 0.0;
-	experiment_zero_ft1 : LREAL := 0.0;
-	experiment_zero_fn2 : LREAL := 0.0;
-	experiment_zero_ft2 : LREAL := 0.0;
-	experiment_zero_fn1_std : LREAL := 0.0;
-	experiment_zero_ft1_std : LREAL := 0.0;
-	experiment_zero_fn2_std : LREAL := 0.0;
-	experiment_zero_ft2_std : LREAL := 0.0;
-	experiment_zero_sample_fn1 : ARRAY[0..999] OF INT;
-	experiment_zero_sample_ft1 : ARRAY[0..999] OF INT;
-	experiment_zero_sample_fn2 : ARRAY[0..999] OF INT;
-	experiment_zero_sample_ft2 : ARRAY[0..999] OF INT;
-
-
+	experiment_zero_fn1, experiment_zero_ft1, experiment_zero_fn2, experiment_zero_ft2 : LREAL := 0.0;
+	experiment_zero_fn1_std, experiment_zero_ft1_std, experiment_zero_fn2_std, experiment_zero_ft2_std : LREAL := 0.0;
+	experiment_zero_sample_fn1, experiment_zero_sample_ft1, experiment_zero_sample_fn2, experiment_zero_sample_ft2 : ARRAY[0..999] OF INT;
 END_VAR]]></Declaration>
   </GVL>
 </TcPlcObject>

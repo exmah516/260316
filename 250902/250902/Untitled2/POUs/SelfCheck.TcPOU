@@ -1,4 +1,4 @@
-<?xml version="1.0" encoding="utf-8"?>
+﻿<?xml version="1.0" encoding="utf-8"?>
 <TcPlcObject Version="1.1.0.1" ProductVersion="3.1.4024.15">
   <POU Name="SelfCheck" Id="{a1b2c3d4-e5f6-4789-8012-34567890abcd}" SpecialFunc="None">
     <Declaration><![CDATA[ FUNCTION_BLOCK SelfCheck
@@ -15,12 +15,13 @@ VAR
     vel_back : LREAL := 40.0;   // 回退速度，>0（单位随轴：mm/s 或 deg/s）
 
     init_target_from_left : ARRAY[1..7] OF LREAL:= [96,0,280,0,430,580,0];  // 左限位寻参后回到的工作位（距左限位）
-    target_axes : ARRAY[1..7] OF BOOL:= [TRUE,FALSE,TRUE,FALSE,TRUE,TRUE,FALSE];	// 目标轴（平移轴）
+    target_axes : ARRAY[1..7] OF BOOL:= [TRUE,FALSE,FALSE,FALSE,TRUE,TRUE,FALSE];	// 目标轴（平移轴，轴3永久断使能）
     stagger_delay : ARRAY[1..7] OF TIME := [T#3s,T#0ms,T#2s,T#0ms,T#1s,T#0ms,T#0ms];
     scan_stagger_delay : ARRAY[1..7] OF TIME := [T#0ms,T#0ms,T#300ms,T#0ms,T#600ms,T#900ms,T#0ms];
     scan_stagger_timer : ARRAY[1..7] OF TON;
     stagger_started : BOOL := FALSE;
     
+    start_ready : BOOL;
     all_done : BOOL;
     all_reach_limit : BOOL;
     
@@ -64,12 +65,9 @@ FUNCTION_BLOCK: SelfCheck
 
 // 统计：目标轴是否全部进入同步等待阶段（stu>=6）
 IF G.selfcheck_reset_req THEN
+    G.selfcheck_status := 1;
+    G.self_check_done := FALSE;
 	G.startup_loading_ready := FALSE;
-	G.dual_clamp_selfcheck_busy := TRUE;
-	G.dual_clamp_selfcheck_done := FALSE;
-	G.dual_clamp_selfcheck_error := FALSE;
-	G.dual_clamp_selfcheck_error_id := 0;
-	G.dual_clamp_leftlimit_valid := FALSE;
     FOR i:=1 TO 7 DO
         stu[i] := 0;
         mv_vel_exec[i] := FALSE;
@@ -94,8 +92,6 @@ IF G.selfcheck_reset_req THEN
         fb_stop[i](Axis:=G.axis[i], Execute:=FALSE);
         fb_set_pos[i](Axis:=G.axis[i], Execute:=FALSE);
     END_FOR
-    // 轴4（Motion NC Axis 9）不参与任何运动，自检状态直接设为完成，保持功能块 Execute:=FALSE
-    stu[4] := 10;
     stagger_started := FALSE;
     stagger_timer(IN:=FALSE);
     G.selfcheck_all_reach_limit := FALSE;
@@ -114,6 +110,26 @@ IF G.selfcheck_reset_req THEN
     G.axis4_manual_error_id := 0;
     G.selfcheck_reset_req := FALSE;
 END_IF
+
+IF G.selfcheck_status <> 2 THEN
+    IF G.selfcheck_status <> 3 THEN G.selfcheck_status := 1; END_IF
+    IF NOT G.selfcheck_start_req THEN RETURN; END_IF
+    G.selfcheck_start_req := FALSE;
+    start_ready := TRUE;
+    FOR i := 1 TO 7 DO
+        IF i <> 3 AND (NOT G.power_output[i].Done OR G.power_output[i].Error OR
+            G.axis[i].Status.Error OR G.reset_output[i].Error) THEN
+            start_ready := FALSE;
+        END_IF
+    END_FOR
+    IF NOT start_ready THEN
+        G.selfcheck_status := 3;
+        RETURN;
+    END_IF
+    G.selfcheck_status := 2;
+END_IF
+G.selfcheck_start_req := FALSE;
+G.power_[3].Enable := FALSE;
 
 // selfcheck 期间固定初始化电缸5，避免阶段切换引入额外切换值。
 G.cylinder5_value := 2000;
@@ -153,9 +169,9 @@ FOR i:=1 TO 7 DO
         1: // 错开启动，避免多轴同时加速导致电流竞争触发跟随误差
             IF i = 1 THEN
                 G.cylinder1_value := 1000;
-                G.cylinder2_value := 5;
+                G.cylinder2_value := 0;
 				G.cylinder3_value := 1000;
-				G.cylinder4_value := 5;
+				G.cylinder4_value := 0;
             END_IF
 
             scan_stagger_timer[i](IN:=TRUE, PT:=scan_stagger_delay[i]);
@@ -452,14 +468,8 @@ FOR i:=1 TO 7 DO
             G.init_pos[i] := G.axis[i].NcToPlc.ActPos;
         END_CASE
     ELSE
-        IF i = 4 THEN
-            // 轴4（Motion NC Axis 9）不参与任何运动，保持功能块 Execute:=FALSE
-            stu[i] := 10;
-            mv_abs_exec[i] := FALSE;
-            mv_vel_exec[i] := FALSE;
-        ELSE
-            // 非目标轴（轴2/7）：绝对值编码器轴，直接运动到绝对位置 0
-            CASE stu[i] OF
+        // 非目标轴（轴2/4/7）：绝对值编码器轴，直接运动到绝对位置 0
+        CASE stu[i] OF
         0: // 禁用外部给定，避免与绝对定位冲突
             G.SetPointGenDisable[i](Axis:=G.axis[i], Execute:=TRUE);
             IF G.power_output[i].Done AND (G.SetPointGenDisable[i].Done OR NOT G.SetPointGenDisable[i].Enabled) THEN
@@ -502,8 +512,7 @@ FOR i:=1 TO 7 DO
                 G.axis_Reset[i](Axis:=G.axis[i], Execute:=FALSE);
                 stu[i] := 4;
             END_IF
-            END_CASE
-        END_IF
+        END_CASE
     END_IF
     
     // 统一调用运动控制功能块 (在每个周期末尾)
@@ -528,32 +537,10 @@ FOR i:=1 TO 7 DO
 	G.selfcheck_stu[i] := stu[i];
 END_FOR
 
-// 检查各参与轴自检异常状态并实时上报
-FOR i := 1 TO 7 DO
-    IF (i <> 4) THEN
-        IF G.axis[i].Status.Error THEN
-            G.dual_clamp_selfcheck_error := TRUE;
-            G.dual_clamp_selfcheck_error_id := G.axis[i].Status.ErrorID;
-        ELSIF G.power_output[i].Error AND (G.power_output[i].ErrorID <> power_not_ready_errid) THEN
-            G.dual_clamp_selfcheck_error := TRUE;
-            G.dual_clamp_selfcheck_error_id := G.power_output[i].ErrorID;
-        ELSIF G.axis_Reset[i].Error THEN
-            G.dual_clamp_selfcheck_error := TRUE;
-            G.dual_clamp_selfcheck_error_id := G.axis_Reset[i].ErrorID;
-        ELSIF fb_move_abs[i].Error THEN
-            G.dual_clamp_selfcheck_error := TRUE;
-            G.dual_clamp_selfcheck_error_id := fb_move_abs[i].ErrorID;
-        ELSIF fb_move_vel[i].Error THEN
-            G.dual_clamp_selfcheck_error := TRUE;
-            G.dual_clamp_selfcheck_error_id := fb_move_vel[i].ErrorID;
-        END_IF
-    END_IF
-END_FOR
-
-// 全轴完成判定：轴1、2、3、5、6、7完成；轴4跳过
+// 全轴完成判定（所有轴 stu=10）
 all_done := TRUE;
 FOR i:=1 TO 7 DO
-    IF (i <> 4) AND (stu[i] <> 10) THEN
+    IF target_axes[i] AND stu[i] <> 10 THEN
         all_done := FALSE;
         EXIT;
     END_IF
@@ -561,28 +548,17 @@ END_FOR
 
 IF all_done THEN
 	G.cylinder1_value := 1000;
-	G.cylinder2_value := 5;
+	G.cylinder2_value := 0;
 	G.cylinder3_value := 1000;
-	G.cylinder4_value := 5;
-    G.self_check_done := TRUE;
-	G.dual_clamp_selfcheck_done := TRUE;
-	G.dual_clamp_selfcheck_busy := FALSE;
-	G.dual_clamp_selfcheck_error := FALSE;
-	G.dual_clamp_selfcheck_error_id := 0;
-	G.dual_clamp_leftlimit_axis1_abs := G.leftlimit[1];
-	G.dual_clamp_leftlimit_axis6_abs := G.leftlimit[6];
-	G.dual_clamp_leftlimit_valid := TRUE;
-	G.dual_clamp_phase := 13;
-	// 自检后的夹持器默认释放，轴3、4、5不再参与后续实验
-	G.dual_clamp_cylinder2_cmd := G.dual_clamp_cylinder2_release_word;
-	G.dual_clamp_cylinder4_cmd := G.dual_clamp_cylinder4_release_word;
+	G.cylinder4_value := 0;
 	G.power_[3].Enable := FALSE;
-	G.power_[4].Enable := FALSE;
-	G.power_[5].Enable := FALSE;
-	G.startup_loading_ready := FALSE;
-    G.handle_reinit_req := FALSE;
+	G.power_[5].Enable := TRUE;
+    G.self_check_done := TRUE;
+    G.selfcheck_status := 4;
+	G.startup_loading_ready := TRUE;
+    G.handle_reinit_req := TRUE;
     FOR i:=1 TO 7 DO
-        // 统一刷新相对坐标/参考
+        // 统一刷新相对坐标/参考，避免切换到 handle 后出现参考突变
         G.Act_pos[i] := G.axis[i].NcToPlc.ActPos - G.init_pos[i];
         G.act_pos_from_left[i] := G.axis[i].NcToPlc.ActPos - G.leftlimit[i];
         G.refer[i] := G.Act_pos[i];
@@ -591,16 +567,7 @@ IF all_done THEN
         G.act_hf[i] := G.Act_pos[i];
         G.refer_from_left[i] := G.act_pos_from_left[i];
     END_FOR
-    G.dual_clamp_selfcheck_req := FALSE;
-	G.program_test_phase := 0;
-	G.program_test_setup_busy := FALSE;
-	G.program_test_setup_done := FALSE;
-	G.program_test_status_error_id := 0;
-	IF (G.program_test_mode = 1) OR (G.program_test_mode = 2) THEN
-		G.gen_state := _program_test;
-	ELSE
-		G.gen_state := _dual_clamp;
-	END_IF
+    G.gen_state := _handle;
 END_IF
 ]]></ST>
     </Implementation>

@@ -26,7 +26,8 @@ Post-error recovery:
 
 has_err := FALSE;
 FOR i:=1 TO 7 DO
-	IF G.axis[i].Status.Error OR G.power_output[i].Error OR G.reset_output[i].Error THEN
+	IF i <> 3 AND NOT (G.program_test_mode = 1 AND i = 5) AND
+		(G.axis[i].Status.Error OR G.power_output[i].Error OR G.reset_output[i].Error) THEN
 		has_err := TRUE;
 		EXIT;
 	END_IF
@@ -34,7 +35,7 @@ END_FOR
 
 all_powered := TRUE;
 FOR i:=1 TO 7 DO
-	IF NOT G.power_output[i].Done THEN
+	IF i <> 3 AND NOT (G.program_test_mode = 1 AND i = 5) AND NOT G.power_output[i].Done THEN
 		all_powered := FALSE;
 		EXIT;
 	END_IF
@@ -69,7 +70,7 @@ CASE step OF
 
 	IF NOT all_powered THEN
 		FOR i:=1 TO 7 DO
-			G.power_[i].Enable := TRUE;
+		G.power_[i].Enable := i <> 3;
 		END_FOR
 		settle_timer(IN:=FALSE);
 		RETURN;
