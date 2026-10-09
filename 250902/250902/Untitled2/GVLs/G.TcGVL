@@ -131,7 +131,7 @@ VAR_GLOBAL
 	program_test_cylinder2_close_word : WORD := 600;
 	program_test_cylinder4_open_word : WORD := 0;
 	program_test_cylinder4_close_word : WORD := 500;
-	program_test_release_wait_ms, program_test_reclamp_wait_ms : UDINT := 150;
+	program_test_release_wait_ms, program_test_reclamp_wait_ms, program_test_preclamp_wait_ms : UDINT := 150;
 	program_test_release_lead_ms, program_test_reclamp_lead_ms : UDINT := 50;
 	program_test_forward_velocity, program_test_forward_acceleration : LREAL := 20.0;
 	program_test_forward_deceleration, program_test_forward_jerk : LREAL := 100.0;
