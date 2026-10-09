@@ -269,14 +269,14 @@ namespace DualClampExperimentUI
                     : "axis1_prepare_from_left=" + Number(ProgramAxis1PreparePos) + "|axis1_trigger_from_left=" + Number(ProgramAxis1TriggerPos);
                 if (IsExternalMode) positionFields += "|axis6_prepare_from_left=" + Number(ExternalAxis6PreparePos);
                 string commandText = string.Format(CultureInfo.InvariantCulture,
-                    "PROGRAM_PREPARE|mode={0}|{1}|{2}={3}|cycle_count={4}|final_forward_distance={5}|cylinder1_coupling={6}|cylinder3_coupling={7}|cylinder2_open={8}|cylinder2_close={9}|cylinder4_open={10}|cylinder4_close={11}|release_wait_ms={12}|reclamp_wait_ms={13}|forward_velocity={14}|forward_acceleration={15}|forward_deceleration={16}|forward_jerk={17}|return_velocity={18}|return_acceleration={19}|return_deceleration={20}|return_jerk={21}|release_lead_ms={22}|reclamp_lead_ms={23}|record_name={24}",
+                    "PROGRAM_PREPARE|mode={0}|{1}|{2}={3}|cycle_count={4}|final_forward_distance={5}|cylinder1_coupling={6}|cylinder3_coupling={7}|cylinder2_open={8}|cylinder2_close={9}|cylinder4_open={10}|cylinder4_close={11}|release_wait_ms={12}|reclamp_wait_ms={13}|preclamp_wait_ms={14}|forward_velocity={15}|forward_acceleration={16}|forward_deceleration={17}|forward_jerk={18}|return_velocity={19}|return_acceleration={20}|return_deceleration={21}|return_jerk={22}|release_lead_ms={23}|reclamp_lead_ms={24}|record_name={25}",
                     mode, positionFields, angleKey, Number(ProgramAngle), Int(ProgramCycleCount), Number(ProgramFinalDistance),
                     IsExternalMode || ProgramCylinder1Coupling.IsChecked == true ? 1 : 0,
                     !IsExternalMode && ProgramCylinder3Coupling.IsChecked == true ? 1 : 0,
                     Word(ProgramCylinder2OpenValue), Word(ProgramCylinder2CloseValue),
                     Word(IsExternalMode ? ExternalCylinder4Open : ProgramCylinder4OpenValue),
                     Word(IsExternalMode ? ExternalCylinder4Close : ProgramCylinder4CloseValue),
-                    Int(ProgramReleaseWait), Int(ProgramReclampWait), Number(ProgramForwardVelocity), Number(ProgramForwardAcceleration),
+                    Int(ProgramReleaseWait), Int(ProgramReclampWait), Int(ProgramPreclampWait), Number(ProgramForwardVelocity), Number(ProgramForwardAcceleration),
                     Number(ProgramForwardDeceleration), Number(ProgramForwardJerk), Number(ProgramReturnVelocity), Number(ProgramReturnAcceleration),
                     Number(ProgramReturnDeceleration), Number(ProgramReturnJerk), Int(ProgramReleaseLead), Int(ProgramReclampLead), RecordSuffix());
                 bool pauseEnabled = mode == "catheter" && ProgramForwardPauseEnabled.IsChecked == true;

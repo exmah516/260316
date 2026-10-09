@@ -245,7 +245,7 @@ namespace
 			else if (key == "return_acceleration") config.return_acceleration_mm_s2 = value;
 			else if (key == "return_deceleration") config.return_deceleration_mm_s2 = value;
 			else if (key == "return_jerk") config.return_jerk_mm_s3 = value;
-			else if (key == "release_wait_ms" || key == "reclamp_wait_ms" || key == "release_lead_ms" || key == "reclamp_lead_ms")
+			else if (key == "release_wait_ms" || key == "reclamp_wait_ms" || key == "preclamp_wait_ms" || key == "release_lead_ms" || key == "reclamp_lead_ms")
 			{
 				if (!std::isfinite(value) || value < 0.0 || value > 60000.0 || std::floor(value) != value)
 				{
@@ -254,6 +254,7 @@ namespace
 				}
 				if (key == "release_wait_ms") config.release_wait_ms = static_cast<std::uint32_t>(value);
 				else if (key == "reclamp_wait_ms") config.reclamp_wait_ms = static_cast<std::uint32_t>(value);
+				else if (key == "preclamp_wait_ms") config.preclamp_wait_ms = static_cast<std::uint32_t>(value);
 				else if (key == "release_lead_ms") config.release_lead_ms = static_cast<std::uint32_t>(value);
 				else config.reclamp_lead_ms = static_cast<std::uint32_t>(value);
 			}

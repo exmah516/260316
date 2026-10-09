@@ -62,6 +62,7 @@ struct ProgrammedDeliveryConfig
 	std::uint16_t cylinder4_close_word = 500;
 	std::uint32_t release_wait_ms = 150;
 	std::uint32_t reclamp_wait_ms = 150;
+	std::uint32_t preclamp_wait_ms = 150;
 	// 触发释放和回退重新夹紧时，配合电缸相对于运动端电缸的错开时间。
 	std::uint32_t release_lead_ms = 50;
 	std::uint32_t reclamp_lead_ms = 50;

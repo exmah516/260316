@@ -283,6 +283,7 @@ bool ProgrammedDeliveryController::validate_config(const ProgrammedDeliveryConfi
 		return false;
 	}
 	if (config.release_wait_ms > 60000 || config.reclamp_wait_ms > 60000 ||
+		config.preclamp_wait_ms > 60000 ||
 		config.release_lead_ms > 60000 || config.reclamp_lead_ms > 60000)
 	{
 		error = "电缸等待和错开时间必须在0至60000 ms之间";
@@ -1097,6 +1098,7 @@ bool ProgrammedDeliveryController::write_metadata(const std::string& directory, 
 		<< "  \"forward_pause_duration_ms\": " << config_.forward_pause_duration_ms << ",\n"
 		<< "  \"release_wait_ms\": " << config_.release_wait_ms << ",\n"
 		<< "  \"reclamp_wait_ms\": " << config_.reclamp_wait_ms << ",\n"
+		<< "  \"preclamp_wait_ms\": " << config_.preclamp_wait_ms << ",\n"
 		<< "  \"release_lead_ms\": " << config_.release_lead_ms << ",\n"
 		<< "  \"reclamp_lead_ms\": " << config_.reclamp_lead_ms << ",\n"
 		<< "  \"forward_velocity_mm_s\": " << config_.forward_velocity_mm_s << ",\n"
