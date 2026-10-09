@@ -14,7 +14,7 @@ namespace MasterConsole.Services
 {
     public sealed class RemoteLinkSettings
     {
-        public string Host { get; set; } = "127.0.0.1";
+        public string Host { get; set; } = "192.168.50.2";
         public int TcpPort { get; set; } = ProtocolConstants.TcpPort;
         /// <summary>预共享密钥（与从端 remote.token 内容一致）。</summary>
         public byte[] Token { get; set; }
