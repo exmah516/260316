@@ -1,8 +1,11 @@
 """执行当前handle的生产Action，模拟NC握手；不连接ADS或设备。"""
+import argparse
+import csv
 import json
+from pathlib import Path
 import math
 
-from test_handle_delivery import Simulation
+from test_handle_delivery import PLC, Simulation
 
 
 class PauseSimulation(Simulation):
@@ -38,7 +41,8 @@ class PauseSimulation(Simulation):
             self.sequences.add(sequence)
             prefix = f'experiment_record_block{slot-1}_'
             for i in range(g.experiment_record_block_count[slot]):
-                self.stream.append(tuple(getattr(g, prefix + field)[i] for field in ('index', 'time_us', 'fn1', 'phase')))
+                self.stream.append(tuple(getattr(g, prefix + field)[i] for field in ('index', 'time_us', 'phase', 'event_sequence', 'cycle_index',
+                    'axis1_pos', 'axis1_vel', 'axis1_acc', 'cylinder1', 'cylinder2', 'fn1', 'ft1')))
 
     def finish(self):
         self.until(lambda: self.g.program_test_phase in (10, 11, 12), limit=160000)
@@ -47,7 +51,15 @@ class PauseSimulation(Simulation):
         assert self.g.program_test_wait_action == 0
 
 
-def main():
+def main(output=None):
+    # 测试必须覆盖实际编译和MAIN调用的handle入口。
+    import xml.etree.ElementTree as ET
+    project = ET.parse(PLC / 'Untitled2.plcproj')
+    ns = {'p': 'http://schemas.microsoft.com/developer/msbuild/2003'}
+    includes = {node.attrib['Include'] for node in project.findall('.//p:Compile', ns)}
+    assert r'POUs\handle.TcPOU' in includes
+    main_source = ET.parse(PLC / 'POUs/MAIN.TcPOU').findtext('./POU/Implementation/ST')
+    assert 'handle1_();' in main_source
     scenarios = 0
     for distance, duration, final, cycles in ((10., 7, 15., 3), (10., 1, 10., 1), (10., 3, 5., 1),
                                              (20., 8, 20., 2), (.1, 5, 0., 1), (10., 60000, 0., 1)):
@@ -165,12 +177,21 @@ def main():
     assert sim.g.program_test_sample_overflow and not sim.g.experiment_record_overflow
     assert [row[0] for row in sim.stream] == list(range(len(sim.stream)))
     assert all(b[1]-a[1] == 1000 for a, b in zip(sim.stream, sim.stream[1:]))
-    assert all(row[2] == 113 for row in sim.stream) and sim.stream[-1][3] == 10
+    assert all(row[10] == 113 for row in sim.stream) and sim.stream[-1][2] == 10
     scenarios += 1
+    if output:
+        output.mkdir(parents=True, exist_ok=True)
+        with (output / 'pause_trace.csv').open('w', encoding='utf-8', newline='') as trace:
+            writer = csv.writer(trace)
+            writer.writerow(('index', 'time_us', 'phase', 'event_sequence', 'cycle_index',
+                             'axis1_pos', 'axis1_vel', 'axis1_acc', 'cylinder1', 'cylinder2', 'fn1', 'ft1'))
+            writer.writerows(sim.stream)
     print(json.dumps(dict(passed=scenarios, streamed_samples=len(sim.stream),
                          source='handle.ProgramDelivery / ProgramRecord',
                          full_handle_executed=False, hardware_connected=False, twincat_compiled=False)))
 
 
 if __name__ == '__main__':
-    main()
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--output', type=Path)
+    main(parser.parse_args().output)

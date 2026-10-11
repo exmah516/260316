@@ -29,6 +29,8 @@ function Build-Test([string]$name, [string[]]$sources) {
 
 & python -B "$PSScriptRoot\test_forward_pause.py" --output $output
 if ($LASTEXITCODE -ne 0) { throw '暂停PLC状态机测试失败' }
+& python -B "$PSScriptRoot\test_ads_contract.py" "$output\pause_symbols.txt"
+if ($LASTEXITCODE -ne 0) { throw 'ADS符号契约测试失败' }
 # 仅抽取生产函数体以避开设备线程和ADS入口；不复制维护另一份业务逻辑。
 $pipe = [System.IO.File]::ReadAllText((Join-Path $root 'DualClampPipe.cpp'))
 $controller = [System.IO.File]::ReadAllText((Join-Path $root 'ProgrammedDeliveryController.cpp'))

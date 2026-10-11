@@ -6,10 +6,10 @@
 
 ## 源码与接口
 
-- PLC：`260316/250902/250902/Untitled2/POUs/ProgrammedDeliveryExperiment.TcPOU` 与同工程 `GVLs/G.TcGVL`。实际入口为MAIN调用的独立功能块；本次不向handle添加第二套控制。
+- PLC：`260316/250902/250902/Untitled2/POUs/handle.TcPOU` 的 `ProgramDelivery` Action 与同工程 `GVLs/G.TcGVL`。`MAIN` 实际调用的是 `handle`，暂停逻辑必须位于这条执行路径。
 - `PROGRAM_PREPARE` 新增 `forward_pause_enabled=0/1`、`forward_pause_distance_mm`、`forward_pause_duration_ms`。旧命令缺省关闭；非导管模式不得启用。
 - ADS对应 `G.program_test_forward_pause_enabled`（BOOL）、`G.program_test_forward_pause_distance_mm`（LREAL）、`G.program_test_forward_pause_duration_ms`（UDINT）。所有配置写入成功后单独发送准备请求；缺失符号或批量写入失败不会发送该请求。
-- PLC准备时锁存暂停参数；非法参数报 `16#7208`。每段先定位到暂停点，再使用TON计时，最后以原运动参数定位到终点。中止、错误及重新准备清除等待状态。
+- PLC准备时锁存暂停参数；非法参数报 `16#7209`。每段先定位到暂停点，再使用TON计时，最后以原运动参数定位到终点。中止、错误及重新准备清除等待状态。
 - `experiment.json` 增加同名三个配置字段；CSV列和阶段编号不变。界面与后端握手版本更新为 `20261009.1`，防止新界面误连旧后端。
 
 ## 离线验证

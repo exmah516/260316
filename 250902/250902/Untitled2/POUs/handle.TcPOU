@@ -105,6 +105,11 @@ VAR
 	pd_return : ST_AxisPlannedReturnCmd;
 	pd_release_wait, pd_reclamp_wait, pd_release_lead, pd_reclamp_lead : TIME;
 	pd_open2, pd_close2, pd_open4, pd_close4 : WORD;
+	pd_pause_timer : TON;
+	pd_pause_pending : BOOL;
+	pd_pause_enabled : BOOL;
+	pd_pause_distance : LREAL;
+	pd_pause_wait : TIME;
 	pd_coupling : BOOL;
 	pd_ready : BOOL;
 	pd_fault : BOOL;
@@ -946,6 +951,9 @@ IF G.program_test_mode <> pd_mode THEN
 	END_IF
 END_IF
 IF pd_mode = 0 THEN
+	pd_pause_pending := FALSE;
+	pd_pause_timer(IN:=FALSE, PT:=pd_pause_wait);
+	G.program_test_wait_action := 0;
 	G.program_test_phase := 0;
 	G.program_test_sync_state := 0;
 	G.program_test_enable := FALSE;
@@ -1004,6 +1012,8 @@ pd_release_timer(IN:=((pd_state = 1) AND (pd_step = 0)) OR ((pd_state = 5) AND (
 pd_reclamp_timer(IN:=(pd_state = 2) OR ((pd_state = 7) AND (pd_step = 1)), PT:=pd_reclamp_wait);
 pd_release_lead_timer(IN:=(pd_state = 5) AND (pd_step = 0), PT:=pd_release_lead);
 pd_reclamp_lead_timer(IN:=(pd_state = 7) AND (pd_step = 0), PT:=pd_reclamp_lead);
+pd_pause_timer(IN:=pd_pause_pending AND ((pd_state = 4) OR (pd_state = 9)) AND (pd_step = 2),
+	PT:=pd_pause_wait);
 G.program_test_wait_action := 0;
 
 CASE pd_state OF
@@ -1057,6 +1067,13 @@ CASE pd_state OF
 		ELSIF (G.program_test_release_wait_ms > 60000) OR (G.program_test_reclamp_wait_ms > 60000) OR
 			(G.program_test_release_lead_ms > 60000) OR (G.program_test_reclamp_lead_ms > 60000) THEN
 			G.program_test_status_error_id := 16#7207;
+		ELSIF G.program_test_forward_pause_enabled AND
+			((pd_mode <> 1) OR NOT ((G.program_test_forward_pause_distance_mm > 0.0) AND
+			 (G.program_test_forward_pause_distance_mm <=
+			  G.program_test_axis1_prepare_from_left_mm - G.program_test_axis1_trigger_from_left_mm)) OR
+			 (G.program_test_forward_pause_duration_ms < 1) OR
+			 (G.program_test_forward_pause_duration_ms > 60000)) THEN
+			G.program_test_status_error_id := 16#7209;
 		END_IF
 		IF G.program_test_status_error_id <> 0 THEN
 			pd_state := 12;
@@ -1073,6 +1090,11 @@ CASE pd_state OF
 			pd_reclamp_wait := UDINT_TO_TIME(G.program_test_reclamp_wait_ms);
 			pd_release_lead := UDINT_TO_TIME(G.program_test_release_lead_ms);
 			pd_reclamp_lead := UDINT_TO_TIME(G.program_test_reclamp_lead_ms);
+			pd_pause_pending := FALSE;
+			// 与运动参数一起锁存，准备完成后修改输入不会影响本次递送。
+			pd_pause_enabled := G.program_test_forward_pause_enabled;
+			pd_pause_distance := G.program_test_forward_pause_distance_mm;
+			pd_pause_wait := UDINT_TO_TIME(G.program_test_forward_pause_duration_ms);
 			pd_open2 := MAX(WORD#5, G.program_test_cylinder2_open_word);
 			pd_close2 := MAX(WORD#5, G.program_test_cylinder2_close_word);
 			pd_open4 := MAX(WORD#5, G.program_test_cylinder4_open_word);
@@ -1207,11 +1229,39 @@ CASE pd_state OF
 	ELSE
 		IF pd_step = 0 THEN
 			pd_target[pd_axis] := G.program_test_trigger_target_abs;
+			pd_pause_pending := pd_pause_enabled AND (pd_mode = 1) AND
+				(G.program_test_return_target_abs - pd_pause_distance >= pd_target[pd_axis]);
+			IF pd_pause_pending THEN
+				pd_target[pd_axis] := G.program_test_return_target_abs - pd_pause_distance;
+			END_IF
 			pd_req[pd_axis] := TRUE;
 			pd_step := 1;
-		ELSIF G.return_cmd[pd_axis].Done THEN
-			pd_req[pd_axis] := FALSE;
-			pd_state := 5;
+		ELSIF (pd_step = 1) OR (pd_step = 3) THEN
+			IF G.return_cmd[pd_axis].Done AND NOT G.return_cmd[pd_axis].Busy THEN
+				pd_req[pd_axis] := FALSE;
+				IF pd_pause_pending THEN
+					pd_step := 2;
+					G.program_test_wait_action := 3;
+				ELSE
+					pd_state := 5;
+				END_IF
+			END_IF
+		ELSIF pd_step = 2 THEN
+			G.program_test_wait_action := 3;
+			// 等待旧定位握手复位后再发续行请求，避免复用上一次Done。
+			IF pd_pause_timer.Q AND NOT G.return_cmd[pd_axis].Done AND
+				NOT G.return_cmd[pd_axis].Busy AND (return_state[pd_axis] = 0) THEN
+				pd_pause_pending := FALSE;
+				pd_pause_timer(IN:=FALSE, PT:=pd_pause_wait);
+				G.program_test_wait_action := 0;
+				IF pd_target[pd_axis] > G.program_test_trigger_target_abs THEN
+					pd_target[pd_axis] := G.program_test_trigger_target_abs;
+					pd_req[pd_axis] := TRUE;
+					pd_step := 3;
+				ELSE
+					pd_state := 5;
+				END_IF
+			END_IF
 		END_IF
 	END_IF
 5:
@@ -1255,16 +1305,45 @@ CASE pd_state OF
 9:
 	IF pd_step = 0 THEN
 		pd_target[pd_axis] := G.program_test_final_target_abs;
+		pd_pause_pending := pd_pause_enabled AND (pd_mode = 1) AND
+			(G.program_test_return_target_abs - pd_pause_distance >= pd_target[pd_axis]);
+		IF pd_pause_pending THEN
+			pd_target[pd_axis] := G.program_test_return_target_abs - pd_pause_distance;
+		END_IF
 		pd_req[pd_axis] := TRUE;
 		pd_step := 1;
-	ELSIF G.return_cmd[pd_axis].Done THEN
-		pd_req[pd_axis] := FALSE;
-		pd_state := 10;
+	ELSIF (pd_step = 1) OR (pd_step = 3) THEN
+		IF G.return_cmd[pd_axis].Done AND NOT G.return_cmd[pd_axis].Busy THEN
+			pd_req[pd_axis] := FALSE;
+			IF pd_pause_pending THEN
+				pd_step := 2;
+				G.program_test_wait_action := 3;
+			ELSE
+				pd_state := 10;
+			END_IF
+		END_IF
+	ELSIF pd_step = 2 THEN
+		G.program_test_wait_action := 3;
+		// 等待旧定位握手复位后再发续行请求，避免复用上一次Done。
+		IF pd_pause_timer.Q AND NOT G.return_cmd[pd_axis].Done AND
+			NOT G.return_cmd[pd_axis].Busy AND (return_state[pd_axis] = 0) THEN
+			pd_pause_pending := FALSE;
+			pd_pause_timer(IN:=FALSE, PT:=pd_pause_wait);
+			G.program_test_wait_action := 0;
+			IF pd_target[pd_axis] > G.program_test_final_target_abs THEN
+				pd_target[pd_axis] := G.program_test_final_target_abs;
+				pd_req[pd_axis] := TRUE;
+				pd_step := 3;
+			ELSE
+				pd_state := 10;
+			END_IF
+		END_IF
 	END_IF
 END_CASE
 
 IF pd_state >= 11 THEN
 	pd_ready := FALSE;
+	pd_pause_pending := FALSE;
 	FOR i := 1 TO 7 DO
 		pd_req[i] := FALSE;
 		IF pd_last_state < 11 THEN pd_ref[i] := G.axis[i].NcToPlc.ActPos - G.init_pos[i]; END_IF

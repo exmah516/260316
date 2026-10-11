@@ -69,7 +69,7 @@ int main(int argc, char** argv) {
             const auto f = fields(line);
             check(std::stoul(f[0]) == rows && std::stoull(f[1]) == rows * 1000, "Archive lost or reordered samples");
             check(std::stoi(f[column("fn1_raw")]) == 113, "Raw force changed");
-            if (std::stod(f[column("axis1_pos_mm")]) == 13. && std::stod(f[column("axis1_vel_mm_s")]) == 0.) ++stationary;
+            if (std::stod(f[column("axis1_pos_mm")]) == 113. && std::stod(f[column("axis1_vel_mm_s")]) == 0.) ++stationary;
             ++rows;
         }
         check(rows == count && count > 70000 && stationary >= 70000, "Long pause archive incomplete");
