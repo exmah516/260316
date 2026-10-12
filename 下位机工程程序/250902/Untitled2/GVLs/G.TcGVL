@@ -130,6 +130,30 @@ VAR_GLOBAL
 	ft_2_value			AT %I* : INT;
 
 
+
+	// 手柄模式最近一次急停入口快照：计数增加后读取，自动恢复不清除；数组下标为轴号。
+	estop_diag_count : UDINT;
+	estop_diag_host_timeout : BOOL;
+	estop_diag_axis : ARRAY[1..7] OF ST_AxisStatus;
+	estop_diag_power : ARRAY[1..7] OF ST_McOutputs;
+	estop_diag_reset : ARRAY[1..7] OF ST_McOutputs;
+	estop_diag_power_enable : ARRAY[1..7] OF BOOL;
+	estop_diag_power_positive : ARRAY[1..7] OF BOOL;
+	estop_diag_power_negative : ARRAY[1..7] OF BOOL;
+	estop_diag_return_state : ARRAY[1..7] OF INT;
+	estop_diag_return_cmd : ARRAY[1..7] OF ST_AxisPlannedReturnCmd;
+	estop_diag_move_error : ARRAY[1..7] OF BOOL;
+	estop_diag_move_aborted : ARRAY[1..7] OF BOOL;
+	estop_diag_enable_error : ARRAY[1..7] OF BOOL;
+	estop_diag_disable_error : ARRAY[1..7] OF BOOL;
+	estop_diag_move_error_id : ARRAY[1..7] OF UDINT;
+	estop_diag_enable_error_id : ARRAY[1..7] OF UDINT;
+	estop_diag_disable_error_id : ARRAY[1..7] OF UDINT;
+	estop_diag_act_pos : ARRAY[1..7] OF LREAL;
+	estop_diag_act_vel : ARRAY[1..7] OF LREAL;
+	estop_diag_feed_pos : ARRAY[1..7] OF LREAL;
+	estop_diag_feed_vel : ARRAY[1..7] OF LREAL;
+	estop_diag_refer_abs : ARRAY[1..7] OF LREAL;
 END_VAR]]></Declaration>
   </GVL>
 </TcPlcObject>

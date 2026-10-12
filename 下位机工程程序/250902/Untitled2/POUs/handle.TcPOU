@@ -230,6 +230,31 @@ FOR i:=1 TO 7 DO
 END_FOR
 
 IF (NOT all_powered) OR has_axis_error THEN
+	// 在自动清错、重建参考和重启 Power 之前保留故障当拍，恢复后不清除。
+	G.estop_diag_host_timeout := G.host_comm_timeout;
+	FOR j:=1 TO 7 DO
+		G.estop_diag_axis[j] := G.axis[j].Status;
+		G.estop_diag_power[j] := G.power_output[j];
+		G.estop_diag_reset[j] := G.reset_output[j];
+		G.estop_diag_power_enable[j] := G.power_[j].Enable;
+		G.estop_diag_power_positive[j] := G.power_[j].Enable_Positive;
+		G.estop_diag_power_negative[j] := G.power_[j].Enable_Negative;
+		G.estop_diag_return_state[j] := return_state[j];
+		G.estop_diag_return_cmd[j] := G.return_cmd[j];
+		G.estop_diag_move_error[j] := fb_return_move_abs[j].Error;
+		G.estop_diag_move_aborted[j] := fb_return_move_abs[j].CommandAborted;
+		G.estop_diag_move_error_id[j] := fb_return_move_abs[j].ErrorID;
+		G.estop_diag_enable_error[j] := G.SetPointGenEnable[j].Error;
+		G.estop_diag_enable_error_id[j] := G.SetPointGenEnable[j].ErrorID;
+		G.estop_diag_disable_error[j] := G.SetPointGenDisable[j].Error;
+		G.estop_diag_disable_error_id[j] := G.SetPointGenDisable[j].ErrorID;
+		G.estop_diag_act_pos[j] := G.axis[j].NcToPlc.ActPos;
+		G.estop_diag_act_vel[j] := G.axis[j].NcToPlc.ActVelo;
+		G.estop_diag_feed_pos[j] := G.axis[j].PlcToNc.ExtSetPos;
+		G.estop_diag_feed_vel[j] := G.axis[j].PlcToNc.ExtSetVelo;
+		G.estop_diag_refer_abs[j] := G.refer[j] + G.init_pos[j];
+	END_FOR
+	G.estop_diag_count := G.estop_diag_count + 1;
 	G.estop_hold_req := TRUE;
 	FOR j:=1 TO 7 DO
 		G.Act_pos[j] := G.axis[j].NcToPlc.ActPos - G.init_pos[j];
@@ -425,6 +450,13 @@ FOR j:=1 TO 7 DO
 	G.act_pos_from_left[j] := G.axis[j].NcToPlc.ActPos - G.leftlimit[j];
 	G.refer_from_left[j] := (G.refer[j] + G.init_pos[j]) - G.leftlimit[j];
 
+	// 保持状态 30 锁存的位置，直到接管完成且上位机清除 Req，避免过渡参考覆盖预送值。
+	IF return_enable[j] AND ((return_state[j] = 31) OR G.return_cmd[j].Done OR G.return_cmd[j].Error) THEN
+		G.refer[j] := traj_pos[j];
+		G.refer_from_left[j] := traj_pos[j] + G.init_pos[j] - G.leftlimit[j];
+		CONTINUE;
+	END_IF
+
 	v_step := G.v_limit[j];
 	// 回退接管旁路：回退 Busy 期间跳过斜坡/均值，避免回退末端重新进入慢链路
 	return_handoff_bypass := ((j = 1) AND (G.axis1_fast_return OR G.return_cmd[1].Busy))
@@ -536,14 +568,14 @@ FOR i:=1 TO 7 DO
 		return_exec[i] := TRUE;
 		G.refer_from_left[i] := return_target_abs[i] - G.leftlimit[i];
 
-		IF fb_return_move_abs[i].Done OR
-		   ((NOT fb_return_move_abs[i].Busy) AND (ABS(G.axis[i].NcToPlc.ActPos - return_target_abs[i]) <= 0.05)) THEN
-			return_finish_error[i] := FALSE;
-			return_error_id_pending[i] := 0;
-			return_state[i] := 30;
-		ELSIF fb_return_move_abs[i].Error OR fb_return_move_abs[i].CommandAborted THEN
+		// 接近目标不能代替功能块完成确认，否则未启动或被中断的命令也会被当成成功。
+		IF fb_return_move_abs[i].Error OR fb_return_move_abs[i].CommandAborted THEN
 			return_finish_error[i] := TRUE;
 			return_error_id_pending[i] := fb_return_move_abs[i].ErrorID;
+			return_state[i] := 30;
+		ELSIF fb_return_move_abs[i].Done THEN
+			return_finish_error[i] := FALSE;
+			return_error_id_pending[i] := 0;
 			return_state[i] := 30;
 		END_IF
 

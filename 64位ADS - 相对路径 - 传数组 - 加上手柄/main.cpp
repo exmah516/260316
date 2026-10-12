@@ -1276,7 +1276,18 @@ int main(int argc, char* argv[])
 			{
 				ads_soft_hold_active = true;
 				clear_force_output();
-				std::cout << "ADS 快照中断：保持最后参考并丢弃故障期间手柄增量。" << std::endl;
+				std::cout << "ADS/PLC 运动条件未就绪：保持最后参考并丢弃故障期间手柄增量。"
+					<< " new_snapshot=" << has_new_ads_snapshot
+					<< " position_valid=" << ads_snapshot.position_valid
+					<< " ads_state=" << static_cast<int>(ads_stats.state)
+					<< " self_check_done=" << self_check_done
+					<< " handle_reinit_done=" << ads_events.handle_reinit_done
+					<< " host_timeout(snapshot/event)=" << ads_snapshot.host_comm_timeout
+					<< "/" << ads_events.host_comm_timeout
+					<< " gen_state=" << ads_events.gen_state
+					<< " estop=" << ads_events.estop_hold_req
+					<< " consecutive_failures=" << ads_stats.consecutive_failures
+					<< std::endl;
 			}
 		}
 		else if ((ads_soft_hold_active || (connection_hold_active_prev && initial_sync_done)) &&
