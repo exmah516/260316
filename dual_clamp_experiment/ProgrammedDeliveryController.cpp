@@ -12,6 +12,7 @@
 void ProgrammedDeliveryController::reset_model_locked(const char* reason)
 {
 	pulse_guard_.reset();
+	handover_hold_.reset();
 	pulse_compute_us_ = 0.0;
 	illustration_.reset();
 	illustration_gate_.reset();
@@ -506,6 +507,7 @@ void ProgrammedDeliveryController::abort()
 	stop_handle_loop();
 	std::lock_guard<std::mutex> lock(mutex_);
 	if (ads_.is_open() && !ads_.request_abort()) last_error_ = "下发中止请求失败：" + ads_.last_error();
+	handover_hold_.reset();
 	started_ = false;
 	handle_582_.close();
 	handle_anchor_valid_ = false;
@@ -888,6 +890,10 @@ void ProgrammedDeliveryController::poll_stream_locked()
 			const auto& side = guidewire ? cal.side2 : cal.side1;
 			const bool force_valid = cal.valid && std::isfinite(side.force_cal_delta_n) &&
 				std::isfinite(side.ft_cal_delta_n);
+			s.handover = handover_hold_.update({s.plc_time_us, s.sample_index, s.phase, s.cycle_index,
+				s.axis1_from_left_mm, config_.axis1_trigger_from_left_mm,
+				cal.side1.force_cal_delta_n, cal.side1.torque_cal_delta_nmm,
+				force_valid && s.position_reference_valid, config_.mode == ProgrammedDeliveryMode::Catheter});
 			if (config_.mode != ProgrammedDeliveryMode::ExternalValidation) {
 			const auto pulse_begin = std::chrono::steady_clock::now();
 			const short raw_fn = guidewire ? s.fn2 : s.fn1, raw_ft = guidewire ? s.ft2 : s.ft1;
@@ -937,7 +943,10 @@ void ProgrammedDeliveryController::poll_stream_locked()
 					s.model_valid, s.phase, s.illustration.fn, s.illustration.ft,
 					s.illustration.valid_fn, s.illustration.valid_ft,
 					s.pulse_fn_N, s.pulse_ft_N, s.pulse.replaced, unsigned(s.pulse.status),
-					s.pulse.age_us, s.pulse.locked});
+					s.pulse.age_us, s.pulse.locked, s.handover.fn_N,
+					s.handover.torque_Nmm / forcecal::kTangentialArmMm,
+					s.handover.valid, s.handover.reference_valid, s.handover.holding,
+					unsigned(s.handover.source), unsigned(s.handover.status)});
 			} else { illustration_.reset(); illustration_gate_.reset(); }
 			converted.push_back(s);
 		}
@@ -1135,7 +1144,10 @@ bool ProgrammedDeliveryController::write_samples_csv(const std::string& director
 	}
 	else if (config_.mode == ProgrammedDeliveryMode::Catheter)
 	{
-		out << "sample_index,plc_time_us,phase,event_sequence,cycle_index,axis1_pos_abs_mm,axis1_velocity_mm_s,axis1_acceleration_mm_s2,axis2_pos_deg,axis2_velocity_deg_s,axis2_acceleration_deg_s2,cylinder1_cmd,cylinder2_cmd,fn_1_raw,ft_1_raw,fn1_sensor_N,ft1_sensor_N,fn1_cal_delta_N,fn1_cal_abs_N,ft1_cal_delta_N,ft1_cal_abs_N,torque1_cal_delta_Nmm,torque1_cal_abs_Nmm,fn1_decoupled_delta_N,torque1_decoupled_delta_Nmm,fn1_decoupled_abs_N,torque1_decoupled_abs_Nmm,axis2_angle_deg\n";
+		out << "sample_index,plc_time_us,phase,event_sequence,cycle_index,axis1_pos_abs_mm,axis1_velocity_mm_s,axis1_acceleration_mm_s2,axis2_pos_deg,axis2_velocity_deg_s,axis2_acceleration_deg_s2,cylinder1_cmd,cylinder2_cmd,fn_1_raw,ft_1_raw,fn1_sensor_N,ft1_sensor_N,fn1_cal_delta_N,fn1_cal_abs_N,ft1_cal_delta_N,ft1_cal_abs_N,torque1_cal_delta_Nmm,torque1_cal_abs_Nmm,fn1_decoupled_delta_N,torque1_decoupled_delta_Nmm,fn1_decoupled_abs_N,torque1_decoupled_abs_Nmm,axis2_angle_deg";
+		handoverhold::write_csv_header(out);
+		out << '\n';
+		handoverhold::Tracker hold;
 		for (const auto& s : samples)
 		{
 			const forcecal::Result cal = forcecal::calculate(s.fn1, s.ft1, s.fn2, s.ft2, stream_status_.zero.value, stream_status_.zero.valid);
@@ -1147,7 +1159,13 @@ bool ProgrammedDeliveryController::write_samples_csv(const std::string& director
 					<< ',' << cal.side1.ft_cal_delta_n << ',' << cal.side1.ft_cal_abs_n << ',' << cal.side1.torque_cal_delta_nmm << ',' << cal.side1.torque_cal_abs_nmm
 					<< ',' << cal.side1.force_decoupled_delta_n << ',' << cal.side1.torque_decoupled_delta_nmm << ',' << cal.side1.force_decoupled_abs_n << ',' << cal.side1.torque_decoupled_abs_nmm;
 			else out << ",,,,,,,,,,,,";
-			out << ',' << s.axis2_pos << '\n';
+			out << ',' << s.axis2_pos;
+			const auto held = hold.update({s.plc_time_us, s.sample_index, s.phase, s.cycle_index,
+				s.axis1_pos - position_reference_.leftlimit_axis1_abs_mm, config_.axis1_trigger_from_left_mm,
+				cal.side1.force_cal_delta_n, cal.side1.torque_cal_delta_nmm,
+				cal.valid && position_reference_.valid && position_reference_.leftlimit_valid, true});
+			handoverhold::write_csv(out, held);
+			out << '\n';
 		}
 	}
 	else

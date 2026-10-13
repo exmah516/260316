@@ -57,6 +57,11 @@ void pulse_recording_test() {
                 wire?short(s.pulse.ft):s.ft2,zero.value,true);
             const auto& side=wire?clean.side2:clean.side1;
             s.pulse_fn_N=side.force_cal_delta_n;s.pulse_ft_N=side.ft_cal_delta_n;
+            s.handover.fn_N=1.25;s.handover.torque_Nmm=3.7;
+            s.handover.valid=s.handover.reference_valid=s.handover.holding=!wire && i<11999;
+            s.handover.source=handoverhold::Source::StableWindow;
+            s.handover.status=handoverhold::Status::Holding;
+            s.handover.sample_count=20;
             block.push_back(s);
             if(block.size()==512 || i==11999) {
                 const auto start=std::chrono::steady_clock::now();
@@ -83,6 +88,11 @@ void pulse_recording_test() {
         while(std::getline(file,line)) {
             auto f=fields(line);
             check(f.size()==header.size(),"column count");
+            if (mode==ProgrammedDeliveryMode::Catheter && index<11999) {
+                check(std::stod(f[col("handover_fn_N")])==1.25,"hold force recorded");
+                check(std::stod(f[col("handover_torque_Nmm")])==3.7,"hold torque units");
+                check(f[col("handover_holding")]=="1" && f[col("handover_sample_count")]=="20","hold state recorded");
+            } else check(f[col("handover_fn_N")].empty() && f[col("handover_torque_Nmm")].empty(),"invalid hold blank");
             check(std::stoul(f[col("sample_index")])==index,"index");
             check(std::stoll(f[col("plc_time_us")])==index*1000LL,"timestamp");
             check(std::stod(f[col("record_axis2_nc_deg")])==12,"axis2 coordinate");
@@ -104,6 +114,7 @@ void pulse_recording_test() {
         std::ifstream meta(dir/"experiment.json");
         std::string text((std::istreambuf_iterator<char>(meta)),{});
         check(text.find("\"return_acceleration_mm_s2\": 600")!=std::string::npos,"settings saved");
+        check(text.find("\"handover_hold\":")!=std::string::npos,"hold policy snapshot");
         std::cout<<"PULSE_RECORD "<<dir.u8string()<<" points=12000 total_ms="<<wall_ms
                  <<" append_max_us="<<*std::max_element(append_us.begin(),append_us.end())
                  <<" samples_bytes="<<std::filesystem::file_size(dir/"samples_1khz.csv")<<'\n';

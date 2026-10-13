@@ -26,11 +26,21 @@ namespace DualClampExperimentUI
             public bool PulseAvailable, PulseReplaced, PulseLocked;
             public int PulseStatus;
             public ulong PulseAgeUs;
+            public double HandoverFn, HandoverFt;
+            public bool HandoverAvailable, HandoverValid, HandoverReferenceValid, HandoverHolding;
+            public int HandoverSource, HandoverStatus;
         }
         private readonly List<CurveSample> _curvePoints = new List<CurveSample>();
         private ulong _curveCursor, _curveGeneration;
         private double _lastDrawMs;
         private bool _curveGap;
+        private bool HandoverVisible => CurrentMode == "catheter" && HandoverHoldToggle.IsChecked == true;
+        private void HandoverVisibility_Changed(object sender, RoutedEventArgs e)
+        {
+            if (!_loaded) return;
+            PulseGuardToggle.IsEnabled = !HandoverVisible;
+            DrawCausalCurves();
+        }
         private readonly bool[,] _model2Choices = new bool[5, 2];
         private bool _restoringModel2;
         private int _model2Mode;
@@ -86,6 +96,7 @@ namespace DualClampExperimentUI
             if (CausalForceLine == null) return;
             CausalForceLine.Points.Clear(); CausalTorqueLine.Points.Clear();
             Model2ForceLine.Points.Clear(); Model2TorqueLine.Points.Clear();
+            HandoverForceLine.Data = HandoverTorqueLine.Data = null;
             if (CurrentMode != "legacy") {
                 Force1Line.Points.Clear(); Torque1Line.Points.Clear();
                 CausalStatusText.Text = "模型：等待数据";
@@ -107,7 +118,7 @@ namespace DualClampExperimentUI
             foreach (string item in p[10].Split(';')) {
                 if (item.Length == 0) continue;
                 string[] f = item.Split(',');
-                if (f.Length != 8 && f.Length != 12 && f.Length != 18) continue;
+                if (f.Length != 8 && f.Length != 12 && f.Length != 18 && f.Length != 25) continue;
                 var s = new CurveSample {
                     Sequence = ulong.Parse(f[0], CultureInfo.InvariantCulture),
                     Time = D(f[1]), Fn = D(f[2]), Ft = D(f[3]),
@@ -116,15 +127,25 @@ namespace DualClampExperimentUI
                     Model2Ft = f.Length >= 12 ? D(f[9]) : D(f[3]),
                     Model2FnValid = f.Length >= 12 && f[10] == "1",
                     Model2FtValid = f.Length >= 12 && f[11] == "1",
-                    PulseAvailable = f.Length == 18,
-                    PulseFn = f.Length == 18 ? D(f[12]) : D(f[2]),
-                    PulseFt = f.Length == 18 ? D(f[13]) : D(f[3]),
-                    PulseReplaced = f.Length == 18 && f[14] == "1",
-                    PulseStatus = f.Length == 18 ? int.Parse(f[15],CultureInfo.InvariantCulture) : 0,
-                    PulseAgeUs = f.Length == 18 ? ulong.Parse(f[16],CultureInfo.InvariantCulture) : 0,
-                    PulseLocked = f.Length == 18 && f[17] == "1"
+                    PulseAvailable = f.Length >= 18,
+                    PulseFn = f.Length >= 18 ? D(f[12]) : D(f[2]),
+                    PulseFt = f.Length >= 18 ? D(f[13]) : D(f[3]),
+                    PulseReplaced = f.Length >= 18 && f[14] == "1",
+                    PulseStatus = f.Length >= 18 ? int.Parse(f[15],CultureInfo.InvariantCulture) : 0,
+                    PulseAgeUs = f.Length >= 18 ? ulong.Parse(f[16],CultureInfo.InvariantCulture) : 0,
+                    PulseLocked = f.Length >= 18 && f[17] == "1",
+                    HandoverAvailable = f.Length == 25,
+                    HandoverFn = f.Length == 25 ? D(f[18]) : 0,
+                    HandoverFt = f.Length == 25 ? D(f[19]) : 0,
+                    HandoverValid = f.Length == 25 && f[20] == "1",
+                    HandoverReferenceValid = f.Length == 25 && f[21] == "1",
+                    HandoverHolding = f.Length == 25 && f[22] == "1",
+                    HandoverSource = f.Length == 25 ? int.Parse(f[23],CultureInfo.InvariantCulture) : 0,
+                    HandoverStatus = f.Length == 25 ? int.Parse(f[24],CultureInfo.InvariantCulture) : 0
                 };
                 if (s.Sequence <= _curveCursor) continue;
+                if (double.IsNaN(s.HandoverFn) || double.IsInfinity(s.HandoverFn) ||
+                    double.IsNaN(s.HandoverFt) || double.IsInfinity(s.HandoverFt)) s.HandoverValid = false;
                 _curveCursor = s.Sequence;
                 if (new[] {s.Time, s.Fn, s.Ft, s.CorrectedFn, s.CorrectedFt, s.Model2Fn, s.Model2Ft, s.PulseFn, s.PulseFt}.Any(
                     x => double.IsNaN(x) || double.IsInfinity(x))) continue;
@@ -185,6 +206,9 @@ namespace DualClampExperimentUI
 
         private void DrawCausalCurves()
         {
+            if (HandoverForceLine != null)
+                HandoverForceLine.Visibility = HandoverTorqueLine.Visibility = HandoverTorqueLegend.Visibility =
+                    HandoverVisible ? Visibility.Visible : Visibility.Collapsed;
             if (_loaded && IsExternalMode) { DrawExternalCurves(); return; }
             if (!_loaded || CurrentMode == "legacy") {
                 if (CausalForceLine != null) CausalForceLine.Visibility = CausalTorqueLine.Visibility = Visibility.Collapsed;
@@ -200,7 +224,7 @@ namespace DualClampExperimentUI
             DrawTimed(TorqueCanvas, Torque1Line, CausalTorqueLine, false);
             if (_curvePoints.Count > 0) {
                 var s = _curvePoints.Last();
-                bool cleaned = PulseGuardToggle.IsChecked == true && s.PulseAvailable;
+                bool cleaned = !HandoverVisible && PulseGuardToggle.IsChecked == true && s.PulseAvailable;
                 bool isReconstruct = DynamicsReconstruct.IsChecked == true && !_appliedValidation;
                 ForceValueText.Text = string.Format(CultureInfo.InvariantCulture,
                     "{3} {0:F4} N   {4} {1:F4} N   t={2:F3} s",
@@ -223,13 +247,19 @@ namespace DualClampExperimentUI
                     ForceValueText.Text += s.Model2FnValid ? "\n示意有效" : "\n示意未启用/参考不足";
                 if (Model2TorqueToggle.IsChecked == true)
                     TorqueValueText.Text += s.Model2FtValid ? "\n示意有效" : "\n示意未启用/参考不足";
+                if (HandoverVisible) {
+                    string state = !s.HandoverAvailable ? "旧数据无冻结列" : !s.HandoverValid ?
+                        (s.HandoverStatus == 10 ? "记录结束" : "参考不可用") : s.HandoverHolding ? "冻结中" : "实时";
+                    ForceValueText.Text += "\n冻结：" + state + (s.HandoverValid ? " " + s.HandoverFn.ToString("F4", CultureInfo.InvariantCulture) + " N" : "");
+                    TorqueValueText.Text += "\n冻结：" + state + (s.HandoverValid ? " " + s.HandoverFt.ToString("F4", CultureInfo.InvariantCulture) + " N" : "");
+                }
             }
             _lastDrawMs = watch.Elapsed.TotalMilliseconds;
         }
 
         private double DisplayForce(CurveSample s, bool axial)
         {
-            return PulseGuardToggle.IsChecked == true && s.PulseAvailable
+            return !HandoverVisible && PulseGuardToggle.IsChecked == true && s.PulseAvailable
                 ? (axial ? s.PulseFn : s.PulseFt) : (axial ? s.Fn : s.Ft);
         }
 
@@ -243,12 +273,17 @@ namespace DualClampExperimentUI
         {
             if (canvas.ActualWidth < 10 || canvas.ActualHeight < 10) return;
             var illustration = axial ? Model2ForceLine : Model2TorqueLine;
-            if (_curvePoints.Count == 0) { original.Points.Clear(); corrected.Points.Clear(); illustration.Points.Clear(); return; }
+            var hold = axial ? HandoverForceLine : HandoverTorqueLine;
+            if (_curvePoints.Count == 0) { original.Points.Clear(); corrected.Points.Clear(); illustration.Points.Clear(); hold.Data = null; return; }
             double min = double.PositiveInfinity, max = double.NegativeInfinity;
             foreach (var s in _curvePoints) {
                 double a = DisplayForce(s,axial), b = DisplayCorrected(s,axial);
                 min = Math.Min(min, a); max = Math.Max(max, a);
                 if (s.Valid) { min = Math.Min(min, b); max = Math.Max(max, b); }
+                if (HandoverVisible && s.HandoverValid) {
+                    double h = axial ? s.HandoverFn : s.HandoverFt;
+                    min = Math.Min(min, h); max = Math.Max(max, h);
+                }
                 if (illustration.Visibility == Visibility.Visible) {
                     double c = axial ? s.Model2Fn : s.Model2Ft;
                     min = Math.Min(min, c); max = Math.Max(max, c);
@@ -272,6 +307,20 @@ namespace DualClampExperimentUI
             }
             original.Points = aPoints; corrected.Points = bPoints;
             illustration.Points = cPoints;
+            // 独立子路径保留所有有效段，结束或缺参考时不连接回原值。
+            var geometry = new StreamGeometry();
+            using (var context = geometry.Open()) {
+                bool penDown = false;
+                foreach (var s in _curvePoints) {
+                    if (!s.HandoverValid) { penDown = false; continue; }
+                    var point = new Point((s.Time - start) / duration * canvas.ActualWidth,
+                        (max - (axial ? s.HandoverFn : s.HandoverFt)) / (max - min) * canvas.ActualHeight);
+                    if (!penDown) context.BeginFigure(point, false, false);
+                    else context.LineTo(point, true, false);
+                    penDown = true;
+                }
+            }
+            geometry.Freeze(); hold.Data = geometry;
         }
 
         // Offline visual QA never opens the pipe, connects ADS, or starts a backend.
@@ -287,6 +336,14 @@ namespace DualClampExperimentUI
             string signReplay = args.Contains("--negative-sign-replay") ? "-1" : "1";
             // Exercise defaults and per-mode independent choices without a hardware connection.
             ExperimentModeBox.SelectedIndex = 1; UpdateModeView();
+            if (HandoverHoldToggle.IsChecked == true) throw new InvalidOperationException("Handover must default off");
+            HandoverHoldToggle.IsChecked = true;
+            ExperimentModeBox.SelectedIndex = 2; UpdateModeView();
+            if (HandoverVisible || HandoverHoldToggle.Visibility != Visibility.Collapsed)
+                throw new InvalidOperationException("Handover catheter isolation failed");
+            ExperimentModeBox.SelectedIndex = 1; UpdateModeView();
+            if (!HandoverVisible) throw new InvalidOperationException("Handover choice persistence failed");
+            HandoverHoldToggle.IsChecked = false;
             if (Model2ForceToggle.IsChecked == true || Model2TorqueToggle.IsChecked == true)
                 throw new InvalidOperationException("Model2 must default off");
             Model2ForceToggle.IsChecked = true;
@@ -342,7 +399,8 @@ namespace DualClampExperimentUI
                         row[7], row[8], (D(row[7]) - D(row[9])).ToString("R", CultureInfo.InvariantCulture),
                         (D(row[8]) - D(row[10])).ToString("R", CultureInfo.InvariantCulture), row[12], row[5])
                         + (row.Length >= 17 ? "," + string.Join(",", row.Skip(13).Take(4)) : "")
-                        + (row.Length >= 23 ? "," + string.Join(",", row.Skip(17).Take(6)) : ""));
+                        + (row.Length >= 23 ? "," + string.Join(",", row.Skip(17).Take(6)) : "")
+                        + (row.Length >= 30 ? "," + string.Join(",", row.Skip(23).Take(7)) : ""));
                 }
                 ParseCurveResponse("PROGRAM_CURVES|1|" + (guidewire ? "2|1" : dynamicsReplay ? "1|1" : "1|0")
                     + "|1|1|offline-parity-fixture|0|511|0|" + string.Join(";", payload)
@@ -361,8 +419,19 @@ namespace DualClampExperimentUI
                         PulseGuardToggle.IsChecked = true;
                     }
                 }
+                if (args.Contains("--handover-replay")) {
+                    HandoverHoldToggle.IsChecked = true;
+                    CausalForceToggle.IsChecked = CausalTorqueToggle.IsChecked = false;
+                    if (!_curvePoints.Any(x => x.HandoverValid && x.HandoverHolding))
+                        throw new InvalidOperationException("Handover replay fields missing");
+                    if (_curvePoints.Any(x => DisplayForce(x, true) != x.Fn || DisplayForce(x, false) != x.Ft))
+                        throw new InvalidOperationException("Handover must retain raw comparison");
+                }
                 UpdateLayout(); DrawCausalCurves();
                 UpdateLayout(); DrawCausalCurves();
+                if (HandoverVisible && (HandoverForceLine.Data == null || HandoverForceLine.Data.Bounds.IsEmpty ||
+                    HandoverTorqueLine.Data == null || HandoverTorqueLine.Data.Bounds.IsEmpty))
+                    throw new InvalidOperationException("Handover charts are blank");
                 int snapshot = Array.IndexOf(args, "--curve-snapshot");
                 if (snapshot >= 0 && snapshot + 1 < args.Length) {
                     var bitmap = new RenderTargetBitmap((int)ActualWidth, (int)ActualHeight, 96, 96, PixelFormats.Pbgra32);
@@ -380,6 +449,8 @@ namespace DualClampExperimentUI
                         + ",\"dynamics_ui_tests_passed\":true,\"hardware_connected\":false"
                         + ",\"pulse_fields_present\":" + (_curvePoints.Any(x => x.PulseAvailable) ? "true" : "false")
                         + ",\"pulse_replaced_visible_points\":" + _curvePoints.Count(x => x.PulseReplaced)
+                        + ",\"handover_visible\":" + (HandoverVisible ? "true" : "false")
+                        + ",\"handover_holding_points\":" + _curvePoints.Count(x => x.HandoverHolding)
                         + ",\"dynamics_sign\":" + signReplay
                         + ",\"validation_mode\":" + (validationReplay ? "true" : "false") + "}", System.Text.Encoding.UTF8);
                     Close();

@@ -18,6 +18,9 @@ struct CurvePoint {
     unsigned pulse_status = 0;
     std::uint64_t pulse_age_us = 0;
     bool pulse_locked = false;
+    double handover_fn = 0, handover_ft = 0;
+    bool handover_valid = false, handover_reference_valid = false, handover_holding = false;
+    unsigned handover_source = 0, handover_status = 0;
 };
 // Called under ProgrammedDeliveryController's mutex.
 class CurveBuffer {
@@ -47,7 +50,10 @@ public:
                 << ',' << p.illustration_fn << ',' << p.illustration_ft
                 << ',' << p.illustration_valid_fn << ',' << p.illustration_valid_ft
                 << ',' << p.pulse_fn << ',' << p.pulse_ft << ',' << p.pulse_replaced
-                << ',' << p.pulse_status << ',' << p.pulse_age_us << ',' << p.pulse_locked;
+                << ',' << p.pulse_status << ',' << p.pulse_age_us << ',' << p.pulse_locked
+                << ',' << p.handover_fn << ',' << p.handover_ft << ',' << p.handover_valid
+                << ',' << p.handover_reference_valid << ',' << p.handover_holding
+                << ',' << p.handover_source << ',' << p.handover_status;
             if (count >= 1024) break;
         }
         return out.str();

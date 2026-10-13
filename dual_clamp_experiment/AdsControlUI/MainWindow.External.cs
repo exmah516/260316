@@ -59,6 +59,9 @@ namespace DualClampExperimentUI
                 DynamicsReconstruct.Visibility =
                 IsExternalMode ? Visibility.Collapsed : Visibility.Visible;
             PulseGuardToggle.Visibility = IsExternalMode ? Visibility.Collapsed : Visibility.Visible;
+            HandoverHoldToggle.Visibility = CurrentMode == "catheter" ? Visibility.Visible : Visibility.Collapsed;
+            HandoverForceLine.Visibility = HandoverTorqueLine.Visibility = HandoverTorqueLegend.Visibility = Visibility.Collapsed;
+            PulseGuardToggle.IsEnabled = !HandoverVisible;
             Force2LegendText.Text = IsExternalMode ? "轴6参考 (N)" : "fn2 (N)";
             Torque2LegendText.Text = IsExternalMode ? "轴6参考 (N·mm)" : "ft2 (N)";
             CausalTorqueToggle.Content = IsExternalMode ? "轴1惯性试算" : "ft 原值（未补偿）";

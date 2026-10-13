@@ -533,6 +533,9 @@
                                 </CheckBox>
                                 <CheckBox x:Name="CausalForceToggle" Content="运动补偿估计" Foreground="#E11D48" IsChecked="True"
                                           Checked="CausalVisibility_Changed" Unchecked="CausalVisibility_Changed" Margin="0,0,10,0"/>
+                                <CheckBox x:Name="HandoverHoldToggle" Content="换手冻结显示" IsChecked="False" Foreground="#111827"
+                                          Checked="HandoverVisibility_Changed" Unchecked="HandoverVisibility_Changed"
+                                          ToolTip="黑线为冻结显示，原始曲线保留。仅导管轴1，不改变手柄反馈；冻结期间不代表实时受力。"/>
                                 <Border x:Name="Force1Legend" Background="#F0FDFA" BorderBrush="#CCFBF1" BorderThickness="1" CornerRadius="4" Padding="8,2" Margin="0,0,8,0">
                                     <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
                                         <Ellipse Width="8" Height="8" Fill="#0D9488" Margin="0,0,6,0"/>
@@ -564,6 +567,7 @@
                                     <Polyline x:Name="Force2Line" Stroke="#EA580C" StrokeThickness="2.2" StrokeLineJoin="Round"/>
                                     <Polyline x:Name="CausalForceLine" Stroke="#E11D48" StrokeThickness="1.5" StrokeLineJoin="Round" StrokeDashArray="4,2"/>
                                     <Polyline x:Name="Model2ForceLine" Stroke="#B45309" StrokeThickness="1.5" StrokeDashArray="2,2" Visibility="Collapsed"/>
+                                    <Path x:Name="HandoverForceLine" Stroke="#111827" StrokeThickness="1.8" Visibility="Collapsed" IsHitTestVisible="False"/>
                                 </Canvas>
                             </Grid>
                         </Border>
@@ -596,6 +600,7 @@
                                 </CheckBox>
                                 <CheckBox x:Name="CausalTorqueToggle" Content="ft 原值（未补偿）" Foreground="#E11D48" IsChecked="True"
                                           Checked="CausalVisibility_Changed" Unchecked="CausalVisibility_Changed" Margin="0,0,10,0"/>
+                                <TextBlock x:Name="HandoverTorqueLegend" Text="换手冻结显示" Foreground="#111827" Visibility="Collapsed"/>
                                 <Border x:Name="Torque1Legend" Background="#EFF6FF" BorderBrush="#DBEAFE" BorderThickness="1" CornerRadius="4" Padding="8,2" Margin="0,0,8,0">
                                     <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
                                         <Ellipse Width="8" Height="8" Fill="#2563EB" Margin="0,0,6,0"/>
@@ -627,6 +632,7 @@
                                     <Polyline x:Name="Torque2Line" Stroke="#9333EA" StrokeThickness="2.2" StrokeLineJoin="Round"/>
                                     <Polyline x:Name="CausalTorqueLine" Stroke="#E11D48" StrokeThickness="1.5" StrokeLineJoin="Round" StrokeDashArray="4,2"/>
                                     <Polyline x:Name="Model2TorqueLine" Stroke="#B45309" StrokeThickness="1.5" StrokeDashArray="2,2" Visibility="Collapsed"/>
+                                    <Path x:Name="HandoverTorqueLine" Stroke="#111827" StrokeThickness="1.8" Visibility="Collapsed" IsHitTestVisible="False"/>
                                 </Canvas>
                             </Grid>
                         </Border>

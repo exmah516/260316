@@ -96,6 +96,7 @@ private:
 	double model_block_span_ms_ = 0.0;
 	bool model_zero_valid_ = false;
 	forcepulse::Guard pulse_guard_;
+	handoverhold::Tracker handover_hold_;
 	double pulse_compute_us_ = 0.0;
 	ProgrammedDeliveryLiveFrame position_reference_{};
 	std::thread handle_thread_;

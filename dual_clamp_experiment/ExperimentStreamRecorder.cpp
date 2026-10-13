@@ -492,7 +492,9 @@ bool ExperimentStreamRecorder::write_program_header(ProgrammedDeliveryMode mode,
 		"fn_despiked_N,ft_despiked_N,pulse_valid,pulse_replaced,pulse_source_index,pulse_age_us,"
 		"pulse_status,pulse_locked,pulse_compute_us,"
 		"model_motion_N,model_low_frequency_N,model_transient_N,model_wavelet_strength,"
-		"model_event_type,model_event_relative_s,model_final_compensation_N,feedback_force_N\n";
+		"model_event_type,model_event_relative_s,model_final_compensation_N,feedback_force_N";
+	handoverhold::write_csv_header(samples_);
+	samples_ << '\n';
 	if (!samples_) { error = "写入程序模式CSV表头失败"; return false; }
 	return true;
 }
@@ -757,7 +759,9 @@ bool ExperimentStreamRecorder::append_program(const std::vector<ProgrammedDelive
 			<< ',' << s.dynamics.motion_N << ',' << s.dynamics.low_frequency_N
 			<< ',' << s.dynamics.transient_N << ',' << s.dynamics.wavelet_strength
 			<< ',' << s.dynamics.event_type << ',' << s.dynamics.event_relative_s
-			<< ',' << s.dynamics.fn_N << ',' << s.feedback_force_N << '\n';
+			<< ',' << s.dynamics.fn_N << ',' << s.feedback_force_N;
+		handoverhold::write_csv(rows, s.handover);
+		rows << '\n';
 		pulse_replaced_count_ += s.pulse.replaced ? 1 : 0;
 		pulse_compute_max_us_ = std::max(pulse_compute_max_us_,s.pulse_compute_us);
 		++sample_count_;
@@ -993,6 +997,9 @@ bool ExperimentStreamRecorder::write_json(const std::string& status, const std::
 			<< "  \"reclamp_wait_ms\": " << program_config_.reclamp_wait_ms << ",\n"
 			<< "  \"release_lead_ms\": " << program_config_.release_lead_ms << ",\n"
 			<< "  \"reclamp_lead_ms\": " << program_config_.reclamp_lead_ms << ",\n";
+		out << "  \"handover_hold\": ";
+		handoverhold::write_metadata(out);
+		out << ",\n";
 		}
 		out << "  \"cylinder1_coupling_enabled\": " << (program_cylinder1_coupling_enabled_ ? "true" : "false") << ",\n"
 			<< "  \"cylinder3_coupling_enabled\": " << (program_cylinder3_coupling_enabled_ ? "true" : "false") << ",\n"

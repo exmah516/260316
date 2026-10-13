@@ -5,6 +5,7 @@
 #include "ClampDynamics.h"
 #include "ForcePulseGuard.h"
 #include "CylinderCommand.h"
+#include "HandoverHold.h"
 #include <cstdint>
 #include <string>
 
@@ -128,6 +129,7 @@ struct ProgrammedDeliveryLiveFrame
 
 struct ProgrammedDeliverySample
 {
+	handoverhold::Result handover;
 	forcepulse::Result pulse;
 	double pulse_fn_N = 0.0, pulse_ft_N = 0.0, pulse_compute_us = 0.0;
 	double axis1_from_left_mm = 0.0, axis6_from_left_mm = 0.0;

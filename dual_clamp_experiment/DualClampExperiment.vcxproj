@@ -60,6 +60,7 @@
     <ClInclude Include="ForceCalibration.h" />
     <ClInclude Include="ExternalValidation.h" />
     <ClInclude Include="ForcePulseGuard.h" />
+    <ClInclude Include="HandoverHold.h" />
     <ClInclude Include="ClampDisturbance.h" />
     <ClInclude Include="ClampDisturbanceParameters.h" />
     <ClInclude Include="ClampCurveBuffer.h" />
