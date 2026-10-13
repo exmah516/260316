@@ -346,3 +346,31 @@ PLC 侧无 ADS 配置文件，由 TwinCAT XAR 路由表管理。上位机连接�
 - 未触碰任何源文件。
 
 ### （此处持续追加）
+
+### 2026-10-12 — 回退交接保持与急停入口快照
+
+正式工程路径为 `下位机工程程序/250902/Untitled2`。回退状态 30 锁存停稳位置，状态 31 重新使能外部设定值发生器；从状态 31 到上位机清除完成/错误请求期间，PLC 保持该位置，避免 ADS 过渡参考覆盖预送值。运动完成只认 `MC_MoveAbsolute.Done`，错误/中断优先处理，不再以“接近目标且非 Busy”替代完成确认。手柄模式下，由 `handle` 按原时序调用外部给定 Enable/Disable；MAIN 仅在非 `_handle` 状态调用 `SETPOSITIONGEN`，避免与手柄内部重复调用。回退接管仍先 Feed、再 Enable；急停入口先锁存诊断，再撤销残留 Enable 请求。
+
+新增 `G.estop_diag_*` 是手柄模式急停入口的最近一次快照。进入原有 `(NOT all_powered) OR has_axis_error` 分支时，在重建参考和自动清错之前复制全部 7 轴；复制结束后 `G.estop_diag_count` 加一。自动清错及手柄重初始化不清除它，下次故障覆盖；PLC 重新初始化会清零，非断电保持变量。`count=0` 表示尚未捕获，读取前后应确认计数相同。
+
+| 符号（数组下标 1..7 为轴号） | 类型 | 含义 |
+| --- | --- | --- |
+| `G.estop_diag_count` | UDINT | 捕获次数 |
+| `G.estop_diag_host_timeout` | BOOL | 入口当拍的通信超时状态 |
+| `G.estop_diag_axis[]` | ST_AxisStatus | 原始轴状态，含 Disabled、Error/ErrorID、DriveDeviceError、DriveLimitActive、IoDataInvalid、Operational、ExtSetPointGenEnabled |
+| `G.estop_diag_power[]` | ST_McOutputs | 原始 Power 输出；此处 Done 映射的是 MC_Power.Status |
+| `G.estop_diag_reset[]` | ST_McOutputs | 原始 Reset 输出及错误码 |
+| `G.estop_diag_power_enable/positive/negative[]` | BOOL | MC_Power 的 Enable、Enable_Positive、Enable_Negative 输入 |
+| `G.estop_diag_return_state[]` | INT | 0=空闲/等待主机清请求，10=关闭外部给定，20=绝对运动，30=等待停稳，31=重新使能外部给定 |
+| `G.estop_diag_return_cmd[]` | ST_AxisPlannedReturnCmd | 原始 Req/Busy/Done/Error/ErrorId 及运动参数 |
+| `G.estop_diag_move_error/aborted[]` | BOOL | 回退运动功能块的 Error/CommandAborted |
+| `G.estop_diag_move_error_id[]` | UDINT | 回退运动功能块 ErrorID；中断时可能为 0 |
+| `G.estop_diag_enable_error/disable_error[]` | BOOL | 外部给定 Enable/Disable 功能块的 Error |
+| `G.estop_diag_enable_error_id/disable_error_id[]` | UDINT | 对应功能块 ErrorID，结合 Error 标志解释 |
+| `G.estop_diag_act_pos/act_vel[]` | LREAL | 入口时实际绝对位置/速度 |
+| `G.estop_diag_feed_pos/feed_vel[]` | LREAL | 入口时 PlcToNc 中保留的外部给定位置/速度；外部给定未启用时不代表当前执行轨迹 |
+| `G.estop_diag_refer_abs[]` | LREAL | 入口时 ADS 参考加 init_pos 后的绝对位置 |
+
+新增字段位于 GVL 末尾，没有扩展既有 `ST_AxisPlannedReturnCmd`，也不加入高频 ADS 读写列表。编译下载后上位机应重新连接并解析符号；不能依赖旧的数值地址/句柄。当前正式工程主机看门狗为 **2 秒**，早期 100 ms 的历史记录不代表当前配置。
+
+现场复测和判断方法见 `轴6换手急停排查_20261012.md`。

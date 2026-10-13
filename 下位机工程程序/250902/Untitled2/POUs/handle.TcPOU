@@ -257,6 +257,8 @@ IF (NOT all_powered) OR has_axis_error THEN
 	G.estop_diag_count := G.estop_diag_count + 1;
 	G.estop_hold_req := TRUE;
 	FOR j:=1 TO 7 DO
+		// 快照完成后撤销残留使能请求，避免错误恢复首拍继续处理。
+		G.SetPointGenEnable[j].Execute := FALSE;
 		G.Act_pos[j] := G.axis[j].NcToPlc.ActPos - G.init_pos[j];
 		G.act_pos_from_left[j] := G.axis[j].NcToPlc.ActPos - G.leftlimit[j];
 		G.refer[j] := G.Act_pos[j];
@@ -584,6 +586,7 @@ FOR i:=1 TO 7 DO
 		IF ABS(G.axis[i].NcToPlc.ActVelo) <= 0.5 THEN
 			G.Act_pos[i] := G.axis[i].NcToPlc.ActPos - G.init_pos[i];
 			G.act_pos_from_left[i] := G.axis[i].NcToPlc.ActPos - G.leftlimit[i];
+			// 停稳后重建参考；本拍转入 31，因此只锁存一次。
 			G.refer[i] := G.Act_pos[i];
 			G.ref_slow[i] := G.Act_pos[i];
 			G.act_h[i] := G.Act_pos[i];

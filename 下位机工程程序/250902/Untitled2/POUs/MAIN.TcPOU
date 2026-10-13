@@ -98,7 +98,10 @@ injector_manual_();
 // 轴6自检触发左限位后只关闭负向许可，保留正向脱离限位的能力。
 axis6_enable_negative := NOT ((G.gen_state = _self_check) AND G.axis[6].Status.DriveLimitActive);
 POWERED();
-SETPOSITIONGEN();
+// 手柄内部在预送位置后调用外部给定功能块，避免同一扫描重复调用。
+IF G.gen_state <> _handle THEN
+	SETPOSITIONGEN();
+END_IF
 RESETED();
 
 IF G.gen_state <> _self_check THEN
